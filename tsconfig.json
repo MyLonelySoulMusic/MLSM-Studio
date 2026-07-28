@@ -1,0 +1,11 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/project-schema" },
+    { "path": "packages/core" },
+    { "path": "packages/audio-analysis" },
+    { "path": "packages/trajectory" },
+    { "path": "packages/export" },
+    { "path": "apps/desktop" }
+  ]
+}

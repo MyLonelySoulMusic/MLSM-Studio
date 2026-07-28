@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dynamicsound.studio/schema/project/v1.json",
+  "title": "Dynamic Sound Animation Studio Project",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "project", "audio", "canvas", "analysis", "events", "ball", "objects", "trajectorySegments", "camera", "background", "lighting", "postProcessing", "exportPresets"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "project": { "$ref": "#/$defs/projectMetadata" },
+    "audio": { "$ref": "#/$defs/audio" },
+    "canvas": { "$ref": "#/$defs/canvas" },
+    "analysis": { "$ref": "#/$defs/analysis" },
+    "events": { "type": "array", "items": { "$ref": "#/$defs/musicEvent" } },
+    "animation": { "type": "object", "additionalProperties": false, "required": ["modeId", "baseObjectTypes"], "properties": { "modeId": { "type": "string", "minLength": 1 }, "baseObjectTypes": { "type": "array", "minItems": 1, "items": { "enum": ["drum", "kick", "snare", "cymbal", "piano", "guitar", "strings", "peg", "platform", "block", "spring", "pebble"] } }, "newYorkStreets": { "type": "object", "additionalProperties": false, "required": ["secondaryMarbleCount", "secondaryGroupColor", "secondaryColors", "flyerImageUrls"], "properties": { "secondaryMarbleCount": { "type": "integer", "minimum": 1, "maximum": 13 }, "secondaryGroupColor": { "type": "string" }, "secondaryColors": { "type": "array", "maxItems": 13, "items": { "type": "string" } }, "flyerImageUrls": { "type": "array", "maxItems": 8, "items": { "type": "string" } } } } } },
+    "ball": { "$ref": "#/$defs/ball" },
+    "objects": { "type": "array", "items": { "$ref": "#/$defs/sceneObject" } },
+    "trajectorySegments": { "type": "array", "items": { "$ref": "#/$defs/trajectorySegment" } },
+    "camera": { "$ref": "#/$defs/camera" },
+    "background": { "$ref": "#/$defs/background" },
+    "lighting": { "type": "object" },
+    "postProcessing": { "type": "object" },
+    "exportPresets": { "type": "array", "items": { "$ref": "#/$defs/exportPreset" } }
+  },
+  "$defs": {
+    "nonEmptyString": { "type": "string", "minLength": 1 },
+    "unit": { "type": "number", "minimum": 0, "maximum": 1 },
+    "vector3": {
+      "type": "object", "additionalProperties": false, "required": ["x", "y", "z"],
+      "properties": { "x": { "type": "number" }, "y": { "type": "number" }, "z": { "type": "number" } }
+    },
+    "transform": {
+      "type": "object", "additionalProperties": false, "required": ["position", "rotation", "scale"],
+      "properties": { "position": { "$ref": "#/$defs/vector3" }, "rotation": { "$ref": "#/$defs/vector3" }, "scale": { "$ref": "#/$defs/vector3" } }
+    },
+    "fps": {
+      "type": "object", "additionalProperties": false, "required": ["numerator", "denominator"],
+      "properties": { "numerator": { "type": "integer", "minimum": 1, "maximum": 120000 }, "denominator": { "type": "integer", "minimum": 1, "maximum": 1001 } }
+    },
+    "projectMetadata": {
+      "type": "object", "additionalProperties": false, "required": ["id", "name", "createdAt", "updatedAt", "seed"],
+      "properties": {
+        "id": { "$ref": "#/$defs/nonEmptyString" }, "name": { "$ref": "#/$defs/nonEmptyString" },
+        "createdAt": { "type": "string", "format": "date-time" }, "updatedAt": { "type": "string", "format": "date-time" },
+        "seed": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
+      }
+    },
+    "audio": {
+      "type": "object", "additionalProperties": false,
+      "required": ["sourcePath", "storage", "hash", "durationSeconds", "sampleRate", "channels", "globalOffsetMs"],
+      "properties": {
+        "sourcePath": { "type": "string" }, "storage": { "enum": ["project", "external"] },
+        "hash": { "type": "string", "pattern": "^(?:|[a-fA-F0-9]{64})$" }, "durationSeconds": { "type": "number", "minimum": 0 },
+        "sampleRate": { "type": "integer", "minimum": 1 }, "channels": { "type": "integer", "minimum": 1 },
+        "globalOffsetMs": { "type": "number", "minimum": -250, "maximum": 250 }
+      }
+    },
+    "canvas": {
+      "type": "object", "additionalProperties": false,
+      "required": ["aspectRatio", "previewWidth", "previewHeight", "previewFps", "exportWidth", "exportHeight", "exportFps"],
+      "properties": {
+        "aspectRatio": { "enum": ["9:16", "16:9", "1:1", "4:5", "custom"] },
+        "previewWidth": { "type": "integer", "minimum": 64, "maximum": 7680 }, "previewHeight": { "type": "integer", "minimum": 64, "maximum": 7680 },
+        "previewFps": { "$ref": "#/$defs/fps" }, "exportWidth": { "type": "integer", "minimum": 64, "maximum": 7680 },
+        "exportHeight": { "type": "integer", "minimum": 64, "maximum": 7680 }, "exportFps": { "$ref": "#/$defs/fps" }
+      }
+    },
+    "analysis": {
+      "type": "object", "additionalProperties": false,
+      "required": ["analyzerVersion", "cacheKey", "globalBpm", "latencyCompensationMs", "waveform"],
+      "properties": {
+        "analyzerVersion": { "type": "string" }, "cacheKey": { "type": "string" },
+        "globalBpm": { "type": ["number", "null"], "exclusiveMinimum": 0 }, "latencyCompensationMs": { "type": "number" },
+        "waveform": { "type": "array", "items": { "type": "number", "minimum": -1, "maximum": 1 } },
+        "localTempo": { "type": "array", "items": { "type": "object" } }, "segments": { "type": "array", "items": { "type": "object" } }
+      }
+    },
+    "musicEvent": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "timeSeconds", "timeSamples", "eventType", "confidence", "strength", "frequencyBand", "assignedObjectType", "enabled", "accent", "manualOverride", "expectedBallPosition", "expectedBallVelocity", "expectedImpactNormal"],
+      "properties": {
+        "id": { "$ref": "#/$defs/nonEmptyString" }, "timeSeconds": { "type": "number", "minimum": 0 }, "timeSamples": { "type": "integer", "minimum": 0 },
+        "eventType": { "enum": ["beat", "downbeat", "onset", "kick", "snare", "hihat", "piano", "guitar", "strings", "percussion", "manual", "custom"] },
+        "confidence": { "$ref": "#/$defs/unit" }, "strength": { "$ref": "#/$defs/unit" },
+        "frequencyBand": { "enum": ["low", "mid", "high", "full"] },
+        "assignedObjectType": { "type": ["string", "null"] }, "assignedObjectId": { "type": ["string", "null"] },
+        "enabled": { "type": "boolean" }, "accent": { "type": "boolean" }, "manualOverride": { "type": "boolean" },
+        "action": { "enum": ["none", "collision", "accentedCollision", "nearMiss", "freeFall", "camera", "light", "color", "particles", "background", "custom"] },
+        "expectedBallPosition": { "$ref": "#/$defs/vector3" }, "expectedBallVelocity": { "$ref": "#/$defs/vector3" }, "expectedImpactNormal": { "$ref": "#/$defs/vector3" }
+      }
+    },
+    "material": {
+      "type": "object", "additionalProperties": false, "required": ["color", "roughness", "metalness", "emission", "opacity"],
+      "properties": { "color": { "type": "string" }, "palette": { "type": "array", "items": { "type": "string" } }, "roughness": { "$ref": "#/$defs/unit" }, "metalness": { "$ref": "#/$defs/unit" }, "emission": { "type": "number", "minimum": 0 }, "opacity": { "$ref": "#/$defs/unit" }, "textureAssetId": { "type": ["string", "null"] } }
+    },
+    "ball": {
+      "type": "object", "additionalProperties": false, "required": ["radius", "visualMass", "material", "spinRate", "impactDeformation", "trailEnabled"],
+      "properties": { "radius": { "type": "number", "exclusiveMinimum": 0 }, "visualMass": { "type": "number", "exclusiveMinimum": 0 }, "material": { "$ref": "#/$defs/material" }, "spinRate": { "type": "number" }, "impactDeformation": { "$ref": "#/$defs/unit" }, "trailEnabled": { "type": "boolean" }, "innerColor": { "type": "string" }, "innerShape": { "enum": ["orb", "icosahedron", "torusKnot"] }, "innerImageUrl": { "type": ["string", "null"] }, "endRevealEnabled": { "type": "boolean" }, "revealMode": { "enum": ["end", "time"] }, "revealTimeSeconds": { "type": "number", "minimum": 0 }, "revealHoldSeconds": { "type": "number", "minimum": 0, "maximum": 30 } }
+    },
+    "sceneObject": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "name", "type", "transform", "material", "restitution", "friction", "visible", "locked", "castShadow", "receiveShadow"],
+      "properties": {
+        "id": { "$ref": "#/$defs/nonEmptyString" }, "name": { "$ref": "#/$defs/nonEmptyString" },
+        "type": { "enum": ["drum", "snare", "tom", "kick", "cymbal", "piano", "guitar", "strings", "pebble", "triangle", "block", "peg", "platform", "inclinedPlatform", "spring", "trampoline", "bell", "rope", "tube", "ring", "blade", "crystal", "key", "electronicPad", "custom"] },
+        "railType": { "enum": ["pinball", "glassTube", "bricks"] },
+        "transform": { "$ref": "#/$defs/transform" }, "material": { "$ref": "#/$defs/material" },
+        "restitution": { "$ref": "#/$defs/unit" }, "friction": { "$ref": "#/$defs/unit" }, "visible": { "type": "boolean" }, "locked": { "type": "boolean" },
+        "castShadow": { "type": "boolean" }, "receiveShadow": { "type": "boolean" }, "assetId": { "type": ["string", "null"] }
+      }
+    },
+    "trajectorySegment": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "startEventId", "endEventId", "startTime", "endTime", "startPosition", "endPosition", "initialVelocity", "gravity", "assisted", "status"],
+      "properties": {
+        "id": { "$ref": "#/$defs/nonEmptyString" }, "startEventId": { "$ref": "#/$defs/nonEmptyString" }, "endEventId": { "$ref": "#/$defs/nonEmptyString" },
+        "startTime": { "type": "number", "minimum": 0 }, "endTime": { "type": "number", "exclusiveMinimum": 0 },
+        "startPosition": { "$ref": "#/$defs/vector3" }, "endPosition": { "$ref": "#/$defs/vector3" }, "initialVelocity": { "$ref": "#/$defs/vector3" }, "gravity": { "$ref": "#/$defs/vector3" },
+        "assisted": { "type": "boolean" }, "motionKind": { "enum": ["bounce", "slide", "roll", "freeFall", "sewerDrop"] }, "assistanceKind": { "enum": ["none", "objectPosition", "localGravity", "impulseObject", "invisibleGuide", "spatialScale"] },
+        "status": { "enum": ["valid", "invalid"] }, "diagnostic": { "type": "string" }
+      }
+    },
+    "camera": {
+      "type": "object", "additionalProperties": false, "required": ["mode", "position", "target", "fieldOfView", "damping", "lookAhead"],
+      "properties": { "mode": { "enum": ["fixed", "verticalTracking", "fullTracking", "smoothFollow", "cinematic", "keyframed", "autoFraming", "spline"] }, "position": { "$ref": "#/$defs/vector3" }, "target": { "$ref": "#/$defs/vector3" }, "fieldOfView": { "type": "number", "exclusiveMinimum": 0, "maximum": 179 }, "damping": { "$ref": "#/$defs/unit" }, "lookAhead": { "type": "number", "minimum": 0 } }
+    },
+    "background": {
+      "type": "object", "additionalProperties": false, "required": ["type", "colors", "opacity", "blur", "brightness", "contrast", "saturation"],
+      "properties": { "type": { "enum": ["solid", "linearGradient", "radialGradient", "image", "video", "texture", "wall", "abstract", "transparent"] }, "colors": { "type": "array", "minItems": 1, "items": { "type": "string" } }, "assetId": { "type": ["string", "null"] }, "imageUrl": { "type": ["string", "null"] }, "presetId": { "type": "string" }, "finish": { "enum": ["clean", "worn"] }, "opacity": { "$ref": "#/$defs/unit" }, "blur": { "type": "number", "minimum": 0 }, "brightness": { "type": "number", "minimum": 0 }, "contrast": { "type": "number", "minimum": 0 }, "saturation": { "type": "number", "minimum": 0 }, "effects": { "type": "object", "additionalProperties": false, "properties": { "glow": { "type": "boolean" }, "particles": { "type": "boolean" }, "vignette": { "type": "boolean" } }, "required": ["glow", "particles", "vignette"] }, "neon": { "type": "object", "additionalProperties": false, "properties": { "enabled": { "type": "boolean" }, "text": { "type": "string", "maxLength": 1000 }, "color": { "type": "string" } }, "required": ["enabled", "text", "color"] }, "railColors": { "type": "object", "additionalProperties": false, "properties": { "pinball": { "type": "string" }, "glassTube": { "type": "string" }, "bricks": { "type": "string" } }, "required": ["pinball", "glassTube", "bricks"] } }
+    },
+    "exportPreset": {
+      "type": "object", "additionalProperties": false, "required": ["id", "name", "format", "codec", "width", "height", "fps", "audioMode"],
+      "properties": { "id": { "$ref": "#/$defs/nonEmptyString" }, "name": { "$ref": "#/$defs/nonEmptyString" }, "format": { "enum": ["mp4", "mov", "webm", "pngSequence"] }, "codec": { "enum": ["h264", "h265", "prores422", "prores4444", "vp9", "av1", "png"] }, "width": { "type": "integer", "minimum": 64, "maximum": 7680 }, "height": { "type": "integer", "minimum": 64, "maximum": 7680 }, "fps": { "$ref": "#/$defs/fps" }, "audioMode": { "enum": ["copy", "aac", "pcm", "none"] }, "crf": { "type": ["number", "null"] }, "bitrateKbps": { "type": ["integer", "null"], "minimum": 1 } }
+    }
+  }
+}

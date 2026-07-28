@@ -1,0 +1,7 @@
+{
+  "name": "@rbs/core",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": { "@rbs/project-schema": "0.1.0" }
+}

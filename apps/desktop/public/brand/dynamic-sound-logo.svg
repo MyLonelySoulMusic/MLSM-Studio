@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 112" role="img" aria-labelledby="title desc">
+  <title id="title">Dynamic Sound Animation Studio</title>
+  <desc id="desc">Logo di Dynamic Sound Animation Studio con onda sonora luminosa.</desc>
+  <defs>
+    <linearGradient id="surface" x1="8" y1="6" x2="57" y2="60" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#171C31"/>
+      <stop offset="1" stop-color="#080B14"/>
+    </linearGradient>
+    <linearGradient id="signal" x1="11" y1="41" x2="54" y2="20" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5EF4D2"/>
+      <stop offset=".52" stop-color="#7798FF"/>
+      <stop offset="1" stop-color="#C568FF"/>
+    </linearGradient>
+    <linearGradient id="wordmark" x1="94" y1="0" x2="550" y2="100" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F7FAFF"/>
+      <stop offset=".7" stop-color="#D7DDF1"/>
+      <stop offset="1" stop-color="#AAB5D4"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-60%" width="180%" height="220%">
+      <feGaussianBlur stdDeviation="2.2" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <g transform="translate(8 8) scale(1.5)">
+    <rect x="2" y="2" width="60" height="60" rx="17" fill="url(#surface)" stroke="#39415E" stroke-width="1.5"/>
+    <path d="M13 18h-2v10M51 18h2v10M13 46h-2V36M51 46h2V36" fill="none" stroke="#8490B2" stroke-width="2.2" stroke-linecap="round" opacity=".7"/>
+    <path d="M10 34h7l3.3-8.4 5.1 17.2 5.3-24.3 5.7 27 4.8-16.8 3.6 8.1H54" fill="none" stroke="url(#signal)" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" filter="url(#glow)"/>
+    <circle cx="54" cy="36.8" r="3.2" fill="#D079FF"/>
+    <circle cx="54" cy="36.8" r="1.15" fill="#FFF"/>
+  </g>
+  <text x="122" y="52" fill="url(#wordmark)" font-family="Inter, SF Pro Display, Segoe UI, sans-serif" font-size="38" font-weight="750" letter-spacing="-.8">Dynamic Sound</text>
+  <text x="124" y="82" fill="#8E99B9" font-family="Inter, SF Pro Display, Segoe UI, sans-serif" font-size="17" font-weight="600" letter-spacing="4.5">ANIMATION STUDIO</text>
+  <path d="M124 94h420" stroke="url(#signal)" stroke-width="2" stroke-linecap="round" opacity=".78"/>
+</svg>

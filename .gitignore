@@ -1,0 +1,13 @@
+node_modules/
+coverage/
+**/dist/
+**/target/
+.DS_Store
+*.log
+*.partial
+
+# I pesi Whisper/LLM non fanno parte del repository né della build.
+# Transformers.js li scarica al primo utilizzo e li conserva nella cache locale.
+apps/desktop/public/models/
+.transformers-cache/
+**/.cache/huggingface/
