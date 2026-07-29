@@ -9,6 +9,7 @@ export interface SharedViewportRenderer {
 }
 
 export type ExportQuality = "high" | "maximum";
+export type ExportMediaFit = "cover" | "contain" | "fill";
 export interface LiveVideoExportSettings { width: number; height: number; fps: number; durationSeconds: number; projectName: string; quality: ExportQuality; }
 export interface RecordingFormat { mimeType: string; extension: ".mp4" | ".webm"; label: string; }
 export interface CanvasFrameCapture { stream: MediaStream; requestFrame: () => void; manual: boolean; }
@@ -31,12 +32,18 @@ function loadImage(source: string | null): Promise<HTMLImageElement | null> {
   return new Promise((resolve) => { const image = new Image(); image.onload = () => resolve(image); image.onerror = () => resolve(null); image.src = source; });
 }
 
-function drawMedia(context: CanvasRenderingContext2D, source: CanvasImageSource, sourceWidth: number, sourceHeight: number, width: number, height: number, opacity: number, fit: "cover" | "contain" = "cover"): void {
-  if (!sourceWidth || !sourceHeight) return; const scale = fit === "contain" ? Math.min(width / sourceWidth, height / sourceHeight) : Math.max(width / sourceWidth, height / sourceHeight); const drawWidth = sourceWidth * scale; const drawHeight = sourceHeight * scale;
-  context.save(); context.globalAlpha = opacity; context.drawImage(source, (width - drawWidth) / 2, (height - drawHeight) / 2, drawWidth, drawHeight); context.restore();
+export function mediaDrawRect(sourceWidth: number, sourceHeight: number, width: number, height: number, fit: ExportMediaFit): { x: number; y: number; width: number; height: number } {
+  if (fit === "fill") return { x: 0, y: 0, width, height };
+  const scale = fit === "contain" ? Math.min(width / sourceWidth, height / sourceHeight) : Math.max(width / sourceWidth, height / sourceHeight); const drawWidth = sourceWidth * scale; const drawHeight = sourceHeight * scale;
+  return { x: (width - drawWidth) / 2, y: (height - drawHeight) / 2, width: drawWidth, height: drawHeight };
 }
 
-function drawBackground(context: CanvasRenderingContext2D, width: number, height: number, background: BackgroundAppearance, image: HTMLImageElement | null, video: HTMLVideoElement | null, frame: number, mediaFit: "cover" | "contain" = "cover"): void {
+function drawMedia(context: CanvasRenderingContext2D, source: CanvasImageSource, sourceWidth: number, sourceHeight: number, width: number, height: number, opacity: number, fit: ExportMediaFit = "cover"): void {
+  if (!sourceWidth || !sourceHeight) return; const rect = mediaDrawRect(sourceWidth, sourceHeight, width, height, fit);
+  context.save(); context.globalAlpha = opacity; context.drawImage(source, rect.x, rect.y, rect.width, rect.height); context.restore();
+}
+
+function drawBackground(context: CanvasRenderingContext2D, width: number, height: number, background: BackgroundAppearance, image: HTMLImageElement | null, video: HTMLVideoElement | null, frame: number, mediaFit: ExportMediaFit = "cover"): void {
   const gradient = context.createLinearGradient(0, 0, 0, height); gradient.addColorStop(0, background.colors[0]); gradient.addColorStop(1, background.colors[1]); context.fillStyle = gradient; context.fillRect(0, 0, width, height);
   if (background.mediaType === "image" && image) drawMedia(context, image, image.naturalWidth, image.naturalHeight, width, height, background.opacity, mediaFit);
   if (background.mediaType === "video" && video?.videoWidth) drawMedia(context, video, video.videoWidth, video.videoHeight, width, height, background.opacity, mediaFit);
@@ -56,26 +63,45 @@ function drawFinalImage(context: CanvasRenderingContext2D, image: HTMLImageEleme
   context.save(); context.fillStyle = `rgba(3,5,12,${eased * .68})`; context.fillRect(0, 0, width, height); context.globalAlpha = eased; context.translate(width / 2, height / 2); context.scale(Math.max(.04, Math.sin(eased * Math.PI / 2)), 1); context.drawImage(image, -drawWidth / 2, -drawHeight / 2, drawWidth, drawHeight); context.restore();
 }
 
-const audioNodes = new WeakMap<HTMLAudioElement, { context: AudioContext; destination: MediaStreamAudioDestinationNode; monitor: GainNode }>();
-async function audioTracks(audio: HTMLAudioElement): Promise<MediaStreamTrack[]> {
+interface AudioGraph {
+  context: AudioContext;
+  source: MediaElementAudioSourceNode;
+  monitor: GainNode;
+}
+
+interface ExportAudioBranch {
+  tracks: MediaStreamTrack[];
+  release: () => void;
+}
+
+const audioNodes = new WeakMap<HTMLAudioElement, AudioGraph>();
+async function audioTracks(audio: HTMLAudioElement): Promise<ExportAudioBranch> {
   let nodes = audioNodes.get(audio);
   if (!nodes) {
     const context = new AudioContext();
     const source = context.createMediaElementSource(audio);
-    const destination = context.createMediaStreamDestination();
     const monitor = context.createGain();
     monitor.gain.value = 0;
-    source.connect(destination);
     source.connect(monitor);
     monitor.connect(context.destination);
-    nodes = { context, destination, monitor };
+    nodes = { context, source, monitor };
     audioNodes.set(audio, nodes);
   }
   nodes.monitor.gain.setValueAtTime(0, nodes.context.currentTime);
   if (nodes.context.state === "suspended") await nodes.context.resume();
-  // La registrazione riceve una copia: fermare lo stream di export non rende
-  // inutilizzabile il nodo audio permanente per gli export successivi.
-  return nodes.destination.stream.getAudioTracks().map((track) => track.clone());
+  // Ogni export usa una destinazione appena creata. Riutilizzare il track di una
+  // destinazione vecchia può conservare il suo timestamp e produrre una lunga
+  // coda nera dopo la fine reale del brano.
+  const destination = nodes.context.createMediaStreamDestination();
+  nodes.source.connect(destination);
+  const tracks = destination.stream.getAudioTracks();
+  return {
+    tracks,
+    release: () => {
+      try { nodes.source.disconnect(destination); } catch { /* Già disconnesso. */ }
+      destination.stream.getTracks().forEach((track) => track.stop());
+    }
+  };
 }
 
 function setAudioMonitoring(audio: HTMLAudioElement, enabled: boolean): void {
@@ -98,37 +124,58 @@ function safeName(value: string): string { const normalized = value.normalize("N
 function nextFrame(): Promise<void> { return new Promise((resolve) => requestAnimationFrame(() => resolve())); }
 
 export function createCanvasFrameCapture(canvas: HTMLCanvasElement, fps: number): CanvasFrameCapture {
-  try { const manualStream = canvas.captureStream(0); const manualTrack = manualStream.getVideoTracks()[0] as (MediaStreamTrack & { requestFrame?: () => void }) | undefined; if (manualTrack?.requestFrame) return { stream: manualStream, requestFrame: () => manualTrack.requestFrame?.(), manual: true }; manualStream.getTracks().forEach((track) => track.stop()); }
-  catch { /* Alcuni WebKit meno recenti rifiutano frameRate=0. */ }
-  const automaticStream = canvas.captureStream(fps); return { stream: automaticStream, requestFrame: () => undefined, manual: false };
+  // La cattura temporizzata assegna timestamp monotoni ai frame. Il precedente
+  // captureStream(0) manuale può creare durate errate su WebKit/Chromium quando
+  // il renderer perde un frame sotto carico.
+  try { return { stream: canvas.captureStream(fps), requestFrame: () => undefined, manual: false }; }
+  catch {
+    const manualStream = canvas.captureStream(0);
+    const manualTrack = manualStream.getVideoTracks()[0] as (MediaStreamTrack & { requestFrame?: () => void }) | undefined;
+    return { stream: manualStream, requestFrame: () => manualTrack?.requestFrame?.(), manual: Boolean(manualTrack?.requestFrame) };
+  }
 }
 
 export function exportFrameIndex(elapsedMs: number, fps: number, durationSeconds: number): number { const totalFrames = Math.max(1, Math.ceil(durationSeconds * fps)); return Math.min(totalFrames - 1, Math.max(0, Math.floor(elapsedMs / 1000 * fps))); }
 
-export async function exportLiveVideo(settings: LiveVideoExportSettings, renderer: SharedViewportRenderer, audio: HTMLAudioElement, background: BackgroundAppearance, ball: BallAppearance, sourceDuration: number, setRenderTime: (time: number | null) => void, signal: AbortSignal, onProgress: (progress: ExportProgress) => void, videoDimming = 0, videoFit: "cover" | "contain" = "cover"): Promise<{ format: RecordingFormat; fileName: string }> {
+export function boundedExportDuration(requestedDuration: number, sourceDuration: number, mediaDuration: number, revealTail = 0): number {
+  const validMediaDuration = Number.isFinite(mediaDuration) && mediaDuration > 0 ? mediaDuration : sourceDuration;
+  const maximumDuration = Math.max(.1, validMediaDuration + Math.max(0, revealTail));
+  return Math.max(.1, Math.min(requestedDuration, maximumDuration));
+}
+
+function waitWithTimeout<T>(promise: Promise<T>, milliseconds: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error(message)), milliseconds);
+    promise.then((value) => { window.clearTimeout(timer); resolve(value); }, (error: unknown) => { window.clearTimeout(timer); reject(error); });
+  });
+}
+
+export async function exportLiveVideo(settings: LiveVideoExportSettings, renderer: SharedViewportRenderer, audio: HTMLAudioElement, background: BackgroundAppearance, ball: BallAppearance, sourceDuration: number, setRenderTime: (time: number | null) => void, signal: AbortSignal, onProgress: (progress: ExportProgress) => void, videoDimming = 0, videoFit: ExportMediaFit = "cover"): Promise<{ format: RecordingFormat; fileName: string }> {
   if (signal.aborted) throw new DOMException("Esportazione annullata", "AbortError");
   const format = selectRecordingFormat((mimeType) => MediaRecorder.isTypeSupported(mimeType)); if (!format) throw new Error("Il browser non dispone di un encoder video MediaRecorder compatibile.");
   const fileName = `${safeName(settings.projectName)}-${settings.width}x${settings.height}-${settings.fps}fps${format.extension}`;
   const destination = window.showSaveFilePicker ? await window.showSaveFilePicker({ suggestedName: fileName, types: [{ description: format.label, accept: { [format.mimeType.split(";")[0] ?? format.mimeType]: [format.extension] } }] }) : null; await cleanupOrphanedTempTargets();
   const image = background.mediaType === "image" ? await loadImage(background.imageUrl) : null; const innerImage = await loadImage(ball.innerImageUrl);
   const composite = document.createElement("canvas"); composite.width = settings.width; composite.height = settings.height; const context = composite.getContext("2d", { alpha: false }); if (!context) throw new Error("Canvas di composizione non disponibile"); context.imageSmoothingEnabled = true; context.imageSmoothingQuality = "high";
-  const previousTime = audio.currentTime; const wasPlaying = !audio.paused; const chunks: Blob[] = []; const totalFrames = Math.ceil(settings.durationSeconds * settings.fps);
-  let stream: MediaStream | null = null; let recorder: MediaRecorder | null = null; let stopped: Promise<void> | null = null; let temp: Awaited<ReturnType<typeof createTempTarget>> = null; let tempClosed = false; let destinationWritable: FileSystemWritableFileStream | null = null; let destinationClosed = false; let writeChain = Promise.resolve(); let started = performance.now();
+  const revealTail = ball.endRevealEnabled && ball.innerImageUrl && ball.revealMode === "end" ? ball.revealHoldSeconds : 0;
+  const exportDuration = boundedExportDuration(settings.durationSeconds, sourceDuration, audio.duration, revealTail);
+  const previousTime = audio.currentTime; const previousLoop = audio.loop; const wasPlaying = !audio.paused; const chunks: Blob[] = []; const totalFrames = Math.ceil(exportDuration * settings.fps);
+  let stream: MediaStream | null = null; let audioBranch: ExportAudioBranch | null = null; let recorder: MediaRecorder | null = null; let stopped: Promise<void> | null = null; let temp: Awaited<ReturnType<typeof createTempTarget>> = null; let tempClosed = false; let destinationWritable: FileSystemWritableFileStream | null = null; let destinationClosed = false; let writeChain = Promise.resolve(); let started = performance.now();
   try {
     renderer.setExportSize(settings.width, settings.height); setRenderTime(0); await nextFrame(); renderer.renderNow();
     const previewFrame = renderer.canvas.closest(".preview-frame"); const backgroundVideo = previewFrame?.querySelector<HTMLVideoElement>(".scene-backdrop-video") ?? null;
-    const frameCapture = createCanvasFrameCapture(composite, settings.fps); stream = frameCapture.stream; for (const track of await audioTracks(audio)) stream.addTrack(track);
+    const frameCapture = createCanvasFrameCapture(composite, settings.fps); stream = frameCapture.stream; audioBranch = await audioTracks(audio); for (const track of audioBranch.tracks) stream.addTrack(track);
     recorder = new MediaRecorder(stream, { mimeType: format.mimeType, videoBitsPerSecond: recordingBitrate(settings.width, settings.height, settings.fps, settings.quality), audioBitsPerSecond: 320_000 }); destinationWritable = destination ? await destination.createWritable() : null; temp = destinationWritable ? null : await createTempTarget(); const chunkWriter = destinationWritable ?? temp?.writable ?? null;
     recorder.ondataavailable = (event) => { if (!event.data.size) return; if (chunkWriter) writeChain = writeChain.then(() => chunkWriter.write(event.data)); else chunks.push(event.data); };
     stopped = new Promise<void>((resolve, reject) => { if (!recorder) return reject(new Error("Encoder video non disponibile")); recorder.onstop = () => resolve(); recorder.onerror = () => reject(new Error("Errore durante la codifica video")); });
     const renderCompositeFrame = (time: number, frame: number) => { setRenderTime(time); renderer.renderNow(); drawBackground(context, settings.width, settings.height, background, image, backgroundVideo, frame, videoFit); if (videoDimming > 0) { context.save(); context.globalAlpha = Math.max(0, Math.min(.8, videoDimming)); context.fillStyle = "#000000"; context.fillRect(0, 0, settings.width, settings.height); context.restore(); } context.drawImage(renderer.canvas, 0, 0, settings.width, settings.height); if (background.effects.vignette) drawVignette(context, settings.width, settings.height); drawFinalImage(context, innerImage, ball, time, sourceDuration, settings.width, settings.height); frameCapture.requestFrame(); };
-    audio.pause(); audio.currentTime = 0; recorder.start(1000); await audio.play(); started = performance.now(); renderCompositeFrame(0, 0);
+    audio.pause(); audio.loop = false; audio.currentTime = 0; recorder.start(1000); await audio.play(); started = performance.now(); renderCompositeFrame(0, 0);
     await new Promise<void>((resolve, reject) => {
       let animationFrame = 0; let lastFrame = 0; const abort = () => { cancelAnimationFrame(animationFrame); reject(new DOMException("Esportazione annullata", "AbortError")); }; signal.addEventListener("abort", abort, { once: true });
-      const tick = (now: number) => { try { const elapsedMs = now - started; const time = Math.min(settings.durationSeconds, elapsedMs / 1000); const targetFrame = exportFrameIndex(elapsedMs, settings.fps, settings.durationSeconds); if (targetFrame > lastFrame) { renderCompositeFrame(targetFrame / settings.fps, targetFrame); lastFrame = targetFrame; } const currentFrame = Math.min(totalFrames, lastFrame + 1); onProgress({ currentFrame, totalFrames, progress: currentFrame / Math.max(1, totalFrames), elapsedMs, estimatedRemainingMs: Math.max(0, settings.durationSeconds * 1000 - elapsedMs) }); if (time >= settings.durationSeconds) { if (lastFrame < totalFrames - 1) renderCompositeFrame(settings.durationSeconds, totalFrames - 1); signal.removeEventListener("abort", abort); resolve(); } else animationFrame = requestAnimationFrame(tick); } catch (error) { signal.removeEventListener("abort", abort); reject(error); } };
+      const tick = (now: number) => { try { const elapsedMs = now - started; const time = Math.min(exportDuration, elapsedMs / 1000); const targetFrame = exportFrameIndex(elapsedMs, settings.fps, exportDuration); if (targetFrame > lastFrame) { renderCompositeFrame(targetFrame / settings.fps, targetFrame); lastFrame = targetFrame; } const currentFrame = Math.min(totalFrames, lastFrame + 1); onProgress({ currentFrame, totalFrames, progress: currentFrame / Math.max(1, totalFrames), elapsedMs, estimatedRemainingMs: Math.max(0, exportDuration * 1000 - elapsedMs) }); if (time >= exportDuration || audio.ended && revealTail <= 0) { if (lastFrame < totalFrames - 1) renderCompositeFrame(exportDuration, totalFrames - 1); signal.removeEventListener("abort", abort); resolve(); } else animationFrame = requestAnimationFrame(tick); } catch (error) { signal.removeEventListener("abort", abort); reject(error); } };
       if (signal.aborted) abort(); else animationFrame = requestAnimationFrame(tick);
     });
-    recorder.stop(); await stopped; await writeChain;
+    recorder.requestData(); recorder.stop(); await waitWithTimeout(stopped, 30_000, "L’encoder non ha finalizzato il video entro 30 secondi."); await writeChain;
     if (destinationWritable) { await destinationWritable.close(); destinationClosed = true; }
     else {
       if (temp) { await temp.writable.close(); tempClosed = true; }
@@ -140,11 +187,11 @@ export async function exportLiveVideo(settings: LiveVideoExportSettings, rendere
     throw error;
   } finally {
     audio.pause();
-    if (recorder?.state !== "inactive") { recorder?.stop(); await stopped?.catch(() => undefined); }
+    if (recorder?.state !== "inactive") { recorder?.stop(); await (stopped ? waitWithTimeout(stopped, 5_000, "Chiusura encoder incompleta").catch(() => undefined) : undefined); }
     await writeChain.catch(() => undefined);
     if (destinationWritable && !destinationClosed) { if (destinationWritable.abort) await destinationWritable.abort().catch(() => undefined); else await destinationWritable.close().catch(() => undefined); }
     if (temp && !tempClosed) { if (temp.writable.abort) await temp.writable.abort().catch(() => undefined); else await temp.writable.close().catch(() => undefined); }
     if (temp) await temp.directory.removeEntry(temp.name).catch(() => undefined);
-    stream?.getTracks().forEach((track) => track.stop()); renderer.restorePreviewSize(); setRenderTime(null); setAudioMonitoring(audio, true); audio.currentTime = previousTime; if (wasPlaying) await audio.play().catch(() => undefined);
+    stream?.getTracks().forEach((track) => track.stop()); audioBranch?.release(); renderer.restorePreviewSize(); setRenderTime(null); setAudioMonitoring(audio, true); audio.loop = previousLoop; audio.currentTime = previousTime; if (wasPlaying) await audio.play().catch(() => undefined);
   }
 }

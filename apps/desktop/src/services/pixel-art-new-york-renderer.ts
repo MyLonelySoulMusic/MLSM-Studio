@@ -12,6 +12,10 @@ export interface PixelArtNewYorkFrame {
   rhythmPulse: number;
   audioPulse: number;
   bpm: number;
+  spectrumBands?: readonly number[];
+  stereoLeftBands?: readonly number[];
+  stereoRightBands?: readonly number[];
+  stereoWidth?: number;
 }
 
 interface PixelSceneData {
@@ -274,19 +278,46 @@ function drawBuilding(context: CanvasRenderingContext2D, x: number, ground: numb
 }
 
 function drawPixelMoon(context: CanvasRenderingContext2D, width: number, height: number, settings: PixelArtSettings): void {
-  const centerX = Math.round(width * .78); const centerY = Math.round(height * .14); const radius = width < 220 ? 15 : 12; const moon = mix("#e8edf2", settings.neonSecondary, .1);
-  context.save(); context.globalAlpha = .08;
-  for (let band = 4; band >= 1; band -= 1) {
-    const extent = radius + band * 3; pixelRect(context, settings.neonSecondary, centerX - extent, centerY - radius - band, extent * 2, (radius + band) * 2);
+  const centerX = Math.round(width * .78); const centerY = Math.round(height * .14); const radius = width < 220 ? 17 : 14;
+  context.save();
+  const halo = context.createRadialGradient(centerX, centerY, radius * .72, centerX, centerY, radius * 2.55);
+  halo.addColorStop(0, alphaColor(settings.neonSecondary, .2)); halo.addColorStop(.35, alphaColor("#dbe7ff", .1)); halo.addColorStop(1, alphaColor(settings.neonSecondary, 0));
+  context.fillStyle = halo; context.fillRect(centerX - radius * 2.6, centerY - radius * 2.6, radius * 5.2, radius * 5.2);
+
+  context.beginPath(); context.arc(centerX, centerY, radius, 0, Math.PI * 2); context.clip();
+  const body = context.createRadialGradient(centerX - radius * .38, centerY - radius * .44, radius * .08, centerX, centerY, radius * 1.12);
+  body.addColorStop(0, mix("#fff7d8", settings.neonSecondary, .06)); body.addColorStop(.52, mix("#e0dfd5", settings.neonSecondary, .08)); body.addColorStop(1, mix("#9299a8", settings.neonSecondary, .08));
+  context.fillStyle = body; context.fillRect(centerX - radius, centerY - radius, radius * 2, radius * 2);
+
+  const maria = [
+    { x: -.28, y: -.08, rx: .31, ry: .2, alpha: .18 },
+    { x: .18, y: .28, rx: .36, ry: .22, alpha: .14 },
+    { x: .27, y: -.38, rx: .18, ry: .12, alpha: .12 }
+  ];
+  for (const patch of maria) {
+    context.beginPath(); context.ellipse(centerX + patch.x * radius, centerY + patch.y * radius, patch.rx * radius, patch.ry * radius, -.22, 0, Math.PI * 2);
+    context.fillStyle = alphaColor("#5f6878", patch.alpha); context.fill();
   }
+
+  const craters = [
+    { x: -.42, y: -.34, radius: .19 },
+    { x: .29, y: -.16, radius: .15 },
+    { x: -.08, y: .35, radius: .22 },
+    { x: .48, y: .39, radius: .1 },
+    { x: -.52, y: .2, radius: .09 }
+  ];
+  for (const crater of craters) {
+    const x = centerX + crater.x * radius; const y = centerY + crater.y * radius; const craterRadius = crater.radius * radius;
+    context.beginPath(); context.ellipse(x, y, craterRadius, craterRadius * .72, -.28, 0, Math.PI * 2); context.fillStyle = alphaColor("#ffffff", .2); context.fill();
+    context.beginPath(); context.ellipse(x + craterRadius * .12, y + craterRadius * .16, craterRadius * .78, craterRadius * .55, -.28, 0, Math.PI * 2); context.fillStyle = alphaColor("#555e6d", .32); context.fill();
+    context.beginPath(); context.ellipse(x - craterRadius * .2, y - craterRadius * .2, craterRadius * .43, craterRadius * .2, -.28, 0, Math.PI * 2); context.fillStyle = alphaColor("#fff9e5", .28); context.fill();
+  }
+
+  const flecks = [[-.12, -.62], [.52, -.5], [-.68, -.05], [.06, .02], [.24, .56], [-.34, .6]] as const;
+  for (const [x, y] of flecks) pixelRect(context, alphaColor("#fffdf0", .38), centerX + x * radius, centerY + y * radius, 1, 1);
   context.restore();
-  for (let y = -radius; y <= radius; y += 2) {
-    const halfWidth = Math.floor(Math.sqrt(Math.max(0, radius * radius - y * y)) / 2) * 2;
-    pixelRect(context, y < -radius * .25 ? mix(moon, "#ffffff", .22) : moon, centerX - halfWidth, centerY + y, halfWidth * 2 + 2, 2);
-  }
-  pixelRect(context, shade(moon, .72), centerX - radius * .45, centerY - radius * .34, 4, 3);
-  pixelRect(context, shade(moon, .8), centerX + radius * .18, centerY + radius * .1, 5, 4);
-  pixelRect(context, mix(moon, "#ffffff", .4), centerX + radius * .28, centerY - radius * .52, 3, 2);
+
+  context.save(); context.beginPath(); context.arc(centerX, centerY, radius, 0, Math.PI * 2); context.strokeStyle = alphaColor("#f7f5e8", .58); context.lineWidth = 1; context.stroke(); context.restore();
 }
 
 function drawStreet(context: CanvasRenderingContext2D, width: number, height: number, distance: number, settings: PixelArtSettings): number {
@@ -423,6 +454,35 @@ function drawPixelDissolve(context: CanvasRenderingContext2D, source: HTMLCanvas
   for (let y = 0; y < source.height; y += tile) for (let x = 0; x < source.width; x += tile) if (hash(x * 17 + y * 31) < threshold) context.drawImage(source, x, y, tile, tile, x, y, tile, tile);
 }
 
+function drawPixelAudioDeck(context: CanvasRenderingContext2D, width: number, height: number, settings: PixelArtSettings, frame: PixelArtNewYorkFrame): void {
+  const portrait = width < 220; const deckHeight = portrait ? 43 : 31; const top = height - deckHeight; const padding = 5; const scopeWidth = portrait ? 47 : 60; const spectrumWidth = width - scopeWidth - padding * 3;
+  context.save(); context.globalCompositeOperation = "source-over"; context.globalAlpha = 1;
+  pixelRect(context, "rgba(2,3,8,.91)", 0, top, width, deckHeight); pixelRect(context, alphaColor(settings.neonPrimary, .72), 0, top, width, 1); pixelRect(context, alphaColor(settings.neonSecondary, .26), 0, top + 2, width, 1);
+  const left = frame.stereoLeftBands?.length ? frame.stereoLeftBands : frame.spectrumBands ?? []; const right = frame.stereoRightBands?.length ? frame.stereoRightBands : frame.spectrumBands ?? [];
+  const bandCount = 48; const graphBottom = height - 5; const graphHeight = deckHeight - 12; const pulse = Math.max(frame.audioPulse, frame.rhythmPulse * .72);
+  for (let index = 0; index < bandCount; index += 1) {
+    const sourceIndex = Math.round(index / (bandCount - 1) * Math.max(0, (frame.spectrumBands?.length ?? left.length) - 1));
+    const leftValue = Math.pow(Math.max(.015, left[sourceIndex] ?? frame.spectrumBands?.[sourceIndex] ?? 0), .62); const rightValue = Math.pow(Math.max(.015, right[sourceIndex] ?? frame.spectrumBands?.[sourceIndex] ?? 0), .62);
+    const x = padding + Math.round(index / (bandCount - 1) * Math.max(1, spectrumWidth - 2)); const leftHeight = Math.max(1, Math.round(leftValue * graphHeight)); const rightHeight = Math.max(1, Math.round(rightValue * graphHeight));
+    pixelRect(context, alphaColor(settings.neonPrimary, .76 + pulse * .2), x, graphBottom - leftHeight, 1, leftHeight);
+    pixelRect(context, alphaColor(settings.neonSecondary, .72 + pulse * .24), x + 1, graphBottom - rightHeight, 1, rightHeight);
+    if ((index + Math.round(frame.timeSeconds * 12)) % 7 === 0) pixelRect(context, "rgba(255,255,255,.78)", x, graphBottom - Math.max(leftHeight, rightHeight), 2, 1);
+  }
+  const scopeLeft = width - scopeWidth - padding; const scopeTop = top + 6; const scopeHeight = deckHeight - 11; const centerX = scopeLeft + scopeWidth / 2; const centerY = scopeTop + scopeHeight / 2; const radius = Math.min(scopeWidth, scopeHeight) * .42; const stereoWidth = Math.max(0, Math.min(1, frame.stereoWidth ?? 0));
+  pixelRect(context, alphaColor(settings.neonSecondary, .18), scopeLeft, scopeTop, scopeWidth, scopeHeight); pixelRect(context, alphaColor(settings.neonPrimary, .62), scopeLeft, scopeTop, scopeWidth, 1); pixelRect(context, alphaColor(settings.neonPrimary, .32), scopeLeft, scopeTop + scopeHeight - 1, scopeWidth, 1);
+  context.strokeStyle = alphaColor(settings.neonSecondary, .34); context.lineWidth = 1; context.beginPath(); context.moveTo(Math.round(centerX), scopeTop + 2); context.lineTo(Math.round(centerX), scopeTop + scopeHeight - 2); context.moveTo(scopeLeft + 2, Math.round(centerY)); context.lineTo(scopeLeft + scopeWidth - 2, Math.round(centerY)); context.stroke();
+  context.save(); context.globalCompositeOperation = "lighter"; context.strokeStyle = mix(settings.neonPrimary, settings.neonSecondary, .5 + stereoWidth * .32); context.shadowColor = settings.neonSecondary; context.shadowBlur = 3 + pulse * 4; context.lineWidth = 1; context.beginPath();
+  const sampleCount = 18;
+  for (let index = 0; index < sampleCount; index += 1) {
+    const sourceIndex = Math.round(index / (sampleCount - 1) * Math.max(0, left.length - 1)); const l = left[sourceIndex] ?? 0; const r = right[sourceIndex] ?? l; const phase = index / (sampleCount - 1) * Math.PI * 2;
+    const x = centerX + (l - r) * radius * (1.2 + stereoWidth) + Math.sin(phase) * radius * stereoWidth * .34; const y = centerY + Math.cos(phase) * radius * ((l + r) * .42 + .12);
+    if (index === 0) context.moveTo(Math.round(x), Math.round(y)); else context.lineTo(Math.round(x), Math.round(y));
+  }
+  context.stroke(); context.restore();
+  context.font = "bold 5px monospace"; context.textBaseline = "top"; context.fillStyle = alphaColor(settings.neonPrimary, .86); context.fillText("L", 2, top + 4); context.fillStyle = alphaColor(settings.neonSecondary, .86); context.fillText("R", 2, top + 10); context.textAlign = "right"; context.fillStyle = "rgba(255,255,255,.58)"; context.fillText("STEREO", width - padding, top + 1);
+  context.restore();
+}
+
 function renderPixelArtFrame(group: THREE.Group, frame: PixelArtNewYorkFrame): void {
   const data = group.userData.pixelScene as PixelSceneData | undefined; if (!data) return; data.lastFrame = frame;
   const { canvas, context, transitionCanvas, transitionContext, settings } = data; const width = canvas.width; const height = canvas.height; context.imageSmoothingEnabled = false; context.globalAlpha = 1; context.globalCompositeOperation = "source-over"; pixelRect(context, "#030408", 0, 0, width, height);
@@ -442,6 +502,7 @@ function renderPixelArtFrame(group: THREE.Group, frame: PixelArtNewYorkFrame): v
     pixelateEnvironment(context, data.environmentCanvas, data.environmentContext);
     drawWalkingCloseUp(context, width, height, settings, frame, timeline.walkingElapsedSeconds, timeline.walking, data.heroFace);
   }
+  drawPixelAudioDeck(context, width, height, settings, frame);
   data.texture.needsUpdate = true;
 }
 

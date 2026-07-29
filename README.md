@@ -102,6 +102,10 @@ La modalità **Stereo Unfold** trasforma la cover in un foglio fisico PBR: entra
 
 L’analizzatore conserva 48 bande, RMS e differenza spettrale separatamente per canale sinistro e destro. I due lati del visualizer reagiscono quindi al contenuto L/R reale e non a una copia specchiata; i file mono passano automaticamente a una composizione simmetrica. Il caricamento della cover estrae due colori dominanti per i canali e per i sottotitoli collegati, mantenendo il flag per sbloccare la palette manuale. Preview ed export usano la stessa deformazione deterministica calcolata sul tempo audio assoluto.
 
+La modalità **Cube Animation** applica l’immagine caricata, senza ritagli, a tutte le sei facce di un unico cubo sospeso al centro. Non genera piani d’appoggio, percorsi, rimbalzi, copie o split: i beat analizzati producono rotazioni tridimensionali su assi combinati X/Y/Z con accelerazione e frenata smussate. La cover usa un livello fotografico non illuminato e non tonemappato per conservarne luminosità e saturazione; il guscio separato aggiunge vetro PBR neutro, trasmissione ottica, bordo Fresnel, clearcoat, ambiente riflesso e tre luci dedicate. È possibile caricare una fotografia di sfondo, adattata in modalità cover e regolabile nell’oscuramento. La palette estratta dalla cover governa spettrogramma, increspature d’acqua propagate sui beat, alone, anelli orbitali, particelle, light sweep e luci; riattivando la palette automatica i colori vengono ricalcolati dall’immagine corrente. In basso compare uno spettrogramma a 48 bande con indicatori di picco e intensità regolabile. Orientamento ed effetti coincidono tra `t=0` e la durata finale, così il video può essere ripetuto senza salto.
+
+In **Pixel Art → Walking Through New York** una fascia fissa sul bordo inferiore mostra sempre un deck audio pixelato: 48 bande separate L/R, picchi, colori della cover e un vectorscope che rappresenta l’ampiezza stereo del brano. Il deck è composto nello stesso canvas della storia, quindi compare identico nella preview e nell’esportazione sia in strada sia dentro il locale.
+
 **New York Streets** non viene più proposta nel selettore delle modalità. Il relativo formato dati e il renderer restano disponibili soltanto per aprire senza perdita i progetti precedenti.
 
 La modalità **Teddy Walk** mostra un orsacchiotto vissuto con peluria geometrica e tessuto irregolare, scolorito, abraso e leggermente sporco che cammina lentamente, sempre di mezzo profilo e senza saltelli, su una strada PBR con asfalto granuloso, crepe, colature, riparazioni, rappezzi e segnaletica consumata. La cover caricata viene incorporata nello squarcio cucito sul petto e pulsa morbidamente con il brano. Il pannello sinistro permette di estrarre e modificare la palette di pelo, toppe, dettagli e asfalto, regolare passo e pulsazione e attivare `Balla mentre cammina`: la coreografia elimina la deriva laterale, solleva le braccia, esegue giri completi e aggiunge piccoli salti atletici sincronizzati. L’animazione usa il tempo audio assoluto anche durante l’export; i vecchi progetti Teddy Wheel vengono convertiti automaticamente.
@@ -129,9 +133,15 @@ La modalità **Add Subtitles** importa direttamente un video MP4, WebM, MOV o M4
 In basso a destra è disponibile **Assistente Studio**, una chat di aiuto che usa
 SmolLM2, scaricato e memorizzato localmente al primo utilizzo. Il bot recupera dalla knowledge base soltanto
 le guide pertinenti alla domanda e conosce modalità attiva, formato, presenza
-dell’audio e stato dell’analisi. Nessun testo viene inviato online. Se il runtime
+dell’audio e stato dell’analisi. La prima risposta non aspetta il download del
+modello: arriva subito dalla knowledge base mentre SmolLM2 viene preparato in
+background. Le richieste e le indicazioni precedenti vengono compattate in una
+memoria riassunta locale e persistente, con un limite fisso per evitare che il
+contesto cresca senza controllo; **Azzera memoria** la elimina. Ogni inferenza ha
+un timeout e ricade sulla knowledge base, quindi la chat non può restare
+indefinitamente in caricamento. Nessun testo viene inviato online. Se il runtime
 WebGPU/WASM non è disponibile, la chat continua a rispondere direttamente dalla
-knowledge base locale. La struttura e le regole di manutenzione sono descritte
+knowledge base locale. La struttura, il prompt e le regole di manutenzione sono descritti
 in [Knowledge base dell’assistente locale](docs/assistant-knowledge-base.md).
 
 ## Build web di produzione

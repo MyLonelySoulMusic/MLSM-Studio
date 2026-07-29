@@ -12,6 +12,16 @@ describe("application assistant knowledge base", () => {
     expect(retrieveApplicationHelp("Il render MP4 dà errore di storage", "coverSphere")[0]).toMatchObject({ id: "export" });
   });
 
+  it("spiega vetro, spettrogramma e loop della modalità Cube Animation", () => {
+    expect(retrieveApplicationHelp("Come funziona il cubo di vetro e il loop?", "walkingCube")[0]).toMatchObject({ id: "walking-cube" });
+    expect(applicationHelpContext("spettrogramma e sfondo", "walkingCube")).toContain("48 bande spettrali");
+  });
+
+  it("spiega fallback, timeout e memoria della chat locale", () => {
+    expect(retrieveApplicationHelp("Il chatbot resta in caricamento e non risponde", "walkingCube")[0]).toMatchObject({ id: "studio-assistant" });
+    expect(applicationHelpContext("Come azzero la memoria del bot?", "walkingCube")).toContain("Azzera memoria");
+  });
+
   it("fornisce sempre una risposta locale anche senza corrispondenze", () => {
     expect(fallbackApplicationHelpAnswer("xyz sconosciuto", "instrumentalFalling").length).toBeGreaterThan(80);
   });

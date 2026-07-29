@@ -18,6 +18,7 @@ const remoteModelRepositories = {
 
 const transcriberPromises = new Map<string, Promise<unknown>>();
 const textGeneratorPromises = new Map<string, Promise<unknown>>();
+const readyTextGenerators = new Set<string>();
 let persistentStorageRequest: Promise<boolean> | undefined;
 
 interface ModelEnvironment {
@@ -70,8 +71,19 @@ export function getLocalTranscriber(model: string, progress?: (message: string) 
 
 export async function getLocalTextGenerator(model: string, progress?: (message: string) => void): Promise<LocalTextGenerator> {
   let pipeline = textGeneratorPromises.get(model);
-  if (!pipeline) { pipeline = createLocalPipeline("text-generation", model, progress).catch((error: unknown) => { textGeneratorPromises.delete(model); throw error; }); textGeneratorPromises.set(model, pipeline); }
+  if (!pipeline) {
+    pipeline = createLocalPipeline("text-generation", model, progress).then((generator) => { readyTextGenerators.add(model); return generator; }).catch((error: unknown) => { textGeneratorPromises.delete(model); readyTextGenerators.delete(model); throw error; });
+    textGeneratorPromises.set(model, pipeline);
+  }
   return pipeline as Promise<LocalTextGenerator>;
+}
+
+export function isLocalTextGeneratorReady(model: string): boolean {
+  return readyTextGenerators.has(model);
+}
+
+export function warmLocalTextGenerator(model: string, progress?: (message: string) => void): void {
+  void getLocalTextGenerator(model, progress).catch(() => progress?.(`${model} non disponibile · uso knowledge base locale`));
 }
 
 export function localGeneratedAnswer(output: LocalGeneratedText[]): string {

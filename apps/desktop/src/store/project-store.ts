@@ -33,6 +33,8 @@ interface ProjectState {
   updateStereoUnfold: (patch: Partial<RhythmBallProject["animation"]["stereoUnfold"]>) => void;
   setStereoUnfoldPalette: (colors: readonly string[]) => void;
   setStereoUnfoldAutoPalette: (enabled: boolean) => void;
+  updateWalkingCube: (patch: Partial<RhythmBallProject["animation"]["walkingCube"]>) => void;
+  setWalkingCubePalette: (colors: readonly string[]) => void;
   updatePixelArt: (patch: Partial<RhythmBallProject["animation"]["pixelArt"]>) => void;
   setPixelArtPalette: (colors: readonly string[]) => void;
   updateTeddyWalk: (patch: Partial<RhythmBallProject["animation"]["teddyWalk"]>) => void;
@@ -109,6 +111,13 @@ export const useProjectStore = create<ProjectState>((set) => ({
   updateStereoUnfold: (patch) => set((state) => ({ project: { ...state.project, animation: { ...state.project.animation, stereoUnfold: { ...state.project.animation.stereoUnfold, ...patch } } }, dirty: true })),
   setStereoUnfoldPalette: (colors) => set((state) => { const settings = state.project.animation.stereoUnfold; const primary = colors[0] ?? settings.palettePrimary; const secondary = colors[1] ?? colors[2] ?? primary; const stereoUnfold = { ...settings, palettePrimary: primary, paletteSecondary: secondary, ...(settings.autoPalette ? { primaryColor: primary, secondaryColor: secondary } : {}) }; const subtitles = state.project.subtitles.autoPalette ? { ...state.project.subtitles, color: primary, glowColor: secondary } : state.project.subtitles; return { project: { ...state.project, animation: { ...state.project.animation, stereoUnfold }, subtitles }, dirty: true, status: settings.autoPalette ? "Palette cover applicata alla scena Stereo Unfold" : "Palette Stereo Unfold memorizzata" }; }),
   setStereoUnfoldAutoPalette: (enabled) => set((state) => { const settings = state.project.animation.stereoUnfold; const stereoUnfold = { ...settings, autoPalette: enabled, ...(enabled ? { primaryColor: settings.palettePrimary, secondaryColor: settings.paletteSecondary } : {}) }; return { project: { ...state.project, animation: { ...state.project.animation, stereoUnfold } }, dirty: true }; }),
+  updateWalkingCube: (patch) => set((state) => ({ project: { ...state.project, animation: { ...state.project.animation, walkingCube: { ...state.project.animation.walkingCube, ...patch } } }, dirty: true })),
+  setWalkingCubePalette: (colors) => set((state) => {
+    const settings = state.project.animation.walkingCube; const primary = colors[0] ?? settings.palettePrimary; const secondary = colors[1] ?? colors[2] ?? primary; const accent = colors[2] ?? colors[3] ?? secondary;
+    const walkingCube = { ...settings, palettePrimary: primary, paletteSecondary: secondary, paletteAccent: accent };
+    const subtitles = state.project.subtitles.autoPalette ? { ...state.project.subtitles, color: primary, glowColor: accent } : state.project.subtitles;
+    return { project: { ...state.project, animation: { ...state.project.animation, walkingCube }, subtitles }, dirty: true, status: "Palette immagine applicata a cubo, vetro e campo audiovisivo" };
+  }),
   updatePixelArt: (patch) => set((state) => ({ project: { ...state.project, animation: { ...state.project.animation, pixelArt: { ...state.project.animation.pixelArt, ...patch, hoodieColor: "#08090e" } } }, dirty: true })),
   setPixelArtPalette: (colors) => set((state) => {
     const settings = state.project.animation.pixelArt; const primary = colors[0] ?? settings.palettePrimary; const secondary = colors[1] ?? colors[2] ?? primary; const neonPrimary = colors[2] ?? primary; const neonSecondary = colors[3] ?? secondary;

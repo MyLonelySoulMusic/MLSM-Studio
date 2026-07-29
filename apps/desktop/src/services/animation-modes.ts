@@ -5,8 +5,8 @@ export interface AnimationModeDefinition {
   id: string;
   label: string;
   description: string;
-  generator: "instrumentalFalling" | "newYorkStreets" | "coverSphere" | "stereoUnfold" | "pixelArt" | "teddyWalk" | "teddySing" | "addSubtitles";
-  panel: "instrumentalObjects" | "newYorkStreets" | "coverSphere" | "stereoUnfold" | "pixelArt" | "teddyWalk" | "teddySing" | "addSubtitles";
+  generator: "instrumentalFalling" | "newYorkStreets" | "coverSphere" | "stereoUnfold" | "walkingCube" | "pixelArt" | "teddyWalk" | "teddySing" | "addSubtitles";
+  panel: "instrumentalObjects" | "newYorkStreets" | "coverSphere" | "stereoUnfold" | "walkingCube" | "pixelArt" | "teddyWalk" | "teddySing" | "addSubtitles";
   objectTypes: readonly AnimationModeObjectType[];
   defaultBaseObjectTypes: readonly SceneObjectType[];
 }
@@ -49,6 +49,14 @@ export const animationModes: readonly AnimationModeDefinition[] = [{
   description: "La cover precipita stropicciata, si dispiega conservando pieghe fisiche e rivela un campo spettrale stereofonico separato in profondità.",
   generator: "stereoUnfold",
   panel: "stereoUnfold",
+  objectTypes: [],
+  defaultBaseObjectTypes: ["platform"]
+}, {
+  id: "walkingCube",
+  label: "Cube Animation",
+  description: "Un cubo fotografico in vetro ruota in 3D sui beat mentre spettro e increspature d’acqua attraversano uno sfondo personalizzabile nella palette della cover.",
+  generator: "walkingCube",
+  panel: "walkingCube",
   objectTypes: [],
   defaultBaseObjectTypes: ["platform"]
 }, {

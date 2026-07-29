@@ -25,11 +25,24 @@ Ogni articolo contiene:
 1. La domanda viene normalizzata e ampliata con sinonimi applicativi.
 2. Il retriever assegna priorità a titolo, parole chiave e modalità attiva.
 3. Soltanto i tre articoli più pertinenti entrano nel contesto di SmolLM2.
-4. Il prompt include formato, presenza dell’audio e stato dell’analisi.
+4. Il prompt di sistema definito in `application-assistant.ts` include formato,
+   presenza dell’audio, stato dell’analisi e memoria riassunta.
 5. Il modello deve rispondere in italiano e non può inventare funzioni assenti
    dalla knowledge base.
-6. Se WebGPU/WASM o il modello non sono disponibili, il retriever restituisce
+6. Se il modello non è ancora pronto, la prima risposta viene restituita subito
+   dalla knowledge base e il download prosegue in background.
+7. Caricamento e generazione hanno timeout separati; se WebGPU/WASM o il modello
+   non sono disponibili, il retriever restituisce
    direttamente una risposta deterministica dagli stessi articoli.
+
+## Memoria della conversazione
+
+La memoria non conserva un prompt illimitato. Dopo ogni risposta registra una
+versione compatta della domanda e dell’indicazione fornita, mantiene i turni più
+recenti entro un limite fisso e salva soltanto quel riepilogo in `localStorage`.
+SmolLM2 riceve il riepilogo insieme agli ultimi messaggi visibili, così può
+comprendere riferimenti come “e lo sfondo?” senza rallentare progressivamente.
+Il comando **Azzera memoria** cancella riepilogo e cronologia visibile.
 
 Per aggiungere una modalità, creare nello stesso file almeno un articolo con il
 nuovo `modeId`, i nomi dei controlli visibili e la procedura completa. Aggiornare

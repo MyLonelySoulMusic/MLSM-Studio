@@ -20,11 +20,14 @@ import { loadTeddyMocapLibrary, type TeddyMocapJoint, type TeddyMocapLibrary } f
 import type { TeddyLipSyncPose } from "../services/teddy-lipsync";
 import { deformStereoCoverVertex, resolveStereoUnfoldMotion } from "../services/stereo-unfold-motion";
 import { createPixelArtNewYorkScene, updatePixelArtNewYorkScene } from "../services/pixel-art-new-york-renderer";
+import { createWalkingCubeMotionEvaluator } from "../services/walking-cube-motion";
+import { createWalkingCubeScene, updateWalkingCubeScene } from "../services/walking-cube-renderer";
 
 type TintableMaterial = THREE.MeshStandardMaterial | THREE.MeshPhysicalMaterial;
 type NewYorkSettings = RhythmBallProject["animation"]["newYorkStreets"];
 type CoverSphereSettings = RhythmBallProject["animation"]["coverSphere"];
 type StereoUnfoldSettings = RhythmBallProject["animation"]["stereoUnfold"];
+type WalkingCubeSettings = RhythmBallProject["animation"]["walkingCube"];
 type PixelArtSettings = RhythmBallProject["animation"]["pixelArt"];
 type TeddyWalkSettings = RhythmBallProject["animation"]["teddyWalk"];
 type TeddySingSettings = RhythmBallProject["animation"]["teddySing"];
@@ -455,7 +458,9 @@ function createSecondaryMarbles(settings: NewYorkSettings, radius: number): THRE
 }
 
 function disposeMaterial(item: THREE.Material): void {
-  const mapped = item as THREE.Material & Record<string, unknown>; const textures = new Set<THREE.Texture>(); for (const key of ["map", "bumpMap", "normalMap", "roughnessMap", "metalnessMap", "emissiveMap", "alphaMap", "envMap"]) { const value = mapped[key]; if (value instanceof THREE.Texture) textures.add(value); } textures.forEach((texture) => texture.dispose()); item.dispose();
+  const mapped = item as THREE.Material & Record<string, unknown>; const textures = new Set<THREE.Texture>(); for (const key of ["map", "bumpMap", "normalMap", "roughnessMap", "metalnessMap", "emissiveMap", "alphaMap", "envMap"]) { const value = mapped[key]; if (value instanceof THREE.Texture) textures.add(value); }
+  if (item instanceof THREE.ShaderMaterial) Object.values(item.uniforms).forEach((uniform) => { if (uniform.value instanceof THREE.Texture) textures.add(uniform.value); });
+  textures.forEach((texture) => texture.dispose()); item.dispose();
 }
 
 function disposeGroup(group: THREE.Group): void {
@@ -933,7 +938,7 @@ function createStereoUnfoldScene(settings: StereoUnfoldSettings): THREE.Group {
   return root;
 }
 
-export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, ballVelocity, activeObjectIndex, aspectRatio, animationModeId, newYorkSettings, coverSphereSettings, stereoUnfoldSettings, pixelArtSettings, teddyWalkSettings, teddySingSettings, addSubtitlesSettings, teddyLipSync, subtitles, spectrumBands, stereoLeftBands, stereoRightBands, stereoWidth, stereoLeftPulse, stereoRightPulse, audioPulse, rhythmPulse, globalBpm, trajectorySegments, projectSeed, motionKinds, impactResponses, onRendererReady, onSelectObject }: { timeSeconds: number; durationSeconds: number; playing: boolean; ballPosition: Vector3Data | undefined; ballVelocity: Vector3Data | undefined; activeObjectIndex: number; aspectRatio: string; animationModeId: string; newYorkSettings: NewYorkSettings; coverSphereSettings: CoverSphereSettings; stereoUnfoldSettings: StereoUnfoldSettings; pixelArtSettings: PixelArtSettings; teddyWalkSettings: TeddyWalkSettings; teddySingSettings: TeddySingSettings; addSubtitlesSettings: AddSubtitlesSettings; teddyLipSync: TeddyLipSyncPose; subtitles: RhythmBallProject["subtitles"]; spectrumBands: readonly number[]; stereoLeftBands: readonly number[]; stereoRightBands: readonly number[]; stereoWidth: number; stereoLeftPulse: number; stereoRightPulse: number; audioPulse: number; rhythmPulse: number; globalBpm: number; trajectorySegments: readonly TrajectorySegment[]; projectSeed: number; motionKinds: readonly MotionKind[]; impactResponses: readonly { timeSeconds: number; strength: number }[]; onRendererReady: (renderer: SharedViewportRenderer | null) => void; onSelectObject: (id: string | null) => void }) {
+export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, ballVelocity, activeObjectIndex, aspectRatio, animationModeId, newYorkSettings, coverSphereSettings, stereoUnfoldSettings, walkingCubeSettings, pixelArtSettings, teddyWalkSettings, teddySingSettings, addSubtitlesSettings, teddyLipSync, subtitles, spectrumBands, stereoLeftBands, stereoRightBands, stereoWidth, stereoLeftPulse, stereoRightPulse, audioPulse, rhythmPulse, globalBpm, trajectorySegments, projectSeed, motionKinds, impactResponses, onRendererReady, onSelectObject }: { timeSeconds: number; durationSeconds: number; playing: boolean; ballPosition: Vector3Data | undefined; ballVelocity: Vector3Data | undefined; activeObjectIndex: number; aspectRatio: string; animationModeId: string; newYorkSettings: NewYorkSettings; coverSphereSettings: CoverSphereSettings; stereoUnfoldSettings: StereoUnfoldSettings; walkingCubeSettings: WalkingCubeSettings; pixelArtSettings: PixelArtSettings; teddyWalkSettings: TeddyWalkSettings; teddySingSettings: TeddySingSettings; addSubtitlesSettings: AddSubtitlesSettings; teddyLipSync: TeddyLipSyncPose; subtitles: RhythmBallProject["subtitles"]; spectrumBands: readonly number[]; stereoLeftBands: readonly number[]; stereoRightBands: readonly number[]; stereoWidth: number; stereoLeftPulse: number; stereoRightPulse: number; audioPulse: number; rhythmPulse: number; globalBpm: number; trajectorySegments: readonly TrajectorySegment[]; projectSeed: number; motionKinds: readonly MotionKind[]; impactResponses: readonly { timeSeconds: number; strength: number }[]; onRendererReady: (renderer: SharedViewportRenderer | null) => void; onSelectObject: (id: string | null) => void }) {
   const host = useRef<HTMLDivElement>(null);
   const backgroundVideo = useRef<HTMLVideoElement>(null);
   const [teddyMocap, setTeddyMocap] = useState<TeddyMocapLibrary | null>(null);
@@ -942,6 +947,16 @@ export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, 
   const objects = useMemo(() => animationModeId === "newYorkStreets" ? normalizeNewYorkLevels(storedObjects) : storedObjects, [animationModeId, storedObjects]);
   const ballAppearance = useSceneStore((state) => state.ball);
   const background = useSceneStore((state) => state.background);
+  const effectiveWalkingCubeSettings = useMemo<WalkingCubeSettings>(() => {
+    const globalImage = background.mediaType === "image" ? background.imageUrl : null;
+    return {
+      ...walkingCubeSettings,
+      imageUrl: walkingCubeSettings.imageUrl,
+      backgroundImageUrl: globalImage ?? walkingCubeSettings.backgroundImageUrl
+    };
+  }, [background.imageUrl, background.mediaType, walkingCubeSettings]);
+  const walkingCubeExternalVideo = background.mediaType === "video" && Boolean(background.imageUrl);
+  const walkingCubeExternalBackdrop = walkingCubeExternalVideo || Boolean(effectiveWalkingCubeSettings.backgroundImageUrl);
   const railColors = useSceneStore((state) => state.railColors);
   const sceneLight = useSceneStore((state) => state.light);
   const lightPickMode = useSceneStore((state) => state.lightPickMode);
@@ -971,6 +986,7 @@ export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, 
   const secondaryMarbles = useRef<THREE.Group | null>(null);
   const coverVisualizer = useRef<THREE.Group | null>(null);
   const stereoUnfoldScene = useRef<THREE.Group | null>(null);
+  const walkingCubeScene = useRef<THREE.Group | null>(null);
   const pixelArtScene = useRef<THREE.Group | null>(null);
   const teddyWalkScene = useRef<THREE.Group | null>(null);
   const teddySingScene = useRef<THREE.Group | null>(null);
@@ -991,6 +1007,7 @@ export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, 
   const sceneRef = useRef<THREE.Scene | null>(null);
   const raceEvaluator = useMemo(() => createNewYorkRaceEvaluator(trajectorySegments, newYorkSettings.secondaryMarbleCount, projectSeed, ballAppearance.radius, durationSeconds), [ballAppearance.radius, durationSeconds, newYorkSettings.secondaryMarbleCount, projectSeed, trajectorySegments]);
   const rollingOrientation = useMemo(() => createRollingOrientationEvaluator(trajectorySegments, ballAppearance.radius), [ballAppearance.radius, trajectorySegments]);
+  const walkingCubeMotion = useMemo(() => createWalkingCubeMotionEvaluator({ durationSeconds: durationSeconds || 30, bpm: globalBpm, impacts: impactResponses, seed: projectSeed, intensity: walkingCubeSettings.rotationIntensity }), [durationSeconds, globalBpm, impactResponses, projectSeed, walkingCubeSettings.rotationIntensity]);
 
   useEffect(() => {
     if (animationModeId !== "teddyWalk") { setTeddyMocap(null); return; }
@@ -1116,7 +1133,7 @@ export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, 
     const railGroup = initialAnimationModeId.current === "instrumentalFalling" ? createRails(initialObjects.current, initialRailColors.current, initialBall.current.radius, initialMotionKinds.current, initialActiveObjectIndex.current) : new THREE.Group();
     scene.add(railGroup);
     rails.current = railGroup;
-    const initialNeonSigns = ["coverSphere", "stereoUnfold", "pixelArt", "teddyWalk", "teddySing", "addSubtitles"].includes(initialAnimationModeId.current) ? new THREE.Group() : createNeonSigns(initialObjects.current, initialBackground.current.neon, initialActiveObjectIndex.current); scene.add(initialNeonSigns); neonSigns.current = initialNeonSigns;
+    const initialNeonSigns = ["coverSphere", "stereoUnfold", "walkingCube", "pixelArt", "teddyWalk", "teddySing", "addSubtitles"].includes(initialAnimationModeId.current) ? new THREE.Group() : createNeonSigns(initialObjects.current, initialBackground.current.neon, initialActiveObjectIndex.current); scene.add(initialNeonSigns); neonSigns.current = initialNeonSigns;
 
     const lowest = initialObjects.current.at(-1)?.position[1] ?? -12;
     const starPositions = new Float32Array(Math.min(900, Math.max(240, initialObjects.current.length * 8)) * 3);
@@ -1127,7 +1144,7 @@ export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, 
     }
     const starGeometry = new THREE.BufferGeometry();
     starGeometry.setAttribute("position", new THREE.BufferAttribute(starPositions, 3));
-    const starField = new THREE.Points(starGeometry, new THREE.PointsMaterial({ color: "#8197c6", size: .025, transparent: true, opacity: .55, sizeAttenuation: true })); starField.visible = initialAnimationModeId.current !== "addSubtitles" && initialAnimationModeId.current !== "pixelArt" && initialBackground.current.effects.particles; scene.add(starField); stars.current = starField;
+    const starField = new THREE.Points(starGeometry, new THREE.PointsMaterial({ color: "#8197c6", size: .025, transparent: true, opacity: .55, sizeAttenuation: true })); starField.visible = initialAnimationModeId.current !== "addSubtitles" && initialAnimationModeId.current !== "pixelArt" && initialAnimationModeId.current !== "walkingCube" && initialBackground.current.effects.particles; scene.add(starField); stars.current = starField;
 
     const resize = () => {
       const width = element.clientWidth;
@@ -1143,7 +1160,7 @@ export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, 
     // A local cubemap captures the actual route lights and neon sprites, including
     // signs behind the marble, instead of faking their colors with a static tint.
     const updateMarbleReflections = (force: boolean) => {
-      if (initialAnimationModeId.current === "stereoUnfold" || initialAnimationModeId.current === "pixelArt" || initialAnimationModeId.current === "teddyWalk" || initialAnimationModeId.current === "teddySing" || initialAnimationModeId.current === "addSubtitles") return;
+      if (initialAnimationModeId.current === "stereoUnfold" || initialAnimationModeId.current === "walkingCube" || initialAnimationModeId.current === "pixelArt" || initialAnimationModeId.current === "teddyWalk" || initialAnimationModeId.current === "teddySing" || initialAnimationModeId.current === "addSubtitles") return;
       reflectionFrame += 1;
       if (!force && reflectionFrame % 7 !== 0) return;
       reflectionCamera.position.copy(marbleGroup.position);
@@ -1169,7 +1186,8 @@ export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, 
       updateLightForFrame(); updatePhysicalGlint(); updateMarbleReflections(forceReflection);
       activeRenderer.render(scene, activeCamera);
     };
-    onRendererReady({ canvas: activeRenderer.domElement, setExportSize: (width, height) => { activeRenderer.setPixelRatio(1); activeRenderer.setSize(width, height, false); activeCamera.aspect = width / Math.max(1, height); activeCamera.updateProjectionMatrix(); }, restorePreviewSize: () => { activeRenderer.setPixelRatio(previewPixelRatio); resize(); }, renderNow: () => renderScene(true) });
+    let exportRendering = false;
+    onRendererReady({ canvas: activeRenderer.domElement, setExportSize: (width, height) => { exportRendering = true; activeRenderer.setPixelRatio(1); activeRenderer.setSize(width, height, false); activeCamera.aspect = width / Math.max(1, height); activeCamera.updateProjectionMatrix(); }, restorePreviewSize: () => { exportRendering = false; activeRenderer.setPixelRatio(previewPixelRatio); resize(); }, renderNow: () => renderScene(true) });
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
     const click = (event: PointerEvent) => {
@@ -1196,10 +1214,10 @@ export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, 
     let frame = 0; const renderClock = new THREE.Clock();
     const render = () => {
       const delta = Math.min(.05, renderClock.getDelta()); const positionDamping = 1 - Math.exp(-5.8 * delta); const targetDamping = 1 - Math.exp(-7.2 * delta);
-      activeCamera.position.lerp(desiredCameraPosition.current, positionDamping);
-      smoothCameraTarget.current.lerp(desiredCameraTarget.current, targetDamping);
+      if (initialAnimationModeId.current === "walkingCube") { activeCamera.position.copy(desiredCameraPosition.current); smoothCameraTarget.current.copy(desiredCameraTarget.current); }
+      else { activeCamera.position.lerp(desiredCameraPosition.current, positionDamping); smoothCameraTarget.current.lerp(desiredCameraTarget.current, targetDamping); }
       activeCamera.lookAt(smoothCameraTarget.current);
-      renderScene();
+      if (!exportRendering) renderScene();
       frame = requestAnimationFrame(render);
     };
     render();
@@ -1358,6 +1376,18 @@ export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, 
 
   useLayoutEffect(() => {
     const scene = sceneRef.current; if (!scene) return;
+    if (walkingCubeScene.current) { scene.remove(walkingCubeScene.current); disposeGroup(walkingCubeScene.current); walkingCubeScene.current = null; }
+    if (animationModeId !== "walkingCube") return;
+    const cubeScene = createWalkingCubeScene(effectiveWalkingCubeSettings, aspectRatio, walkingCubeExternalBackdrop); scene.add(cubeScene); walkingCubeScene.current = cubeScene;
+  }, [animationModeId, aspectRatio, effectiveWalkingCubeSettings, walkingCubeExternalBackdrop]);
+
+  useLayoutEffect(() => {
+    const cubeScene = walkingCubeScene.current; if (!cubeScene || animationModeId !== "walkingCube") return;
+    updateWalkingCubeScene(cubeScene, { pose: walkingCubeMotion(timeSeconds), audioPulse, rhythmPulse, spectrumBands, stereoLeftBands, stereoRightBands, stereoWidth });
+  }, [animationModeId, audioPulse, rhythmPulse, spectrumBands, stereoLeftBands, stereoRightBands, stereoWidth, timeSeconds, walkingCubeMotion]);
+
+  useLayoutEffect(() => {
+    const scene = sceneRef.current; if (!scene) return;
     if (pixelArtScene.current) { scene.remove(pixelArtScene.current); disposeGroup(pixelArtScene.current); pixelArtScene.current = null; }
     if (animationModeId !== "pixelArt") return;
     const nextScene = createPixelArtNewYorkScene(pixelArtSettings, aspectRatio); scene.add(nextScene); pixelArtScene.current = nextScene;
@@ -1365,8 +1395,8 @@ export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, 
 
   useLayoutEffect(() => {
     const scene = pixelArtScene.current; if (!scene || animationModeId !== "pixelArt") return;
-    updatePixelArtNewYorkScene(scene, { timeSeconds, durationSeconds, rhythmPulse, audioPulse, bpm: globalBpm });
-  }, [animationModeId, audioPulse, durationSeconds, globalBpm, rhythmPulse, timeSeconds]);
+    updatePixelArtNewYorkScene(scene, { timeSeconds, durationSeconds, rhythmPulse, audioPulse, bpm: globalBpm, spectrumBands, stereoLeftBands, stereoRightBands, stereoWidth });
+  }, [animationModeId, audioPulse, durationSeconds, globalBpm, rhythmPulse, spectrumBands, stereoLeftBands, stereoRightBands, stereoWidth, timeSeconds]);
 
   useLayoutEffect(() => {
     const visualizer = coverVisualizer.current;
@@ -1505,7 +1535,7 @@ export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, 
   useEffect(() => {
     if (!sceneRef.current) return;
     if (neonSigns.current) { sceneRef.current.remove(neonSigns.current); disposeGroup(neonSigns.current); }
-    const nextSigns = animationModeId === "coverSphere" || animationModeId === "stereoUnfold" || animationModeId === "pixelArt" || animationModeId === "teddyWalk" || animationModeId === "teddySing" || animationModeId === "addSubtitles" ? new THREE.Group() : createNeonSigns(objects, background.neon, activeObjectIndexRef.current); sceneRef.current.add(nextSigns); neonSigns.current = nextSigns;
+    const nextSigns = animationModeId === "coverSphere" || animationModeId === "stereoUnfold" || animationModeId === "walkingCube" || animationModeId === "pixelArt" || animationModeId === "teddyWalk" || animationModeId === "teddySing" || animationModeId === "addSubtitles" ? new THREE.Group() : createNeonSigns(objects, background.neon, activeObjectIndexRef.current); sceneRef.current.add(nextSigns); neonSigns.current = nextSigns;
   }, [animationModeId, background.neon, objects]);
 
   useEffect(() => { neonSigns.current?.children.forEach((sign) => { sign.visible = Math.abs(Number(sign.userData.routeIndex) - activeObjectIndex) <= 5; }); }, [activeObjectIndex]);
@@ -1551,8 +1581,8 @@ export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, 
     sceneRef.current.fog = night ? new THREE.FogExp2("#18232a", .0038) : singer ? new THREE.FogExp2(teddySingSettings.roomColor, .0018) : null;
     const hemisphere = sceneRef.current.getObjectByName("global-hemisphere") as THREE.HemisphereLight | undefined; const key = sceneRef.current.getObjectByName("global-key") as THREE.DirectionalLight | undefined; const cyan = sceneRef.current.getObjectByName("global-cyan-rim") as THREE.PointLight | undefined; const violet = sceneRef.current.getObjectByName("global-violet-rim") as THREE.PointLight | undefined;
     if (hemisphere) { hemisphere.intensity = night ? .34 : singer ? .62 : 1.25; hemisphere.color.set(night ? "#48617b" : singer ? "#9ea9c4" : "#c8d8ff"); hemisphere.groundColor.set(night ? "#050708" : singer ? "#11131a" : "#180d2d"); } if (key) { key.intensity = night ? .58 : singer ? 1.5 : 4.2; key.color.set(night ? "#8295ad" : singer ? "#f7e9dc" : "#ffffff"); } if (cyan) cyan.intensity = night ? .35 : singer ? .8 : 13; if (violet) violet.intensity = night ? .25 : singer ? .8 : 15;
-    if (stars.current) stars.current.visible = animationModeId !== "addSubtitles" && animationModeId !== "pixelArt" && background.effects.particles;
-    if (customLightRig.current) customLightRig.current.visible = animationModeId !== "addSubtitles" && animationModeId !== "pixelArt";
+    if (stars.current) stars.current.visible = animationModeId !== "addSubtitles" && animationModeId !== "pixelArt" && animationModeId !== "walkingCube" && background.effects.particles;
+    if (customLightRig.current) customLightRig.current.visible = animationModeId !== "addSubtitles" && animationModeId !== "pixelArt" && animationModeId !== "walkingCube";
   }, [animationModeId, background, teddySingSettings.roomColor]);
 
   useEffect(() => {
@@ -1573,7 +1603,7 @@ export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, 
 
   useLayoutEffect(() => {
     if (!marble.current) return;
-    marble.current.visible = animationModeId !== "stereoUnfold" && animationModeId !== "pixelArt" && animationModeId !== "teddyWalk" && animationModeId !== "teddySing" && animationModeId !== "addSubtitles";
+    marble.current.visible = animationModeId !== "stereoUnfold" && animationModeId !== "walkingCube" && animationModeId !== "pixelArt" && animationModeId !== "teddyWalk" && animationModeId !== "teddySing" && animationModeId !== "addSubtitles";
     const position = animationModeId === "coverSphere" ? { x: 0, y: .55 + audioPulse * .08, z: 0 } : animationModeId === "stereoUnfold" ? { x: 0, y: .34, z: .28 } : ballPosition ?? { x: 0, y: 2.25 + Math.sin(timeSeconds * 2.2) * .1, z: 0 };
     marble.current.position.set(position.x, position.y, position.z);
     if (animationModeId === "coverSphere") { const rotation = timeSeconds * .48 * coverSphereSettings.rotationIntensity; marble.current.rotation.set(Math.sin(timeSeconds * .28) * .13, rotation, Math.sin(timeSeconds * .41) * .075); marble.current.scale.setScalar((1.62 + audioPulse * .055) / .42); }
@@ -1595,6 +1625,9 @@ export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, 
         desiredCameraPosition.current.set(0, .15, aspectRatio === "9:16" ? 10.8 : 9.5); desiredCameraTarget.current.set(0, -.35, 0); const nextFov = aspectRatio === "9:16" ? 43 : 39; if (camera.current.fov !== nextFov) { camera.current.fov = nextFov; camera.current.updateProjectionMatrix(); }
       } else if (animationModeId === "stereoUnfold") {
         desiredCameraPosition.current.set(0, .18, aspectRatio === "9:16" ? 11.7 : 10.1); desiredCameraTarget.current.set(0, .05, -.35); const nextFov = aspectRatio === "9:16" ? 44 : 40; if (camera.current.fov !== nextFov) { camera.current.fov = nextFov; camera.current.updateProjectionMatrix(); }
+      } else if (animationModeId === "walkingCube") {
+        const focus = walkingCubeScene.current?.userData.focusPosition as THREE.Vector3 | undefined; const target = focus ?? new THREE.Vector3(0, -.03, 0);
+        desiredCameraPosition.current.set(0, target.y + (aspectRatio === "9:16" ? .06 : .02), aspectRatio === "9:16" ? 7.45 : 6.35); desiredCameraTarget.current.set(0, target.y, -.2); const nextFov = aspectRatio === "9:16" ? 40 : 37; if (camera.current.fov !== nextFov) { camera.current.fov = nextFov; camera.current.updateProjectionMatrix(); }
       } else if (animationModeId === "pixelArt") {
         desiredCameraPosition.current.set(0, 0, 10.6); desiredCameraTarget.current.set(0, 0, .65); const nextFov = 34; if (camera.current.fov !== nextFov) { camera.current.fov = nextFov; camera.current.updateProjectionMatrix(); }
       } else if (animationModeId === "teddyWalk") {
@@ -1610,12 +1643,34 @@ export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, 
   }, [activeObjectIndex, animationModeId, aspectRatio, audioPulse, ballAppearance, ballPosition, ballVelocity, coverSphereSettings.rotationIntensity, durationSeconds, objects, rollingOrientation, sceneLight.enabled, sceneLight.reflectionBoost, timeSeconds, trajectorySegments]);
 
   const subtitleVideoMode = animationModeId === "addSubtitles";
+  const walkingCubeMode = animationModeId === "walkingCube";
   const activeVideoUrl = subtitleVideoMode ? addSubtitlesSettings.videoUrl : background.mediaType === "video" ? background.imageUrl : null;
-  const safeImageUrl = !subtitleVideoMode && background.mediaType === "image" ? background.imageUrl?.replace(/["\\]/g, "") : undefined;
-  const backdropStyle = { backgroundImage: subtitleVideoMode ? "none" : safeImageUrl ? `linear-gradient(180deg, ${background.colors[0]}22, ${background.colors[1]}55), url("${safeImageUrl}")` : `radial-gradient(circle at 50% 35%, ${background.colors[1]}, ${background.colors[0]} 72%)`, backgroundColor: subtitleVideoMode ? "#000000" : undefined, opacity: activeVideoUrl ? 1 : background.opacity, filter: `blur(${activeVideoUrl ? 0 : background.blur}px)` };
-  const videoStyle = subtitleVideoMode ? { opacity: 1, filter: "none", objectFit: addSubtitlesSettings.fit, backgroundColor: "#000000" } : { opacity: background.opacity, filter: `blur(${background.blur}px)`, objectFit: "cover" as const };
+  const cubeBackgroundUrl = walkingCubeMode ? effectiveWalkingCubeSettings.backgroundImageUrl?.replace(/["\\]/g, "") : undefined;
+  const safeImageUrl = cubeBackgroundUrl ?? (!subtitleVideoMode && background.mediaType === "image" ? background.imageUrl?.replace(/["\\]/g, "") : undefined);
+  const cubeDim = Math.round(walkingCubeSettings.backgroundDim * 255).toString(16).padStart(2, "0");
+  const backdropStyle = { backgroundImage: subtitleVideoMode ? "none" : walkingCubeMode && safeImageUrl ? `linear-gradient(#000000${cubeDim}, #000000${cubeDim}), url("${safeImageUrl}")` : safeImageUrl ? `linear-gradient(180deg, ${background.colors[0]}22, ${background.colors[1]}55), url("${safeImageUrl}")` : `radial-gradient(circle at 50% 35%, ${walkingCubeMode ? walkingCubeSettings.paletteSecondary : background.colors[1]}, ${walkingCubeMode ? walkingCubeSettings.palettePrimary : background.colors[0]} 72%)`, backgroundColor: subtitleVideoMode ? "#000000" : undefined, backgroundPosition: "center", backgroundRepeat: "no-repeat", backgroundSize: walkingCubeMode && safeImageUrl ? "100% 100%" : "cover", inset: walkingCubeMode ? 0 : "-10px", transform: walkingCubeMode ? "none" : "scale(1.02)", opacity: walkingCubeMode ? 1 : activeVideoUrl ? 1 : background.opacity, filter: `blur(${walkingCubeMode || activeVideoUrl ? 0 : background.blur}px)` };
+  const videoStyle = subtitleVideoMode ? { opacity: 1, filter: "none", objectFit: addSubtitlesSettings.fit, backgroundColor: "#000000" } : walkingCubeMode ? { inset: 0, width: "100%", height: "100%", transform: "none", opacity: 1, filter: "none", objectFit: "fill" as const, backgroundColor: "#070b18" } : { opacity: background.opacity, filter: `blur(${background.blur}px)`, objectFit: "cover" as const };
   const revealProgress = getRevealProgress(ballAppearance, timeSeconds, durationSeconds); const imageProgress = Math.max(0, Math.min(1, (revealProgress - .16) / .84)); const easedImage = 1 - Math.pow(1 - imageProgress, 3);
-  const revealStyle = animationModeId !== "stereoUnfold" && animationModeId !== "pixelArt" && animationModeId !== "teddyWalk" && animationModeId !== "teddySing" && !subtitleVideoMode && ballAppearance.innerImageUrl ? { backgroundImage: `url("${ballAppearance.innerImageUrl.replace(/["\\]/g, "")}")`, opacity: easedImage, transform: `perspective(1200px) rotateY(${(1 - easedImage) * 104}deg) scale(${.58 + easedImage * .42})`, filter: `blur(${(1 - easedImage) * 5}px) drop-shadow(0 28px 45px #000c)` } : undefined;
+  const revealStyle = animationModeId !== "stereoUnfold" && !walkingCubeMode && animationModeId !== "pixelArt" && animationModeId !== "teddyWalk" && animationModeId !== "teddySing" && !subtitleVideoMode && ballAppearance.innerImageUrl ? { backgroundImage: `url("${ballAppearance.innerImageUrl.replace(/["\\]/g, "")}")`, opacity: easedImage, transform: `perspective(1200px) rotateY(${(1 - easedImage) * 104}deg) scale(${.58 + easedImage * .42})`, filter: `blur(${(1 - easedImage) * 5}px) drop-shadow(0 28px 45px #000c)` } : undefined;
   const flashOpacity = revealProgress > 0 ? Math.max(0, Math.sin(Math.min(1, revealProgress * 2.6) * Math.PI)) : 0;
-  return <main className="viewport" aria-label="Viewport scena"><div className="viewport-tools"><button className="active-control">{animationModeId === "coverSphere" ? "Vista visualizer" : animationModeId === "stereoUnfold" ? "Vista Stereo Unfold" : animationModeId === "pixelArt" ? "Vista Pixel Art" : animationModeId === "teddyWalk" ? "Vista Teddy Walk" : animationModeId === "teddySing" ? "Vista Teddy Sing" : subtitleVideoMode ? "Vista sottotitoli" : "Vista percorso"}</button>{subtitleVideoMode || animationModeId === "pixelArt" ? null : <><button disabled>Sposta</button><button disabled>Ruota</button><button disabled>Scala</button></>}<span /><span className="viewport-quality">{subtitleVideoMode ? "Video originale · overlay sottotitoli GPU" : animationModeId === "pixelArt" ? "Personaggi articolati · pixel canvas · export GPU" : "PBR · AgX · Preview GPU ottimizzata"}</span></div><div className="three-stage"><div className={`preview-frame ${aspectRatio === "16:9" ? "ratio-landscape" : "ratio-portrait"}`}><div className="scene-backdrop" style={backdropStyle} />{activeVideoUrl ? <video key={activeVideoUrl} ref={backgroundVideo} className={`scene-backdrop scene-backdrop-video${subtitleVideoMode ? " subtitle-source-video" : ""}`} src={activeVideoUrl} style={videoStyle} muted loop playsInline preload="auto" /> : null}{subtitleVideoMode && addSubtitlesSettings.dimming > 0 ? <div className="subtitle-video-dimming" style={{ opacity: addSubtitlesSettings.dimming }} /> : null}{!subtitleVideoMode && animationModeId !== "pixelArt" && background.effects.glow ? <div className="scene-effect scene-glow" /> : null}{!subtitleVideoMode && animationModeId !== "pixelArt" && background.effects.particles ? <div className="scene-effect scene-particles" /> : null}{!subtitleVideoMode && animationModeId !== "pixelArt" && background.finish === "worn" ? <div className="scene-effect scene-wear" /> : null}{!subtitleVideoMode && animationModeId !== "pixelArt" && background.effects.vignette ? <div className="scene-effect scene-vignette" /> : null}<div ref={host} className={`three-canvas-host${lightPickMode && !subtitleVideoMode && animationModeId !== "pixelArt" ? " light-picking" : ""}`} />{revealStyle ? <><div className="final-reveal-scrim" style={{ opacity: easedImage * .68 }} aria-hidden="true" /><div className="final-break-flash" style={{ opacity: flashOpacity }} aria-hidden="true" /><div className="final-image-reveal" style={revealStyle} aria-hidden="true" /></> : null}</div></div><div className="viewport-footer"><span>● WebGL 2 · preview leggera {aspectRatio} · export pieno</span><span>{subtitleVideoMode ? `Add Subtitles · ${addSubtitlesSettings.videoName || "carica un video"} · ${subtitles.cues.length} blocchi` : animationModeId === "newYorkStreets" ? `New York Streets · ${newYorkSettings.secondaryMarbleCount + 1} biglie · strada + fognature` : animationModeId === "coverSphere" ? "Cover Sphere · spettrogramma reale a 48 bande · effetti audio-reattivi" : animationModeId === "stereoUnfold" ? `Stereo Unfold · analisi L/R reale · ampiezza stereo ${Math.round(stereoWidth * 100)}%` : animationModeId === "pixelArt" ? `Pixel Art · Walking Through New York · ingresso ${durationSeconds > 0 ? (durationSeconds / 2).toFixed(1) : "—"} s · ${pixelArtSettings.venueName || "BAR"}` : animationModeId === "teddyWalk" ? `Teddy Walk · ${teddyMocap ? "motion capture Mixamo attivo" : "caricamento motion capture"} · strada PBR` : animationModeId === "teddySing" ? `Teddy Sing · labiale 3D ${teddyLipSync.voicing > .02 ? "attivo" : "in attesa della voce"} · stanza LED` : `${background.finish === "worn" ? "Ambiente usurato" : "Ambiente limpido"} · viaggio orizzontale audio-reattivo`}</span></div></main>;
+  const standaloneGpuMode = subtitleVideoMode || walkingCubeMode || animationModeId === "pixelArt";
+  const viewportLabel = animationModeId === "coverSphere" ? "Vista visualizer" : animationModeId === "stereoUnfold" ? "Vista Stereo Unfold" : walkingCubeMode ? "Vista Cube Animation" : animationModeId === "pixelArt" ? "Vista Pixel Art" : animationModeId === "teddyWalk" ? "Vista Teddy Walk" : animationModeId === "teddySing" ? "Vista Teddy Sing" : subtitleVideoMode ? "Vista sottotitoli" : "Vista percorso";
+  const qualityLabel = subtitleVideoMode ? "Video originale · overlay sottotitoli GPU" : walkingCubeMode ? "Cover fedele · vetro PBR · increspature GPU" : animationModeId === "pixelArt" ? "Personaggi articolati · spettro stereo pixel · export GPU" : "PBR · AgX · Preview GPU ottimizzata";
+  const footerLabel = subtitleVideoMode ? `Add Subtitles · ${addSubtitlesSettings.videoName || "carica un video"} · ${subtitles.cues.length} blocchi` : animationModeId === "newYorkStreets" ? `New York Streets · ${newYorkSettings.secondaryMarbleCount + 1} biglie · strada + fognature` : animationModeId === "coverSphere" ? "Cover Sphere · spettrogramma reale a 48 bande · effetti audio-reattivi" : animationModeId === "stereoUnfold" ? `Stereo Unfold · analisi L/R reale · ampiezza stereo ${Math.round(stereoWidth * 100)}%` : walkingCubeMode ? `Cube Animation · rotazione 3D · increspature sui beat · spettrogramma 48 bande · stereo ${Math.round(stereoWidth * 100)}%` : animationModeId === "pixelArt" ? `Pixel Art · Walking Through New York · deck 48 bande L/R · ingresso ${durationSeconds > 0 ? (durationSeconds / 2).toFixed(1) : "—"} s · ${pixelArtSettings.venueName || "BAR"}` : animationModeId === "teddyWalk" ? `Teddy Walk · ${teddyMocap ? "motion capture Mixamo attivo" : "caricamento motion capture"} · strada PBR` : animationModeId === "teddySing" ? `Teddy Sing · labiale 3D ${teddyLipSync.voicing > .02 ? "attivo" : "in attesa della voce"} · stanza LED` : `${background.finish === "worn" ? "Ambiente usurato" : "Ambiente limpido"} · viaggio orizzontale audio-reattivo`;
+  return <main className="viewport" aria-label="Viewport scena">
+    <div className="viewport-tools"><button className="active-control">{viewportLabel}</button>{standaloneGpuMode ? null : <><button disabled>Sposta</button><button disabled>Ruota</button><button disabled>Scala</button></>}<span /><span className="viewport-quality">{qualityLabel}</span></div>
+    <div className="three-stage"><div className={`preview-frame ${aspectRatio === "16:9" ? "ratio-landscape" : "ratio-portrait"}`}>
+      <div className="scene-backdrop" style={backdropStyle} />
+      {activeVideoUrl ? <video key={activeVideoUrl} ref={backgroundVideo} className={`scene-backdrop scene-backdrop-video${subtitleVideoMode ? " subtitle-source-video" : ""}`} src={activeVideoUrl} style={videoStyle} muted loop playsInline preload="auto" /> : null}
+      {subtitleVideoMode && addSubtitlesSettings.dimming > 0 ? <div className="subtitle-video-dimming" style={{ opacity: addSubtitlesSettings.dimming }} /> : null}
+      {walkingCubeMode && activeVideoUrl && walkingCubeSettings.backgroundDim > 0 ? <div className="subtitle-video-dimming" style={{ opacity: walkingCubeSettings.backgroundDim }} /> : null}
+      {!standaloneGpuMode && background.effects.glow ? <div className="scene-effect scene-glow" /> : null}
+      {!standaloneGpuMode && background.effects.particles ? <div className="scene-effect scene-particles" /> : null}
+      {!standaloneGpuMode && background.finish === "worn" ? <div className="scene-effect scene-wear" /> : null}
+      {!standaloneGpuMode && background.effects.vignette ? <div className="scene-effect scene-vignette" /> : null}
+      <div ref={host} className={`three-canvas-host${lightPickMode && !standaloneGpuMode ? " light-picking" : ""}`} />
+      {revealStyle ? <><div className="final-reveal-scrim" style={{ opacity: easedImage * .68 }} aria-hidden="true" /><div className="final-break-flash" style={{ opacity: flashOpacity }} aria-hidden="true" /><div className="final-image-reveal" style={revealStyle} aria-hidden="true" /></> : null}
+    </div></div>
+    <div className="viewport-footer"><span>● WebGL 2 · preview leggera {aspectRatio} · export pieno</span><span>{footerLabel}</span></div>
+  </main>;
 }

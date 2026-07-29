@@ -19,6 +19,12 @@ export const applicationHelpKnowledgeBase: readonly ApplicationHelpArticle[] = [
   keywords: ["interfaccia", "pannello", "sinistra", "destra", "timeline", "toolbar", "dove", "controlli"],
   content: "La barra superiore gestisce progetto, audio, analisi, generazione ed export. Il pannello sinistro contiene la modalità e soltanto i controlli pertinenti a quella modalità. La viewport centrale mostra la stessa scena usata dall’export. Il pannello destro modifica progetto, formato, sfondo e l’elemento selezionato. La timeline in basso controlla playhead, beat, eventi, fonemi e sottotitoli. In 9:16 e 16:9 la cornice della preview cambia realmente. La barra spaziatrice alterna Play e Pausa, tranne quando si sta scrivendo in un campo."
 }, {
+  id: "studio-assistant",
+  title: "Assistente Studio e memoria locale",
+  modeIds: [],
+  keywords: ["assistente", "chat", "chatbot", "studio bot", "caricamento", "risponde", "memoria", "azzera", "smollm", "knowledge base"],
+  content: "Apri Guida in basso a destra e scrivi la domanda. La prima risposta arriva subito dalla knowledge base locale mentre SmolLM2 viene preparato in background; se il modello è lento o non disponibile, un timeout mantiene attiva la risposta deterministica. Dopo ogni scambio il programma conserva sul dispositivo un riepilogo compatto delle richieste e delle indicazioni recenti, così comprende domande collegate senza accumulare tutta la cronologia. Il contatore Memoria indica i turni conservati. Premi Azzera memoria per cancellare riepilogo e messaggi visibili. Nessuna domanda viene inviata online."
+}, {
   id: "audio-analysis",
   title: "Importazione e analisi del brano",
   modeIds: [],
@@ -49,11 +55,17 @@ export const applicationHelpKnowledgeBase: readonly ApplicationHelpArticle[] = [
   keywords: ["stereo", "unfold", "cover", "stropicciata", "spettro", "sinistra", "destra", "effetti"],
   content: "Carica la cover nel pannello sinistro e regola durata dell’apertura e pieghe residue. La cover entra come carta stropicciata e si dispiega conservando rilievi e ombre. Il campo audio usa informazioni separate dei canali sinistro e destro. Puoi scegliere Nastri luminosi, Prismi di frequenza o Aurora stereofonica, regolare profondità e intensità e attivare effetti in primo piano o a tutto schermo. La palette può seguire automaticamente la cover oppure essere impostata manualmente."
 }, {
+  id: "walking-cube",
+  title: "Modalità Cube Animation",
+  modeIds: ["walkingCube"],
+  keywords: ["cube", "animation", "cubo", "vetro", "facce", "rotazione", "loop", "palette", "spettro", "sfondo", "fresnel"],
+  content: "Carica l’immagine principale nel pannello sinistro: viene adattata senza tagli a tutte le sei facce del cubo. La cover mantiene luminosità e saturazione originali perché è separata dal materiale del vetro. Puoi anche caricare una fotografia di sfondo, adattata in modalità cover, e regolarne l’oscuramento. Il cubo rimane sospeso al centro, senza piano d’appoggio, spostamenti, split o rimbalzi, e compie rotazioni morbide su assi combinati X/Y/Z seguendo i beat analizzati. Il vetro usa trasmissione PBR, riflessi ambientali, bordo Fresnel e tre luci dedicate senza coprire la cover. In basso, 48 bande spettrali con indicatori di picco seguono realmente il brano. Increspature d’acqua concentriche si propagano sui beat con intensità regolabile; alone, anelli orbitali, particelle profonde e light sweep sono attivabili singolarmente. La palette automatica ricava dalla cover corrente i colori di ogni elemento audiovisivo. Orientamento ed effetti tornano allo stato iniziale sul frame finale per produrre un loop chiuso."
+}, {
   id: "pixel-art",
   title: "Modalità Pixel Art: Walking Through New York",
   modeIds: ["pixelArt"],
   keywords: ["pixel", "art", "new york", "bar", "locale", "insegna", "led", "personaggio", "cammina", "semaforo"],
-  content: "La felpa del protagonista è sempre nera. Carica la cover per derivare i colori di pantaloni e neon, poi scrivi il Nome insegna nella sezione Locale. Il protagonista è seguito in primo piano mentre cammina, si ferma al semaforo e raggiunge il locale. L’ingresso avviene sempre a metà del brano senza alterare la velocità del passo; durante l’ingresso la camera torna gradualmente a figura intera. Nel bar il nome scelto compare su una grande insegna LED luminosa e audio-reattiva. Il protagonista siede con il bicchiere vicino mentre personaggi differenti ballano sul brano."
+  content: "La felpa del protagonista è sempre nera. Carica la cover per derivare i colori di pantaloni e neon, poi scrivi il Nome insegna nella sezione Locale. Il protagonista è seguito in primo piano mentre cammina, si ferma al semaforo e raggiunge il locale. L’ingresso avviene sempre a metà del brano senza alterare la velocità del passo; durante l’ingresso la camera torna gradualmente a figura intera. Nel bar il nome scelto compare su una grande insegna LED luminosa e audio-reattiva. Il protagonista siede con il bicchiere vicino mentre personaggi differenti ballano sul brano. Una fascia fissa in basso mostra 48 bande pixel L/R e un vectorscope stereo reale; viene disegnata nella stessa scena ed è quindi inclusa nell’export."
 }, {
   id: "teddy-walk",
   title: "Modalità Teddy Walk",
@@ -129,7 +141,8 @@ const synonymGroups: readonly (readonly string[])[] = [
   ["luce", "illuminazione", "fascio", "riflessi"],
   ["sfondo", "background", "foto", "video"],
   ["timeline", "marker", "blocco", "beat", "playhead"],
-  ["pixel", "bar", "locale", "insegna", "led"]
+  ["pixel", "bar", "locale", "insegna", "led"],
+  ["cubo", "cube", "vetro", "facce", "loop"]
 ];
 
 function expandedQueryTokens(query: string): Set<string> {
