@@ -3,7 +3,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAudioStore } from "./store/audio-store";
 import { useSceneStore } from "./store/scene-store";
 import { useProjectStore } from "./store/project-store";
-vi.mock("./components/Viewport", () => ({ Viewport: () => <main aria-label="Viewport scena" /> }));
+const viewportMock = vi.hoisted(() => ({
+  props: null as { subtitles?: { enabled?: boolean } } | null
+}));
+vi.mock("./components/Viewport", () => ({
+  Viewport: (props: { subtitles?: { enabled?: boolean } }) => {
+    viewportMock.props = props;
+    return <main aria-label="Viewport scena" />;
+  }
+}));
 import { App } from "./App";
 
 describe("App", () => {
@@ -12,7 +20,7 @@ describe("App", () => {
     const picker = screen.getByRole("combobox", { name: "Modalità animazione" });
     expect(within(picker).queryByRole("option", { name: "New York Streets" })).not.toBeInTheDocument();
   });
-  beforeEach(() => { useProjectStore.getState().newProject(); localStorage.clear(); });
+  beforeEach(() => { viewportMock.props = null; useProjectStore.getState().newProject(); localStorage.clear(); });
   afterEach(() => { cleanup(); useAudioStore.getState().reset(); useSceneStore.getState().reset(); });
   it("mostra il layout editor e permette di rinominare il progetto", () => {
     render(<App />);
@@ -51,6 +59,33 @@ describe("App", () => {
   it("cambia live l'oggetto del rimbalzo dalla timeline senza rigenerare", () => { const project = useProjectStore.getState(); project.attachAudio({ path: "track.wav", fileName: "track.wav", hash: "d".repeat(64), durationSeconds: 10, sampleRate: 48_000, channels: 2, codec: "pcm", fileSize: 100 }, []); useProjectStore.getState().addEvent(1); render(<App />); const selector = screen.getByLabelText("Oggetto del rimbalzo"); expect(within(selector).getByRole("option", { name: "Pianoforte" })).toBeInTheDocument(); fireEvent.change(selector, { target: { value: "piano" } }); expect(useSceneStore.getState().objects[0]).toMatchObject({ type: "piano", color: "#e94f70" }); expect(useProjectStore.getState().project.events[0]).toMatchObject({ assignedObjectType: "piano", assignedObjectId: "kick-1" }); });
   it("mostra Instrumental Falling e configura gli elementi della base", () => { render(<App />); const modes = screen.getByRole("complementary", { name: "Modalità animazione" }); expect(within(modes).getByRole("combobox", { name: "Modalità animazione" })).toHaveValue("instrumentalFalling"); const piano = within(modes).getByRole("checkbox", { name: /Pianoforte/ }); expect(piano).not.toBeChecked(); fireEvent.click(piano); expect(useProjectStore.getState().project.animation.baseObjectTypes).toContain("piano"); expect(within(modes).getByRole("checkbox", { name: /Chitarra \/ corde/ })).toBeInTheDocument(); expect(within(modes).getByRole("checkbox", { name: /Violino \/ archi/ })).toBeInTheDocument(); });
   it("isola il flusso Add Subtitles dai controlli 3D non pertinenti", () => { render(<App />); const modes = screen.getByRole("complementary", { name: "Modalità animazione" }); const picker = within(modes).getByRole("combobox", { name: "Modalità animazione" }); expect(within(picker).getByRole("option", { name: "Add Subtitles" })).toBeInTheDocument(); fireEvent.change(picker, { target: { value: "addSubtitles" } }); expect(within(modes).getByText("Video sorgente")).toBeInTheDocument(); expect(within(modes).getByLabelText("Carica video per sottotitoli")).toBeInTheDocument(); expect(screen.getByText("Adattamento video")).toBeInTheDocument(); expect(screen.queryByText("Sfondo e ambiente")).not.toBeInTheDocument(); expect(screen.queryByRole("checkbox", { name: "Inserisci la luce nella scena" })).not.toBeInTheDocument(); expect(screen.queryByRole("button", { name: "Importa audio" })).not.toBeInTheDocument(); expect(screen.getByRole("combobox", { name: "Modello Whisper locale" })).toHaveTextContent("Whisper Medium"); });
+  it("isola ProSubtitles e collega frase, animazione, palette e stile per parola", () => {
+    const store = useProjectStore.getState();
+    store.setAnimationMode("proSubtitles", ["platform"]);
+    store.attachAudio({ path: "guide.mp4", fileName: "guide.mp4", hash: "8".repeat(64), durationSeconds: 12, sampleRate: 48_000, channels: 2, codec: "aac", fileSize: 100 }, []);
+    useProjectStore.getState().updateProSubtitles({ videoUrl: "blob:guide", videoName: "guide.mp4" });
+    useProjectStore.getState().setSubtitleCues([{ id: "pro-cue", startSeconds: 1, endSeconds: 3, text: "HELLO WORLD", confidence: 1, verified: true, manual: true }]);
+    render(<App />);
+    const modes = screen.getByRole("complementary", { name: "Modalità animazione" });
+    const timeline = screen.getByRole("region", { name: "Timeline musicale" });
+    expect(within(modes).getByText("1 · Video guida")).toBeInTheDocument();
+    fireEvent.click(within(timeline).getByRole("button", { name: /^Sottotitolo HELLO WORLD,/ }), { detail: 0 });
+    expect(within(modes).getByText("Stile per parola")).toBeInTheDocument();
+    expect(within(modes).getAllByLabelText(/^Colore palette /)).toHaveLength(3);
+    expect(within(timeline).getByLabelText(/^Animazione /)).toBeInTheDocument();
+    expect(screen.getByText("Layer professionale")).toBeInTheDocument();
+    expect(screen.queryByText("Sfondo e ambiente")).not.toBeInTheDocument();
+    fireEvent.change(within(modes).getByLabelText("Colore personalizzato HELLO"), { target: { value: "#ef476f" } });
+    expect(useProjectStore.getState().project.animation.proSubtitles.cueStyles.find((style) => style.cueId === "pro-cue")?.wordStyles[0]).toMatchObject({ index: 0, color: "#ef476f" });
+  });
+  it("renderizza sempre il layer ProSubtitles anche se il flag globale dei vecchi sottotitoli è spento", () => {
+    const store = useProjectStore.getState();
+    store.setAnimationMode("proSubtitles", ["platform"]);
+    store.updateSubtitles({ enabled: false });
+    render(<App />);
+    expect(viewportMock.props?.subtitles?.enabled).toBe(true);
+    expect(useProjectStore.getState().project.subtitles.enabled).toBe(false);
+  });
   it("inserisce e salva blocchi manuali nella libreria riutilizzabile", () => { useProjectStore.getState().attachAudio({ path: "voice.wav", fileName: "voice.wav", hash: "f".repeat(64), durationSeconds: 20, sampleRate: 48_000, channels: 1, codec: "pcm", fileSize: 100 }, []); render(<App />); expect(screen.getByText("Blocchi manuali e libreria")).toBeInTheDocument(); fireEvent.click(screen.getByRole("button", { name: /Inserisci blocco al playhead/ })); const text = screen.getByLabelText("Testo sottotitolo"); fireEvent.change(text, { target: { value: "Blocco riutilizzabile" } }); fireEvent.click(screen.getByRole("button", { name: "Salva blocchi e stile nella libreria" })); expect(screen.getByRole("combobox", { name: "Traccia sottotitoli salvata" })).toHaveTextContent("Progetto senza titolo · 1 blocco"); expect(localStorage.getItem("dynamic-sound-animation-studio.subtitle-library.v1")).toContain("Blocco riutilizzabile"); });
   it("mantiene compatibili i controlli dei vecchi progetti New York Streets", () => { useProjectStore.getState().setAnimationMode("newYorkStreets", ["pebble"]); render(<App />); const modes = screen.getByRole("complementary", { name: "Modalità animazione" }); expect(within(modes).getByText("Gara di biglie")).toBeInTheDocument(); const count = within(modes).getByLabelText("Numero di sfere secondarie"); fireEvent.change(count, { target: { value: "13" } }); expect(useProjectStore.getState().project.animation.newYorkStreets.secondaryMarbleCount).toBe(13); fireEvent.change(within(modes).getByLabelText("Colore di tutte le sfere secondarie"), { target: { value: "#123456" } }); expect(useProjectStore.getState().project.animation.newYorkStreets.secondaryColors).toHaveLength(13); expect(within(modes).getByLabelText("Colore sfera secondaria 13")).toHaveValue("#123456"); expect(within(modes).getByLabelText("Carica volantini")).toHaveAttribute("multiple"); });
   it("mostra poster, palette, atmosfera e controlli vocali di Teddy Sing", () => { render(<App />); const modes = screen.getByRole("complementary", { name: "Modalità animazione" }); fireEvent.change(within(modes).getByRole("combobox", { name: "Modalità animazione" }), { target: { value: "teddySing" } }); expect(within(modes).getByText("Lip sync 3D")).toBeInTheDocument(); expect(within(modes).getByText("Importa la traccia vocale isolata.", { exact: false })).toBeInTheDocument(); fireEvent.change(within(modes).getByLabelText("Intensità lip sync Teddy Sing"), { target: { value: "1.4" } }); fireEvent.change(within(modes).getByLabelText("Colore LED Teddy Sing"), { target: { value: "#22aaff" } }); fireEvent.change(within(modes).getByLabelText("Colore particelle Teddy Sing"), { target: { value: "#ffaa33" } }); fireEvent.change(within(modes).getByLabelText("Densità particelle Teddy Sing"), { target: { value: "1.8" } }); expect(useProjectStore.getState().project.animation.teddySing).toMatchObject({ lipSyncIntensity: 1.4, ledColor: "#22aaff", particlesEnabled: true, particleColor: "#ffaa33", particleDensity: 1.8 }); });

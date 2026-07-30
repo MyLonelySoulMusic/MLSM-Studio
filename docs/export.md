@@ -12,11 +12,42 @@ tempo export → stato React/Three.js → canvas WebGL preview ┐
 
 Non esiste un secondo renderer semplificato. Geometrie, PBR, usura, neon, fisica, rotazione e camera sono quindi condivisi tra preview e file finale.
 
+## Layer ProSubtitles
+
+**ProSubtitles** usa una pipeline distinta dall’export delle scene complete e offre due output. Il layer contiene soltanto la tipografia animata e non include audio: in CapCut deve essere allineato a `t=0` sopra il video originale. In alternativa, **Video originale + sottotitoli incorporati** produce direttamente un MP4 completo.
+
+```text
+video guida ───────────────→ preview e clock ─────────────────────────┐
+SRT/VTT + stili per parola → renderer RGBA frame per frame ┬→ WebM VP9 alpha
+                                                           ├→ riempimento colore → MP4 H.264
+                                                           └→ compositing sui frame sorgente ─→ MP4 completo
+```
+
+L’export completo non usa `MediaRecorder`, playback in tempo reale o seek approssimativi. Il demuxer legge la traccia sorgente e il decoder consegna ogni frame in ordine di presentazione con il proprio timestamp e la propria durata. Il compositore disegna quel frame una sola volta, applica i sottotitoli al tempo centrale del frame e alimenta direttamente l’encoder. Non viene impostato un frame rate di destinazione: un sorgente VFR resta VFR e non vengono inventati, scartati o duplicati frame. Prima di salvare, un controllo confronta il numero di frame sorgente con quello dei frame composti; anche una sola differenza annulla il file parziale.
+
+Risoluzione, rapporto e durata provengono dal video caricato, senza crop o resize. La traccia audio non passa dal decoder: i pacchetti compressi presentabili vengono copiati direttamente con i timestamp originali; gli eventuali pacchetti AAC negativi marcati come priming/discard non fanno parte dell’audio riprodotto. Dopo il mux vengono verificati sia il numero dei pacchetti audio sia i byte di payload. L’audio non viene riprodotto nelle cuffie durante l’export. Poiché inserire testo nei pixel richiede necessariamente la ricodifica della traccia video, il file non può essere identico byte per byte all’originale; il profilo `Massima` usa un bitrate almeno pari al profilo di qualità dell’app e maggiorato rispetto al bitrate sorgente per ridurre al minimo la perdita generazionale.
+
+Il progetto può lavorare in `9:16` o `16:9`. L’importatore accetta SRT e WebVTT, conserva il testo multilinea e ordina i blocchi in base ai timestamp. Nella timeline ogni blocco può essere spostato, ridimensionato, diviso o eliminato; testo, inizio e fine restano modificabili anche numericamente. La regia automatica sceglie fra diciassette renderer di movimento in base a durata, velocità di lettura, punteggiatura, righe ed enfasi. Tre modalità full-frame distribuiscono glifi o parole nell’intera area sicura e applicano clamp geometrici prima del disegno. Lo stile risolto comprende animazione, font, dimensione, posizione percentuale X/Y, opacità, palette a tre colori e override per singola parola. Font, dimensione, posizione e opacità possono essere ereditati dal progetto oppure sostituiti per una singola cue. Ogni slot della palette ha un proprio flag e colore dell’ombra; una parola con colore personalizzato usa invece l’ombra della frase. Il renderer applica wrapping e auto-fit nel title-safe prima di produrre ogni frame e compone eventuali cue sovrapposte in regioni distinte.
+
+La scelta dell’output non viene simulata con un codec diverso:
+
+| Impostazione | Output web | Trasparenza | Comportamento |
+| --- | --- | --- | --- |
+| Trasparente + WebM VP9 | `.webm` VP9 | Sì | Disponibile soltanto se il probe dell’encoder conferma il supporto alpha. |
+| Sfondo di un colore | `.mp4` H.264/AVC | No | Compone il colore scelto sotto la tipografia. |
+| Sfondo di un colore, fallback esplicito | `.webm` VP9 opaco | No | Usato soltanto con consenso dell’utente quando H.264 non è disponibile. |
+| Trasparente + MOV ProRes 4444 | Nessun file nella versione web | — | Richiede una build desktop/native con FFmpeg o VideoToolbox. |
+| Video originale + sottotitoli | `.mp4` H.264 con audio originale | No | Conserva risoluzione e timing di ogni frame sorgente; verifica anti-drop prima del salvataggio. |
+
+Se VP9 alpha non è disponibile, l’export trasparente si interrompe con un messaggio esplicito: non viene creato silenziosamente un WebM opaco. Analogamente, il selettore MOV ProRes 4444 descrive il formato professionale previsto ma ne impedisce l’avvio sul web. Una futura pipeline desktop/native potrà implementarlo; la versione corrente non dichiara questo supporto.
+
+Il supporto di WebM VP9 con alpha dipende anche dalla versione e dalla piattaforma di CapCut. È consigliabile esportare prima pochi secondi, verificare trasparenza, bordi e sincronizzazione nel progetto di montaggio e usare MP4 con un colore pieno concordato quando il destinatario non gestisce l’alpha.
+
 ## File temporanei e destinazione
 
-Il browser prova a scrivere progressivamente i chunk codificati in `dynamic-sound-animation-studio-temp`, una directory privata OPFS del progetto. Al termine crea il file scelto dall'utente e rimuove il temporaneo. Lo stesso cleanup viene eseguito dopo annullamento o errore, includendo anche l'eventuale cartella legacy `rhythm-ball-studio-temp`. Se OPFS non è disponibile, i chunk rimangono in memoria fino al download; non viene mai esposta una cartella di frame PNG.
+Quando la File System Access API è disponibile, il selettore di destinazione viene aperto nello stesso gesto del pulsante Export e i chunk vengono scritti progressivamente nel file scelto. Se il browser non espone quel flusso, l’export usa un temporaneo privato OPFS in `dynamic-sound-animation-studio-temp`, lo scarica soltanto dopo la finalizzazione e rimuove esclusivamente il file creato dalla sessione corrente. Annullamenti ed errori abortiscono il parziale; se un’operazione WebCodecs non è interrompibile, il cleanup viene differito finché termina, evitando corse con l’encoder.
 
-La File System Access API viene usata quando disponibile per scegliere nome e destinazione prima di iniziare. Negli altri browser viene avviato un download standard.
+Se né File System Access né OPFS sono disponibili, resta un ultimo fallback in memoria con preflight e limite rigido di 512 MiB. Gli export stimati oltre tale soglia vengono fermati prima di occupare la RAM e suggeriscono di ridurre durata, risoluzione, frame rate o qualità. Non viene mai esposta una cartella di frame PNG.
 
 ## Codec e qualità
 

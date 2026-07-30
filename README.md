@@ -130,6 +130,29 @@ La corsia **Sottotitoli** resta visibile anche quando è vuota. Puoi inserire un
 
 La modalità **Add Subtitles** importa direttamente un video MP4, WebM, MOV o M4V, ne usa l’audio come clock principale e mostra soltanto i controlli pertinenti: video, formato, adattamento `cover/contain`, oscuramento e sottotitoli. Strumenti, sfera, illuminazione di scena e generatori 3D restano nascosti. Preview ed export condividono lo stesso fotogramma video e la stessa animazione dei sottotitoli.
 
+### ProSubtitles
+
+La modalità **ProSubtitles** crea un livello tipografico separato da sovrapporre in CapCut o in un altro editor, oppure un MP4 già completo di video originale e sottotitoli incorporati. Nel layer trasparente il video caricato è soltanto una guida visiva e temporale; nell’export completo ogni frame sorgente viene decodificato e composto una sola volta mantenendo risoluzione, ordine, timestamp e durata originali, inclusi i video VFR. Un controllo anti-drop annulla il file se il conteggio finale differisce anche di un frame. L’audio originale viene muxato senza essere riprodotto durante l’export. La cornice di lavoro può essere impostata in `9:16` oppure `16:9`.
+
+Il flusso consigliato è:
+
+1. caricare il video guida;
+2. importare un file `.srt` o `.vtt`;
+3. caricare un’immagine dalla quale estrarre automaticamente una palette di tre colori;
+4. rifinire frasi, tempi e stili nella timeline e nell’Inspector;
+5. esportare il solo livello dei sottotitoli oppure il video originale completo di sottotitoli.
+
+Ogni frase è un blocco indipendente: può essere spostata, accorciata, divisa, eliminata e riscritta. La regia automatica analizza durata, densità di lettura, punteggiatura, righe ed enfasi, evita ripetizioni consecutive e mette in risalto una parola chiave. Sceglie fra diciassette animazioni moderne: alle quattordici animazioni cinetiche si aggiungono **Orbita full-frame**, **Griglia editoriale** e **Parola protagonista**, pensate per distribuire lettere e parole su tutta la pagina senza superare il title-safe. Le animazioni full-frame vengono assegnate automaticamente soltanto a frasi brevi compatibili e restano selezionabili manualmente.
+
+Font, dimensione, posizione orizzontale/verticale e opacità hanno valori globali realmente ereditabili. Ogni frase può continuare a usare il valore globale oppure attivare un override locale indipendente; ripristinare l’ereditarietà riallinea subito il blocco al progetto. La posizione usa coordinate percentuali robuste tra `9:16` e `16:9`, regolabili con slider o una griglia a nove punti. Per ogni parola puoi inoltre scegliere animazione, colore e scala; ciascuno dei tre colori della palette dispone di attivazione e colore dell’ombra indipendenti. Wrapping, misurazione dei glifi e riduzione automatica del font mantengono l’intera frase entro il title-safe, inclusi token eccezionalmente lunghi e cue sovrapposte.
+
+L’export web offre due flussi reali:
+
+- **WebM VP9 con canale alpha** per un overlay trasparente, soltanto quando il browser espone un encoder che conserva effettivamente l’alpha;
+- **MP4 H.264 su sfondo pieno** nel colore scelto, come fallback universale per CapCut; se H.264 non è disponibile, l’eventuale WebM VP9 opaco richiede un consenso esplicito.
+
+**MOV Apple ProRes 4444 con alpha non è prodotto dalla versione web.** Richiede una futura build desktop/native con FFmpeg o VideoToolbox: l’interfaccia lo indica come non disponibile e non genera un MOV fittizio o privo di trasparenza. Il supporto WebM alpha può variare fra versioni desktop e mobile di CapCut; prima di un export lungo è consigliata una breve prova, mantenendo lo sfondo pieno come fallback. I dettagli tecnici sono descritti in [Export video](docs/export.md).
+
 In basso a destra è disponibile **Assistente Studio**, una chat di aiuto che usa
 SmolLM2, scaricato e memorizzato localmente al primo utilizzo. Il bot recupera dalla knowledge base soltanto
 le guide pertinenti alla domanda e conosce modalità attiva, formato, presenza

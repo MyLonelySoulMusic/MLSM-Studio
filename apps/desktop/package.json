@@ -17,6 +17,7 @@
     "@rbs/trajectory": "0.1.0",
     "@tauri-apps/api": "^2.7.0",
     "@tauri-apps/plugin-dialog": "^2.3.0",
+    "mediabunny": "^1.51.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "three": "^0.178.0",

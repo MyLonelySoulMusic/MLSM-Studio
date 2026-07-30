@@ -2,6 +2,14 @@ import { create } from "zustand";
 import { createProject, type RhythmBallProject } from "@rbs/project-schema";
 import type { AudioMetadata } from "../services/audio-import";
 import type { AudioAnalysisResult } from "@rbs/audio-analysis";
+import {
+  directProSubtitleAnimation,
+  resolveProSubtitlePaletteColor
+} from "../services/pro-subtitles";
+
+interface AttachAudioOptions {
+  preserveSubtitleTrack?: boolean;
+}
 
 interface ProjectState {
   project: RhythmBallProject;
@@ -15,7 +23,7 @@ interface ProjectState {
   newProject: () => void;
   setProject: (project: RhythmBallProject, filePath: string | null) => void;
   renameProject: (name: string) => void;
-  attachAudio: (metadata: AudioMetadata, waveform: number[]) => void;
+  attachAudio: (metadata: AudioMetadata, waveform: number[], options?: AttachAudioOptions) => void;
   applyAnalysis: (result: AudioAnalysisResult) => void;
   setAspectRatio: (ratio: "9:16" | "16:9") => void;
   setAnimationMode: (modeId: string, baseObjectTypes: RhythmBallProject["animation"]["baseObjectTypes"]) => void;
@@ -41,6 +49,10 @@ interface ProjectState {
   setTeddyWalkPalette: (colors: readonly string[]) => void;
   updateTeddySing: (patch: Partial<RhythmBallProject["animation"]["teddySing"]>) => void;
   updateAddSubtitles: (patch: Partial<RhythmBallProject["animation"]["addSubtitles"]>) => void;
+  updateProSubtitles: (patch: Partial<RhythmBallProject["animation"]["proSubtitles"]>) => void;
+  setProSubtitlesPalette: (colors: readonly string[]) => void;
+  updateProSubtitleCueStyle: (cueId: string, patch: Partial<Omit<RhythmBallProject["animation"]["proSubtitles"]["cueStyles"][number], "cueId" | "wordStyles">>) => void;
+  updateProSubtitleWordStyle: (cueId: string, wordIndex: number, patch: Partial<Omit<RhythmBallProject["animation"]["proSubtitles"]["cueStyles"][number]["wordStyles"][number], "index">>) => void;
   setTeddySingPalette: (colors: readonly string[]) => void;
   setTeddySingPhonemes: (cues: RhythmBallProject["animation"]["teddySing"]["phonemeCues"]) => void;
   deleteTeddySingPhoneme: (id: string) => void;
@@ -50,6 +62,7 @@ interface ProjectState {
   setSubtitleCues: (cues: RhythmBallProject["subtitles"]["cues"]) => void;
   updateSubtitleCue: (id: string, patch: Partial<RhythmBallProject["subtitles"]["cues"][number]>) => void;
   moveSubtitleCue: (id: string, startSeconds: number) => void;
+  resizeSubtitleCue: (id: string, startSeconds: number, endSeconds: number) => void;
   deleteSubtitleCue: (id: string) => void;
   splitSubtitleCue: (id: string, timeSeconds: number) => void;
   selectEvent: (id: string | null, additive?: boolean) => void;
@@ -81,16 +94,92 @@ export function buildPrimaryBeatEvents(result: AudioAnalysisResult): RhythmBallP
   });
 }
 function analysisSummary(result: AudioAnalysisResult, events: RhythmBallProject["events"]): string { const impacts = events.filter((event) => event.action !== "nearMiss" && event.action !== "freeFall"); const counts = impacts.reduce<Record<string, number>>((totals, event) => ({ ...totals, [event.eventType]: (totals[event.eventType] ?? 0) + 1 }), {}); const detected = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([type, count]) => `${instrumentLabels[type] ?? type} ${count}`).join(" · "); const gaps = events.length - impacts.length; return `${impacts.length} rimbalzi · ${gaps} passaggi fluidi/cadute · ${result.globalBpm?.toFixed(1) ?? "—"} BPM${detected ? ` · ${detected}` : ""}`; }
+type ProSubtitleSettings = RhythmBallProject["animation"]["proSubtitles"];
+type ProSubtitleCueStyle = ProSubtitleSettings["cueStyles"][number];
+type SubtitleCue = RhythmBallProject["subtitles"]["cues"][number];
+function defaultProSubtitleCueStyle(
+  settings: ProSubtitleSettings,
+  cue: Pick<SubtitleCue, "id" | "text" | "startSeconds" | "endSeconds">,
+  cueIndex = 0,
+  previousAnimation?: ProSubtitleCueStyle["animation"]
+): ProSubtitleCueStyle {
+  const animation = settings.autoVaryAnimations
+    ? directProSubtitleAnimation(cue, cueIndex, previousAnimation)
+    : settings.defaultAnimation;
+  return {
+    cueId: cue.id,
+    animation,
+    animationAutomatic: true,
+    fontFamily: settings.defaultFontFamily,
+    fontFamilyAutomatic: true,
+    fontSize: settings.defaultFontSize,
+    fontSizeAutomatic: true,
+    positionX: settings.positionX,
+    positionY: settings.positionY,
+    positionAutomatic: true,
+    opacity: settings.opacity,
+    opacityAutomatic: true,
+    shadowEnabled: settings.shadowEnabled,
+    shadowColor: settings.shadowColor,
+    wordStyles: []
+  };
+}
+function ensureProSubtitleCueStyles(settings: ProSubtitleSettings, cues: RhythmBallProject["subtitles"]["cues"]): ProSubtitleCueStyle[] {
+  let previousAnimation: ProSubtitleCueStyle["animation"] | undefined;
+  return cues.map((cue, index) => {
+    const fallback = defaultProSubtitleCueStyle(settings, cue, index, previousAnimation);
+    const source = settings.cueStyles.find((candidate) => candidate.cueId === cue.id);
+    const style = source ? { ...fallback, ...source } : fallback;
+    previousAnimation = style.animation;
+    return style;
+  });
+}
+function mixHexColor(source: string, target: string, amount: number): string {
+  const parse = (value: string) => /^#[0-9a-f]{6}$/i.test(value)
+    ? [Number.parseInt(value.slice(1, 3), 16), Number.parseInt(value.slice(3, 5), 16), Number.parseInt(value.slice(5, 7), 16)]
+    : null;
+  const left = parse(source); const right = parse(target);
+  if (!left || !right) return source;
+  return `#${left.map((channel, index) => Math.round(channel + ((right[index] ?? channel) - channel) * amount).toString(16).padStart(2, "0")).join("")}`;
+}
+function completeProSubtitlePalette(colors: readonly string[], fallback: readonly [string, string, string]): [string, string, string] {
+  const primary = colors[0] ?? fallback[0];
+  const primaryChannels = /^#[0-9a-f]{6}$/i.test(primary)
+    ? [Number.parseInt(primary.slice(1, 3), 16), Number.parseInt(primary.slice(3, 5), 16), Number.parseInt(primary.slice(5, 7), 16)]
+    : [0, 0, 0];
+  const contrast = primaryChannels.reduce((sum, channel) => sum + channel, 0) / 3 > 145 ? "#080a12" : "#f6f7fb";
+  const secondary = colors[1] ?? mixHexColor(primary, contrast, .34);
+  const accent = colors[2] ?? mixHexColor(colors[1] ?? primary, contrast, colors[1] ? .38 : .62);
+  return [primary, secondary, accent];
+}
 
 export const useProjectStore = create<ProjectState>((set) => ({
   project: createProject(), filePath: null, dirty: false, status: "Pronto", eventHistory: [], eventFuture: [], selectedEventId: null, selectedEventIds: [],
   newProject: () => set({ project: createProject(), filePath: null, dirty: false, status: "Nuovo progetto creato", eventHistory: [], eventFuture: [], selectedEventId: null, selectedEventIds: [] }),
   setProject: (project, filePath) => set({ project, filePath, dirty: false, status: "Progetto caricato", eventHistory: [], eventFuture: [], selectedEventId: null, selectedEventIds: [] }),
   renameProject: (name) => set((state) => ({ project: { ...state.project, project: { ...state.project.project, name } }, dirty: true })),
-  attachAudio: (metadata, waveform) => set((state) => ({
-    project: { ...state.project, audio: { sourcePath: metadata.path, storage: "external", hash: metadata.hash, durationSeconds: metadata.durationSeconds, sampleRate: metadata.sampleRate, channels: metadata.channels, globalOffsetMs: 0 }, analysis: { ...state.project.analysis, waveform }, animation: { ...state.project.animation, teddySing: { ...state.project.animation.teddySing, phonemesGenerated: false, phonemeCues: [] } }, subtitles: { ...state.project.subtitles, cues: [] } },
-    dirty: true, status: `${metadata.fileName} importato`
-  })),
+  attachAudio: (metadata, waveform, options = {}) => set((state) => {
+    const preserveSubtitleTrack = options.preserveSubtitleTrack === true;
+    return {
+      project: {
+        ...state.project,
+        audio: { sourcePath: metadata.path, storage: "external", hash: metadata.hash, durationSeconds: metadata.durationSeconds, sampleRate: metadata.sampleRate, channels: metadata.channels, globalOffsetMs: 0 },
+        analysis: { ...state.project.analysis, waveform },
+        animation: {
+          ...state.project.animation,
+          teddySing: { ...state.project.animation.teddySing, phonemesGenerated: false, phonemeCues: [] },
+          proSubtitles: preserveSubtitleTrack
+            ? state.project.animation.proSubtitles
+            : { ...state.project.animation.proSubtitles, cueStyles: [] }
+        },
+        subtitles: preserveSubtitleTrack
+          ? state.project.subtitles
+          : { ...state.project.subtitles, cues: [] }
+      },
+      dirty: true,
+      status: `${metadata.fileName} importato`
+    };
+  }),
   applyAnalysis: (result) => set((state) => { const events = buildPrimaryBeatEvents(result); return {
     project: { ...state.project, analysis: { ...state.project.analysis, analyzerVersion: result.analyzerVersion, cacheKey: `${state.project.audio.hash}:${result.analyzerVersion}`, globalBpm: result.globalBpm, localTempo: result.localTempo, segments: result.lowEnergySegments }, events },
     dirty: true, status: analysisSummary(result, events), eventHistory: [...state.eventHistory, state.project.events], eventFuture: []
@@ -129,17 +218,151 @@ export const useProjectStore = create<ProjectState>((set) => ({
   setTeddyWalkPalette: (colors) => set((state) => { const settings = state.project.animation.teddyWalk; return { project: { ...state.project, animation: { ...state.project.animation, teddyWalk: { ...settings, furColor: colors[0] ?? settings.furColor, patchColor: colors[1] ?? colors[0] ?? settings.patchColor, roadColor: colors[2] ?? colors[1] ?? settings.roadColor } } }, dirty: true }; }),
   updateTeddySing: (patch) => set((state) => ({ project: { ...state.project, animation: { ...state.project.animation, teddySing: { ...state.project.animation.teddySing, ...patch } } }, dirty: true })),
   updateAddSubtitles: (patch) => set((state) => ({ project: { ...state.project, animation: { ...state.project.animation, addSubtitles: { ...state.project.animation.addSubtitles, ...patch } } }, dirty: true })),
+  updateProSubtitles: (patch) => set((state) => {
+    const settings = state.project.animation.proSubtitles;
+    const nextSettings = { ...settings, ...patch };
+    const fontFamilyChanged = Object.prototype.hasOwnProperty.call(patch, "defaultFontFamily");
+    const fontSizeChanged = Object.prototype.hasOwnProperty.call(patch, "defaultFontSize");
+    const positionChanged = Object.prototype.hasOwnProperty.call(patch, "positionX")
+      || Object.prototype.hasOwnProperty.call(patch, "positionY");
+    const opacityChanged = Object.prototype.hasOwnProperty.call(patch, "opacity");
+    const cueStyles = (patch.cueStyles ?? settings.cueStyles).map((style) => ({
+      ...style,
+      fontFamilyAutomatic: style.fontFamilyAutomatic ?? true,
+      fontSizeAutomatic: style.fontSizeAutomatic ?? true,
+      positionX: style.positionX ?? nextSettings.positionX,
+      positionY: style.positionY ?? nextSettings.positionY,
+      positionAutomatic: style.positionAutomatic ?? true,
+      opacity: style.opacity ?? nextSettings.opacity,
+      opacityAutomatic: style.opacityAutomatic ?? true,
+      ...(fontFamilyChanged && style.fontFamilyAutomatic !== false
+        ? { fontFamily: nextSettings.defaultFontFamily }
+        : {}),
+      ...(fontSizeChanged && style.fontSizeAutomatic !== false
+        ? { fontSize: nextSettings.defaultFontSize }
+        : {}),
+      ...(positionChanged && style.positionAutomatic !== false
+        ? { positionX: nextSettings.positionX, positionY: nextSettings.positionY }
+        : {}),
+      ...(opacityChanged && style.opacityAutomatic !== false
+        ? { opacity: nextSettings.opacity }
+        : {})
+    }));
+    return {
+      project: {
+        ...state.project,
+        animation: {
+          ...state.project.animation,
+          proSubtitles: { ...nextSettings, cueStyles }
+        }
+      },
+      dirty: true
+    };
+  }),
+  setProSubtitlesPalette: (colors) => set((state) => {
+    const settings = state.project.animation.proSubtitles;
+    const palette = completeProSubtitlePalette(colors, settings.palette);
+    const cueStyles = settings.cueStyles.map((cueStyle) => ({
+      ...cueStyle,
+      wordStyles: cueStyle.wordStyles.map((wordStyle) => {
+        const paletteIndex = settings.palette.findIndex((color) => color.trim().toLowerCase() === wordStyle.color.trim().toLowerCase());
+        return paletteIndex < 0 ? wordStyle : { ...wordStyle, color: palette[paletteIndex] ?? palette[0] };
+      })
+    }));
+    return { project: { ...state.project, animation: { ...state.project.animation, proSubtitles: { ...settings, palette, cueStyles } } }, dirty: true, status: "Palette a 3 colori applicata a ProSubtitles" };
+  }),
+  updateProSubtitleCueStyle: (cueId, patch) => set((state) => {
+    const settings = state.project.animation.proSubtitles;
+    const cueIndex = Math.max(0, state.project.subtitles.cues.findIndex((cue) => cue.id === cueId));
+    const cue = state.project.subtitles.cues[cueIndex] ?? { id: cueId, text: "", startSeconds: 0, endSeconds: 1 };
+    const previousCue = state.project.subtitles.cues[cueIndex - 1];
+    const previousAnimation = previousCue
+      ? settings.cueStyles.find((style) => style.cueId === previousCue.id)?.animation
+      : undefined;
+    const fallback = defaultProSubtitleCueStyle(settings, cue, cueIndex, previousAnimation);
+    const source = settings.cueStyles.find((style) => style.cueId === cueId);
+    const existing = source ? { ...fallback, ...source } : fallback;
+    const animationWasEdited = Object.prototype.hasOwnProperty.call(patch, "animation")
+      && !Object.prototype.hasOwnProperty.call(patch, "animationAutomatic");
+    const fontFamilyWasEdited = Object.prototype.hasOwnProperty.call(patch, "fontFamily")
+      && !Object.prototype.hasOwnProperty.call(patch, "fontFamilyAutomatic");
+    const fontSizeWasEdited = Object.prototype.hasOwnProperty.call(patch, "fontSize")
+      && !Object.prototype.hasOwnProperty.call(patch, "fontSizeAutomatic");
+    const positionWasEdited = (
+      Object.prototype.hasOwnProperty.call(patch, "positionX")
+      || Object.prototype.hasOwnProperty.call(patch, "positionY")
+    ) && !Object.prototype.hasOwnProperty.call(patch, "positionAutomatic");
+    const opacityWasEdited = Object.prototype.hasOwnProperty.call(patch, "opacity")
+      && !Object.prototype.hasOwnProperty.call(patch, "opacityAutomatic");
+    const nextStyle: ProSubtitleCueStyle = {
+      ...existing,
+      ...patch,
+      ...(animationWasEdited ? { animationAutomatic: false } : {}),
+      ...(fontFamilyWasEdited ? { fontFamilyAutomatic: false } : {}),
+      ...(fontSizeWasEdited ? { fontSizeAutomatic: false } : {}),
+      ...(positionWasEdited ? { positionAutomatic: false } : {}),
+      ...(opacityWasEdited ? { opacityAutomatic: false } : {}),
+      ...(patch.fontFamilyAutomatic === true
+        ? { fontFamily: settings.defaultFontFamily, fontFamilyAutomatic: true }
+        : {}),
+      ...(patch.fontSizeAutomatic === true
+        ? { fontSize: settings.defaultFontSize, fontSizeAutomatic: true }
+        : {}),
+      ...(patch.positionAutomatic === true
+        ? { positionX: settings.positionX, positionY: settings.positionY, positionAutomatic: true }
+        : {}),
+      ...(patch.opacityAutomatic === true
+        ? { opacity: settings.opacity, opacityAutomatic: true }
+        : {}),
+      cueId
+    };
+    const cueStyles = [...settings.cueStyles.filter((style) => style.cueId !== cueId), nextStyle];
+    return { project: { ...state.project, animation: { ...state.project.animation, proSubtitles: { ...settings, cueStyles } } }, dirty: true };
+  }),
+  updateProSubtitleWordStyle: (cueId, wordIndex, patch) => set((state) => {
+    const settings = state.project.animation.proSubtitles;
+    const cueIndex = Math.max(0, state.project.subtitles.cues.findIndex((cue) => cue.id === cueId));
+    const cue = state.project.subtitles.cues[cueIndex] ?? { id: cueId, text: "", startSeconds: 0, endSeconds: 1 };
+    const previousCue = state.project.subtitles.cues[cueIndex - 1];
+    const previousAnimation = previousCue
+      ? settings.cueStyles.find((style) => style.cueId === previousCue.id)?.animation
+      : undefined;
+    const fallback = defaultProSubtitleCueStyle(settings, cue, cueIndex, previousAnimation);
+    const source = settings.cueStyles.find((style) => style.cueId === cueId);
+    const existingCue = source ? { ...fallback, ...source } : fallback;
+    const existingWord = existingCue.wordStyles.find((style) => style.index === wordIndex) ?? { index: wordIndex, color: resolveProSubtitlePaletteColor(settings.palette, cueIndex, wordIndex), fontSizeScale: 1, animation: null };
+    const wordStyles = [...existingCue.wordStyles.filter((style) => style.index !== wordIndex), { ...existingWord, ...patch, index: wordIndex }].sort((left, right) => left.index - right.index);
+    const cueStyles = [...settings.cueStyles.filter((style) => style.cueId !== cueId), { ...existingCue, cueId, wordStyles }]; return { project: { ...state.project, animation: { ...state.project.animation, proSubtitles: { ...settings, cueStyles } } }, dirty: true };
+  }),
   setTeddySingPalette: (colors) => set((state) => { const settings = state.project.animation.teddySing; return { project: { ...state.project, animation: { ...state.project.animation, teddySing: { ...settings, furColor: colors[0] ?? settings.furColor, patchColor: colors[1] ?? colors[0] ?? settings.patchColor, ledColor: colors[2] ?? colors[1] ?? settings.ledColor, roomColor: colors[3] ?? settings.roomColor } } }, dirty: true }; }),
   setTeddySingPhonemes: (phonemeCues) => set((state) => ({ project: { ...state.project, animation: { ...state.project.animation, teddySing: { ...state.project.animation.teddySing, phonemeCues, phonemesGenerated: true } } }, dirty: true, status: `${phonemeCues.length} fonemi/visemi vocali identificati` })),
   deleteTeddySingPhoneme: (id) => set((state) => { const settings = state.project.animation.teddySing; return { project: { ...state.project, animation: { ...state.project.animation, teddySing: { ...settings, phonemeCues: settings.phonemeCues.filter((cue) => cue.id !== id), phonemesGenerated: true } } }, dirty: true, status: "Fonema eliminato · il muso resterà chiuso in quell’intervallo" }; }),
   splitTeddySingPhoneme: (id, requestedTime) => set((state) => { const settings = state.project.animation.teddySing; const cue = settings.phonemeCues.find((item) => item.id === id); if (!cue) return state; const minimumSide = .025; const fallback = (cue.startSeconds + cue.endSeconds) / 2; const split = requestedTime > cue.startSeconds + minimumSide && requestedTime < cue.endSeconds - minimumSide ? requestedTime : fallback; if (split <= cue.startSeconds + minimumSide || split >= cue.endSeconds - minimumSide) return state; const phonemeCues = settings.phonemeCues.flatMap((item) => item.id !== id ? [item] : [{ ...item, endSeconds: split, manual: true }, { ...item, id: `phoneme-${crypto.randomUUID()}`, startSeconds: split, manual: true }]); return { project: { ...state.project, animation: { ...state.project.animation, teddySing: { ...settings, phonemeCues, phonemesGenerated: true } } }, dirty: true, status: `Fonema ${cue.viseme} diviso a ${split.toFixed(3)} s` }; }),
   updateSubtitles: (patch) => set((state) => ({ project: { ...state.project, subtitles: { ...state.project.subtitles, ...patch } }, dirty: true })),
-  addSubtitleCue: (requestedTime) => { const id = `subtitle-${crypto.randomUUID()}`; set((state) => { const projectDuration = state.project.audio.durationSeconds; const startSeconds = Math.max(0, Math.min(Math.max(0, projectDuration - .05), requestedTime)); const endSeconds = Math.min(projectDuration || startSeconds + 2, startSeconds + 2); const cue = { id, startSeconds, endSeconds: Math.max(startSeconds + .05, endSeconds), text: "Nuovo sottotitolo", confidence: 1, verified: false, manual: true }; return { project: { ...state.project, subtitles: { ...state.project.subtitles, enabled: true, cues: [...state.project.subtitles.cues, cue].sort((left, right) => left.startSeconds - right.startSeconds) } }, dirty: true, status: `Blocco sottotitolo inserito a ${startSeconds.toFixed(2)} s` }; }); return id; },
-  setSubtitleCues: (cues) => set((state) => ({ project: { ...state.project, subtitles: { ...state.project.subtitles, cues, enabled: cues.length > 0 || state.project.subtitles.enabled } }, dirty: true, status: `${cues.length} blocchi sottotitoli inseriti` })),
-  updateSubtitleCue: (id, patch) => set((state) => ({ project: { ...state.project, subtitles: { ...state.project.subtitles, cues: state.project.subtitles.cues.map((cue) => cue.id === id ? { ...cue, ...patch, manual: true } : cue).sort((left, right) => left.startSeconds - right.startSeconds) } }, dirty: true })),
+  addSubtitleCue: (requestedTime) => { const id = `subtitle-${crypto.randomUUID()}`; set((state) => { const projectDuration = state.project.audio.durationSeconds; const startSeconds = Math.max(0, Math.min(Math.max(0, projectDuration - .05), requestedTime)); const endSeconds = Math.min(projectDuration || startSeconds + 2, startSeconds + 2); const cue = { id, startSeconds, endSeconds: Math.max(startSeconds + .05, endSeconds), text: "Nuovo sottotitolo", confidence: 1, verified: false, manual: true }; const cues = [...state.project.subtitles.cues, cue].sort((left, right) => left.startSeconds - right.startSeconds); const proSubtitles = state.project.animation.modeId === "proSubtitles" ? { ...state.project.animation.proSubtitles, cueStyles: ensureProSubtitleCueStyles(state.project.animation.proSubtitles, cues) } : state.project.animation.proSubtitles; return { project: { ...state.project, animation: { ...state.project.animation, proSubtitles }, subtitles: { ...state.project.subtitles, enabled: true, cues } }, dirty: true, status: `Blocco sottotitolo inserito a ${startSeconds.toFixed(2)} s` }; }); return id; },
+  setSubtitleCues: (cues) => set((state) => {
+    const sorted = [...cues].sort((left, right) => left.startSeconds - right.startSeconds); const proSubtitles = state.project.animation.modeId === "proSubtitles" ? { ...state.project.animation.proSubtitles, cueStyles: ensureProSubtitleCueStyles(state.project.animation.proSubtitles, sorted) } : state.project.animation.proSubtitles;
+    return { project: { ...state.project, animation: { ...state.project.animation, proSubtitles }, subtitles: { ...state.project.subtitles, cues: sorted, enabled: sorted.length > 0 || state.project.subtitles.enabled } }, dirty: true, status: `${sorted.length} blocchi sottotitoli inseriti` };
+  }),
+  updateSubtitleCue: (id, patch) => set((state) => {
+    const duration = state.project.audio.durationSeconds; const cues = state.project.subtitles.cues.map((cue) => {
+      if (cue.id !== id) return cue; const next = { ...cue, ...patch, manual: true }; const startSeconds = Math.max(0, Math.min(Math.max(0, duration - .03), next.startSeconds)); const endSeconds = Math.max(startSeconds + .03, Math.min(duration || next.endSeconds, next.endSeconds)); return { ...next, startSeconds, endSeconds };
+    }).sort((left, right) => left.startSeconds - right.startSeconds);
+    const settings = state.project.animation.proSubtitles; const cueText = cues.find((cue) => cue.id === id)?.text ?? ""; const wordCount = cueText.trim().split(/\s+/).filter(Boolean).length; const cueStyles = settings.cueStyles.map((style) => style.cueId === id ? { ...style, wordStyles: style.wordStyles.filter((word) => word.index < wordCount) } : style);
+    return { project: { ...state.project, animation: { ...state.project.animation, proSubtitles: { ...settings, cueStyles } }, subtitles: { ...state.project.subtitles, cues } }, dirty: true };
+  }),
   moveSubtitleCue: (id, startSeconds) => set((state) => { const cue = state.project.subtitles.cues.find((item) => item.id === id); if (!cue) return state; const duration = cue.endSeconds - cue.startSeconds; const start = Math.max(0, Math.min(Math.max(0, state.project.audio.durationSeconds - duration), startSeconds)); const cues = state.project.subtitles.cues.map((item) => item.id === id ? { ...item, startSeconds: start, endSeconds: start + duration, manual: true } : item).sort((left, right) => left.startSeconds - right.startSeconds); return { project: { ...state.project, subtitles: { ...state.project.subtitles, cues } }, dirty: true }; }),
-  deleteSubtitleCue: (id) => set((state) => ({ project: { ...state.project, subtitles: { ...state.project.subtitles, cues: state.project.subtitles.cues.filter((cue) => cue.id !== id) } }, dirty: true, status: "Frase sottotitolo eliminata" })),
-  splitSubtitleCue: (id, requestedTime) => set((state) => { const cue = state.project.subtitles.cues.find((item) => item.id === id); if (!cue) return state; const midpoint = (cue.startSeconds + cue.endSeconds) / 2; const split = requestedTime > cue.startSeconds + .08 && requestedTime < cue.endSeconds - .08 ? requestedTime : midpoint; const words = cue.text.trim().split(/\s+/); const wordIndex = Math.max(1, Math.min(words.length - 1, Math.round(words.length * (split - cue.startSeconds) / Math.max(.001, cue.endSeconds - cue.startSeconds)))); if (words.length < 2 || split <= cue.startSeconds + .05 || split >= cue.endSeconds - .05) return state; const cues = state.project.subtitles.cues.flatMap((item) => item.id !== id ? [item] : [{ ...item, text: words.slice(0, wordIndex).join(" "), endSeconds: split, manual: true }, { ...item, id: `subtitle-${crypto.randomUUID()}`, text: words.slice(wordIndex).join(" "), startSeconds: split, manual: true }]); return { project: { ...state.project, subtitles: { ...state.project.subtitles, cues } }, dirty: true, status: "Frase sottotitolo divisa" }; }),
+  resizeSubtitleCue: (id, requestedStart, requestedEnd) => set((state) => {
+    const source = state.project.subtitles.cues.find((cue) => cue.id === id); if (!source) return state; const maximum = state.project.audio.durationSeconds || Math.max(source.endSeconds, requestedEnd); const startSeconds = Math.max(0, Math.min(maximum - 1 / 30, requestedStart)); const endSeconds = Math.max(startSeconds + 1 / 30, Math.min(maximum, requestedEnd));
+    const cues = state.project.subtitles.cues.map((cue) => cue.id === id ? { ...cue, startSeconds, endSeconds, manual: true } : cue).sort((left, right) => left.startSeconds - right.startSeconds); return { project: { ...state.project, subtitles: { ...state.project.subtitles, cues } }, dirty: true };
+  }),
+  deleteSubtitleCue: (id) => set((state) => ({ project: { ...state.project, animation: { ...state.project.animation, proSubtitles: { ...state.project.animation.proSubtitles, cueStyles: state.project.animation.proSubtitles.cueStyles.filter((style) => style.cueId !== id) } }, subtitles: { ...state.project.subtitles, cues: state.project.subtitles.cues.filter((cue) => cue.id !== id) } }, dirty: true, status: "Frase sottotitolo eliminata" })),
+  splitSubtitleCue: (id, requestedTime) => set((state) => {
+    const cue = state.project.subtitles.cues.find((item) => item.id === id); if (!cue) return state; const midpoint = (cue.startSeconds + cue.endSeconds) / 2; const split = requestedTime > cue.startSeconds + .08 && requestedTime < cue.endSeconds - .08 ? requestedTime : midpoint; const words = cue.text.trim().split(/\s+/); const wordIndex = Math.max(1, Math.min(words.length - 1, Math.round(words.length * (split - cue.startSeconds) / Math.max(.001, cue.endSeconds - cue.startSeconds)))); if (words.length < 2 || split <= cue.startSeconds + .05 || split >= cue.endSeconds - .05) return state;
+    const nextId = `subtitle-${crypto.randomUUID()}`; const cues = state.project.subtitles.cues.flatMap((item) => item.id !== id ? [item] : [{ ...item, text: words.slice(0, wordIndex).join(" "), endSeconds: split, manual: true }, { ...item, id: nextId, text: words.slice(wordIndex).join(" "), startSeconds: split, manual: true }]).sort((left, right) => left.startSeconds - right.startSeconds);
+    const settings = state.project.animation.proSubtitles; const cueIndex = Math.max(0, state.project.subtitles.cues.findIndex((item) => item.id === id)); const previousCue = state.project.subtitles.cues[cueIndex - 1]; const previousAnimation = previousCue ? settings.cueStyles.find((style) => style.cueId === previousCue.id)?.animation : undefined; const original = settings.cueStyles.find((style) => style.cueId === id) ?? defaultProSubtitleCueStyle(settings, cue, cueIndex, previousAnimation); const leftStyle = { ...original, wordStyles: original.wordStyles.filter((word) => word.index < wordIndex) }; const rightStyle = { ...original, cueId: nextId, wordStyles: original.wordStyles.filter((word) => word.index >= wordIndex).map((word) => ({ ...word, index: word.index - wordIndex })) }; const cueStyles = [...settings.cueStyles.filter((style) => style.cueId !== id), leftStyle, rightStyle];
+    return { project: { ...state.project, animation: { ...state.project.animation, proSubtitles: { ...settings, cueStyles } }, subtitles: { ...state.project.subtitles, cues } }, dirty: true, status: "Frase sottotitolo divisa" };
+  }),
   selectEvent: (id, additive = false) => set((state) => { if (!id) return { selectedEventId: null, selectedEventIds: [] }; if (!additive) return { selectedEventId: id, selectedEventIds: [id] }; const selectedEventIds = state.selectedEventIds.includes(id) ? state.selectedEventIds.filter((item) => item !== id) : [...state.selectedEventIds, id]; return { selectedEventIds, selectedEventId: selectedEventIds.at(-1) ?? null }; }),
   addEvent: (timeSeconds) => set((state) => { const time = Math.max(0, Math.min(state.project.audio.durationSeconds, timeSeconds)); const event = { id: `manual-${crypto.randomUUID()}`, timeSeconds: time, timeSamples: Math.round(time * state.project.audio.sampleRate), eventType: "manual" as const, confidence: 1, strength: .75, frequencyBand: "full" as const, assignedObjectType: null, assignedObjectId: null, enabled: true, accent: false, manualOverride: true, action: "collision" as const, expectedBallPosition: { x: 0, y: 0, z: 0 }, expectedBallVelocity: { x: 0, y: 0, z: 0 }, expectedImpactNormal: { x: 0, y: 1, z: 0 } }; return { project: { ...state.project, events: [...state.project.events, event].sort((a, b) => a.timeSeconds - b.timeSeconds) }, eventHistory: [...state.eventHistory, state.project.events], eventFuture: [], selectedEventId: event.id, selectedEventIds: [event.id], dirty: true }; }),
   moveEvent: (id, timeSeconds) => set((state) => { const time = Math.max(0, Math.min(state.project.audio.durationSeconds, timeSeconds)); const events = state.project.events.map((event) => event.id === id ? { ...event, timeSeconds: time, timeSamples: Math.round(time * state.project.audio.sampleRate), manualOverride: true } : event).sort((a, b) => a.timeSeconds - b.timeSeconds); return { project: { ...state.project, events }, eventHistory: [...state.eventHistory, state.project.events], eventFuture: [], dirty: true }; }),

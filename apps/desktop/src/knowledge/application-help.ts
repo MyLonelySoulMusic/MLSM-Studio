@@ -11,7 +11,7 @@ export const applicationHelpKnowledgeBase: readonly ApplicationHelpArticle[] = [
   title: "Primo progetto: flusso consigliato",
   modeIds: [],
   keywords: ["inizio", "iniziare", "primo", "progetto", "workflow", "audio", "brano", "generare"],
-  content: "1. Scegli la modalità dal menu Modalità animazione in alto nel pannello sinistro. 2. Importa il brano dalla barra superiore; in Add Subtitles importa invece il video dal pannello sinistro. 3. Premi Analizza audio e attendi BPM, beat, energia e strumenti. 4. Carica cover, poster o immagini richieste dalla modalità e regola la palette. 5. In Instrumental Falling premi Genera scena; le modalità narrative e i visualizer si aggiornano direttamente. 6. Controlla la preview con Play/Pausa o con la barra spaziatrice. 7. Modifica timeline e pannelli. 8. Salva il progetto, poi usa Esporta per creare il video finale."
+  content: "1. Scegli la modalità dal menu Modalità animazione in alto nel pannello sinistro. 2. Importa il brano dalla barra superiore; in Add Subtitles e ProSubtitles importa invece il video dal pannello sinistro. 3. Premi Analizza audio e attendi BPM, beat, energia e strumenti quando la modalità lo richiede. 4. Carica cover, poster o immagini richieste dalla modalità e regola la palette. 5. In Instrumental Falling premi Genera scena; le modalità narrative e i visualizer si aggiornano direttamente. 6. Controlla la preview con Play/Pausa o con la barra spaziatrice. 7. Modifica timeline e pannelli. 8. Salva il progetto, poi usa Esporta per creare il video finale."
 }, {
   id: "interface",
   title: "Come è organizzata l’interfaccia",
@@ -85,6 +85,12 @@ export const applicationHelpKnowledgeBase: readonly ApplicationHelpArticle[] = [
   keywords: ["add", "subtitles", "video", "sottotitoli", "carica", "contain", "cover", "oscuramento"],
   content: "Seleziona Add Subtitles e carica il video dal pannello Video sorgente. Il programma usa il suo audio come clock, mostra solo i controlli pertinenti e conserva il fotogramma originale in preview ed export. Scegli adattamento cover o contain e l’eventuale oscuramento. Puoi generare i sottotitoli con Whisper, inserire blocchi manuali, modificarli nella timeline e poi esportare il video oppure un file SRT."
 }, {
+  id: "pro-subtitles",
+  title: "Modalità ProSubtitles",
+  modeIds: ["proSubtitles"],
+  keywords: ["prosubtitles", "kinetic", "typography", "alpha", "trasparente", "capcut", "prores", "vp9", "palette", "ombra", "parola"],
+  content: "ProSubtitles crea un overlay tipografico separato. Carica prima il video guida, poi un file SRT o WebVTT e un’immagine per estrarre tre colori. Il video e il suo audio servono alla preview e alla timeline ma sono esclusi dall’output. Ogni blocco può essere spostato, rifilato con le maniglie, diviso e riscritto. La regia intelligente sceglie fra diciassette animazioni in base a durata, densità di lettura, punteggiatura, righe ed enfasi, evitando ripetizioni meccaniche; Orbita full-frame, Griglia editoriale e Parola protagonista occupano l’intero title-safe senza tagliare i caratteri. Font, dimensione, posizione X/Y e opacità sono modificabili globalmente; ogni frase può ereditarli o impostare un override locale e tornare in qualsiasi momento al valore globale. Nel pannello Stile per parola puoi modificare colore, scala e animazione di ogni parola; i tre colori hanno ombre attivabili e configurabili separatamente. Il title-safe e l’auto-fit mantengono il testo completo nei formati 9:16 e 16:9, mentre cue sovrapposte vengono composte in regioni distinte. Esporta WebM VP9 alpha per la trasparenza quando il browser lo supporta, oppure MP4 H.264 con un colore pieno. MOV ProRes 4444 richiede la futura build desktop/native e non viene simulato nel browser."
+}, {
   id: "subtitles",
   title: "Sottotitoli automatici, Whisper e LLM locale",
   modeIds: [],
@@ -113,7 +119,7 @@ export const applicationHelpKnowledgeBase: readonly ApplicationHelpArticle[] = [
   title: "Esportazione del video",
   modeIds: [],
   keywords: ["esporta", "export", "video", "qualità", "fps", "60", "mp4", "webm", "storage", "quota", "audio", "muto"],
-  content: "Premi Esporta, scegli formato 9:16 o 16:9, risoluzione, FPS e qualità, quindi avvia Video finale. L’export usa lo stesso renderer e lo stesso tempo audio della preview; l’audio viene registrato nel file ma non riprodotto nelle cuffie durante il rendering. Quando disponibile, il browser scrive direttamente nel file scelto per evitare errori di quota; altrimenti usa un fallback temporaneo. Se la memoria è limitata, prova Alta invece di Massima o una risoluzione inferiore. Non chiudere la pagina fino al completamento."
+  content: "Premi Esporta, scegli formato 9:16 o 16:9, risoluzione, FPS e qualità, quindi avvia Video finale. L’export usa lo stesso renderer e lo stesso tempo audio della preview; l’audio viene registrato nel file ma non riprodotto nelle cuffie durante il rendering. ProSubtitles fa eccezione: esporta un layer senza audio e senza video guida, in WebM VP9 alpha oppure MP4 H.264 con fondo pieno. Quando disponibile, il browser scrive direttamente nel file scelto per evitare errori di quota; altrimenti usa un fallback temporaneo progressivo. Se la memoria è limitata, prova Alta invece di Massima o una risoluzione inferiore. Non chiudere la pagina fino al completamento."
 }, {
   id: "projects",
   title: "Salvare e riaprire un progetto",

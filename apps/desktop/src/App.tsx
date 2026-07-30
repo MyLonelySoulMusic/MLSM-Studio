@@ -18,9 +18,10 @@ import { rebaseSceneLight, useSceneStore } from "./store/scene-store";
 import { isVerticalDescent } from "./services/scene-generator";
 import { newYorkSewerEntryIndex, normalizeNewYorkLevels } from "./services/new-york-scene-generator";
 import { generateSceneForMode } from "./services/mode-scene-generator";
-import { ExportDialog } from "./components/ExportDialog";
+import { ExportDialog, type ExportDialogStartSettings } from "./components/ExportDialog";
 import { useExportStore } from "./store/export-store";
-import { exportLiveVideo, type ExportQuality, type SharedViewportRenderer } from "./services/live-video-exporter";
+import { exportLiveVideo, type SharedViewportRenderer } from "./services/live-video-exporter";
+import { exportProSubtitleVideo } from "./services/pro-subtitle-exporter";
 import { isTauri } from "@tauri-apps/api/core";
 import { deserializeSceneObjects, serializeSceneObjects } from "./services/scene-persistence";
 import type { EditableSceneObject } from "./store/scene-store";
@@ -28,6 +29,7 @@ import { getAnimationMode } from "./services/animation-modes";
 import { resolveCoverSpectrum } from "./services/cover-spectrum";
 import { applyTeddyPhonemeTimeline, extractTeddyPhonemeCues, resolveTeddyLipSync } from "./services/teddy-lipsync";
 import { ApplicationAssistant } from "./components/ApplicationAssistant";
+import { proSubtitleAnimationOptions } from "./services/pro-subtitles";
 
 function objectSurfaceHeight(object: EditableSceneObject | undefined): number { if (!object) return .2; if (object.type === "kick") return .31; if (object.type === "snare") return .22; if (object.type === "drum") return .27; if (object.type === "guitar" || object.type === "strings") return .2; if (object.type === "pebble") return .12; if (object.type === "spring") return .54; if (object.type === "peg") return .75; if (object.type === "block") return .28; return .14; }
 
@@ -66,9 +68,11 @@ export function App() {
     audio.setLoading(true); audio.setError(null);
     try {
       const importedVideo = await importVideoFile(file);
-      analysis.reset(); audio.setImported(importedVideo); store.attachAudio(importedVideo.metadata, importedVideo.waveform);
-      store.updateAddSubtitles({ videoUrl: importedVideo.url, videoName: file.name });
-      store.setStatus(`${file.name} caricato · traccia audio pronta per Whisper`);
+      const preserveSubtitleTrack = useProjectStore.getState().project.animation.modeId === "proSubtitles";
+      analysis.reset(); audio.setImported(importedVideo); store.attachAudio(importedVideo.metadata, importedVideo.waveform, { preserveSubtitleTrack });
+      if (preserveSubtitleTrack) store.updateProSubtitles({ videoUrl: importedVideo.url, videoName: file.name });
+      else store.updateAddSubtitles({ videoUrl: importedVideo.url, videoName: file.name });
+      store.setStatus(`${file.name} caricato · video guida e timeline pronti`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error); audio.setError(message); store.setStatus(message);
     }
@@ -104,8 +108,31 @@ export function App() {
   const walkingCubeMode = store.project.animation.modeId === "walkingCube";
   const characterMode = walkingCubeMode || store.project.animation.modeId === "pixelArt" || store.project.animation.modeId === "teddyWalk" || store.project.animation.modeId === "teddySing";
   const stereoUnfoldMode = store.project.animation.modeId === "stereoUnfold";
-  const subtitleVideoMode = store.project.animation.modeId === "addSubtitles";
+  const addSubtitlesMode = store.project.animation.modeId === "addSubtitles";
+  const proSubtitlesMode = store.project.animation.modeId === "proSubtitles";
+  const viewportSubtitles = proSubtitlesMode
+    ? { ...store.project.subtitles, enabled: true }
+    : store.project.subtitles;
+  const subtitleVideoMode = addSubtitlesMode || proSubtitlesMode;
+  const subtitleVideoReady = addSubtitlesMode
+    ? Boolean(store.project.animation.addSubtitles.videoUrl)
+    : proSubtitlesMode
+      ? Boolean(store.project.animation.proSubtitles.videoUrl && store.project.subtitles.cues.length)
+      : false;
   const exportDuration = duration + (!characterMode && !stereoUnfoldMode && !subtitleVideoMode && sceneBall.endRevealEnabled && sceneBall.innerImageUrl && sceneBall.revealMode === "end" ? sceneBall.revealHoldSeconds : 0);
+  const timelineSubtitles = useMemo(() => {
+    if (!proSubtitlesMode) return store.project.subtitles.cues;
+    const proSettings = store.project.animation.proSubtitles;
+    const animationLabels = new Map(proSubtitleAnimationOptions.map((option) => [option.id, option.label]));
+    return store.project.subtitles.cues.map((cue) => {
+      const cueStyle = proSettings.cueStyles.find((style) => style.cueId === cue.id);
+      return {
+        ...cue,
+        animationLabel: animationLabels.get(cueStyle?.animation ?? proSettings.defaultAnimation),
+        accentColors: proSettings.palette
+      };
+    });
+  }, [proSubtitlesMode, store.project.animation.proSubtitles, store.project.subtitles.cues]);
   const handleGenerateScene = useCallback(() => { applyGeneratedScene(store.project); store.setStatus(`${getAnimationMode(store.project.animation.modeId).label} rigenerata senza perdere le personalizzazioni · seed ${store.project.project.seed}`); }, [applyGeneratedScene, store]);
   const impactEvents = useMemo(() => store.project.events.filter((event) => event.enabled && event.action !== "nearMiss" && event.action !== "freeFall"), [store.project.events]);
   const impactResponses = useMemo(() => impactEvents.map((event) => ({ timeSeconds: event.timeSeconds, strength: event.strength })), [impactEvents]);
@@ -134,14 +161,79 @@ export function App() {
   const handleChangeObjectType = useCallback((id: string, type: EditableSceneObject["type"]) => {
     const sceneState = useSceneStore.getState(); const objectIndex = sceneState.objects.findIndex((object) => object.id === id); sceneState.changeType(id, type); const projectState = useProjectStore.getState(); const event = projectState.project.events.filter((item) => item.enabled && item.action !== "nearMiss" && item.action !== "freeFall")[objectIndex]; if (event) projectState.updateEvent(event.id, { assignedObjectType: type, assignedObjectId: id }); projectState.setStatus("Elemento sostituito in tempo reale · colori e materiale conservati");
   }, []);
-  const startExport = useCallback(async (settings: { width: number; height: number; fps: number; durationSeconds: number; quality: ExportQuality }) => { const renderer = viewportRenderer.current; const element = audioElement.current; if (!renderer || !element) { exportState.fail("Renderer o audio non disponibili"); return; } const controller = new AbortController(); exportState.start(controller); try { const exportBall = characterMode || stereoUnfoldMode || subtitleVideoMode ? { ...sceneBall, endRevealEnabled: false } : sceneBall; const subtitleSource = store.project.animation.addSubtitles; const cubeBackgroundUrl = sceneBackground.mediaType === "image" ? sceneBackground.imageUrl ?? store.project.animation.walkingCube.backgroundImageUrl : null; const modeBackground = walkingCubeMode && cubeBackgroundUrl ? { ...sceneBackground, imageUrl: cubeBackgroundUrl, mediaType: "image" as const, opacity: 1, blur: 0 } : sceneBackground; const exportBackground = subtitleVideoMode ? { ...sceneBackground, colors: ["#000000", "#000000"] as [string, string], imageUrl: subtitleSource.videoUrl, mediaType: "video" as const, opacity: 1, blur: 0, finish: "clean" as const, effects: { glow: false, particles: false, vignette: false } } : modeBackground; const backgroundDimming = subtitleVideoMode ? subtitleSource.dimming : walkingCubeMode ? store.project.animation.walkingCube.backgroundDim : 0; const backgroundFit = subtitleVideoMode ? subtitleSource.fit : walkingCubeMode ? "fill" as const : "cover" as const; const result = await exportLiveVideo({ ...settings, projectName: store.project.project.name }, renderer, element, exportBackground, exportBall, duration, (time) => flushSync(() => setExportRenderTime(time)), controller.signal, (progress) => exportState.update(progress.progress, progress.currentFrame, progress.totalFrames), backgroundDimming, backgroundFit); exportState.complete(); store.setStatus(`Video finale creato · ${result.format.label} · ${result.fileName}`); } catch (error) { setExportRenderTime(null); renderer.restorePreviewSize(); if (error instanceof DOMException && error.name === "AbortError") exportState.fail("Esportazione annullata"); else exportState.fail(error instanceof Error ? error.message : String(error)); } }, [characterMode, duration, exportState, sceneBackground, sceneBall, stereoUnfoldMode, store, subtitleVideoMode, walkingCubeMode]);
+  const startExport = useCallback(async (settings: ExportDialogStartSettings) => {
+    const renderer = viewportRenderer.current;
+    const element = audioElement.current;
+    if (!renderer || (!proSubtitlesMode && !element)) {
+      exportState.fail("Renderer o sorgente audio/video non disponibili");
+      return;
+    }
+    const controller = new AbortController();
+    exportState.start(controller);
+    try {
+      if (proSubtitlesMode) {
+        const proSettings = settings.proSubtitles;
+        if (!proSettings) throw new Error("Impostazioni export ProSubtitles mancanti.");
+        element?.pause();
+        audio.setPlaying(false);
+        const result = await exportProSubtitleVideo({
+          width: settings.width,
+          height: settings.height,
+          fps: settings.fps,
+          durationSeconds: settings.durationSeconds,
+          projectName: store.project.project.name,
+          quality: settings.quality,
+          outputMode: proSettings.outputMode,
+          backgroundMode: proSettings.backgroundMode,
+          backgroundColor: proSettings.backgroundColor,
+          format: proSettings.format,
+          allowOpaqueWebmFallback: proSettings.allowOpaqueWebmFallback,
+          sourceVideoUrl: store.project.animation.proSubtitles.videoUrl,
+          sourceVideoName: store.project.animation.proSubtitles.videoName,
+          subtitleCues: store.project.subtitles.cues,
+          subtitleSettings: store.project.animation.proSubtitles
+        }, renderer, (time) => flushSync(() => setExportRenderTime(time)), controller.signal, (progress) => {
+          exportState.update(progress.progress, progress.currentFrame, progress.totalFrames);
+        });
+        exportState.complete();
+        store.setStatus(`${proSettings.outputMode === "completeVideo" ? "Video completo sottotitolato" : "Layer ProSubtitles"} creato · ${result.format.label} · ${result.fileName}`);
+        return;
+      }
+
+      if (!element) throw new Error("Sorgente audio non disponibile.");
+      const liveSettings = {
+        width: settings.width,
+        height: settings.height,
+        fps: settings.fps,
+        durationSeconds: settings.durationSeconds,
+        quality: settings.quality
+      };
+      const exportBall = characterMode || stereoUnfoldMode || addSubtitlesMode ? { ...sceneBall, endRevealEnabled: false } : sceneBall;
+      const subtitleSource = store.project.animation.addSubtitles;
+      const cubeBackgroundUrl = sceneBackground.mediaType === "image" ? sceneBackground.imageUrl ?? store.project.animation.walkingCube.backgroundImageUrl : null;
+      const modeBackground = walkingCubeMode && cubeBackgroundUrl ? { ...sceneBackground, imageUrl: cubeBackgroundUrl, mediaType: "image" as const, opacity: 1, blur: 0 } : sceneBackground;
+      const exportBackground = addSubtitlesMode ? { ...sceneBackground, colors: ["#000000", "#000000"] as [string, string], imageUrl: subtitleSource.videoUrl, mediaType: "video" as const, opacity: 1, blur: 0, finish: "clean" as const, effects: { glow: false, particles: false, vignette: false } } : modeBackground;
+      const backgroundDimming = addSubtitlesMode ? subtitleSource.dimming : walkingCubeMode ? store.project.animation.walkingCube.backgroundDim : 0;
+      const backgroundFit = addSubtitlesMode ? subtitleSource.fit : walkingCubeMode ? "fill" as const : "cover" as const;
+      const result = await exportLiveVideo({ ...liveSettings, projectName: store.project.project.name }, renderer, element, exportBackground, exportBall, duration, (time) => flushSync(() => setExportRenderTime(time)), controller.signal, (progress) => {
+        exportState.update(progress.progress, progress.currentFrame, progress.totalFrames);
+      }, backgroundDimming, backgroundFit);
+      exportState.complete();
+      store.setStatus(`Video finale creato · ${result.format.label} · ${result.fileName}`);
+    } catch (error) {
+      setExportRenderTime(null);
+      renderer.restorePreviewSize();
+      if (error instanceof DOMException && error.name === "AbortError") exportState.fail("Esportazione annullata");
+      else exportState.fail(error instanceof Error ? error.message : String(error));
+    }
+  }, [addSubtitlesMode, audio, characterMode, duration, exportState, proSubtitlesMode, sceneBackground, sceneBall, stereoUnfoldMode, store, walkingCubeMode]);
   return <div className="app-shell">
     <audio ref={audioElement} src={imported?.url} preload="auto" loop={audio.looping} />
-    <Toolbar name={store.project.project.name} dirty={store.dirty} subtitleVideoMode={subtitleVideoMode} audioLoading={audio.loading} canAnalyze={Boolean(imported)} analysisRunning={analysis.running} analysisProgress={analysis.progress?.progress ?? 0} canGenerate={store.project.events.length > 0 && !characterMode && !stereoUnfoldMode && !subtitleVideoMode && store.project.animation.modeId !== "coverSphere"} canExport={duration > 0 && (store.project.animation.modeId === "coverSphere" || stereoUnfoldMode || characterMode || subtitleVideoMode || trajectory.segments.length > 0)} canUndo={store.eventHistory.length > 0} canRedo={store.eventFuture.length > 0} onNew={newProject} onOpen={() => void openProject()} onSave={() => void saveProject()} onImportAudio={() => void handleImportAudio()} onAnalyze={() => void handleAnalyze()} onGenerate={handleGenerateScene} onExport={exportState.show} onUndo={store.undoEvents} onRedo={store.redoEvents} />
-    <div className="workspace"><LibraryPanel canRegenerate={store.project.events.length > 0} onRegenerate={handleGenerateScene} onImportSubtitleVideo={handleImportSubtitleVideo} audioUrl={imported?.url ?? null} duration={duration} currentTime={audio.currentTime} /><Viewport key={`${sceneBall.innerShape}-${store.project.animation.modeId}`} timeSeconds={displayTime} durationSeconds={duration} playing={audio.playing || exportState.running} ballPosition={trajectory.segments.length ? ballState.position : undefined} ballVelocity={trajectory.segments.length ? ballState.velocity : undefined} activeObjectIndex={activeObjectIndex} aspectRatio={store.project.canvas.aspectRatio} animationModeId={store.project.animation.modeId} newYorkSettings={store.project.animation.newYorkStreets} coverSphereSettings={store.project.animation.coverSphere} stereoUnfoldSettings={store.project.animation.stereoUnfold} walkingCubeSettings={store.project.animation.walkingCube} pixelArtSettings={store.project.animation.pixelArt} teddyWalkSettings={store.project.animation.teddyWalk} teddySingSettings={store.project.animation.teddySing} addSubtitlesSettings={store.project.animation.addSubtitles} teddyLipSync={teddyLipSync} subtitles={store.project.subtitles} spectrumBands={coverSpectrum.bands} stereoLeftBands={coverSpectrum.leftBands} stereoRightBands={coverSpectrum.rightBands} stereoWidth={coverSpectrum.stereoWidth} stereoLeftPulse={coverSpectrum.leftPulse} stereoRightPulse={coverSpectrum.rightPulse} audioPulse={coverSpectrum.pulse} rhythmPulse={rhythmPulse} globalBpm={globalBpm} trajectorySegments={trajectory.segments} projectSeed={store.project.project.seed} motionKinds={trajectory.objectMotionKinds} impactResponses={impactResponses} onRendererReady={onRendererReady} onSelectObject={handleSelectObject} /><InspectorPanel name={store.project.project.name} aspectRatio={store.project.canvas.aspectRatio} event={selectedMusicEvent} events={store.project.events} duration={duration} availableObjectTypes={availableObjectTypes} onRename={store.renameProject} onAspectRatio={store.setAspectRatio} onSelectObject={(id) => handleSelectObject(id)} onChangeObjectType={handleChangeObjectType} onUpdateEvent={handleUpdateEvent} onDeleteEvent={store.deleteEvent} /></div>
-    <Timeline peaks={imported?.waveform ?? store.project.analysis.waveform} events={store.project.events} beats={analysis.result?.beats ?? store.project.events.map((event) => event.timeSeconds)} subtitleOnly={subtitleVideoMode} showPhonemes={store.project.animation.modeId === "teddySing"} phonemes={store.project.animation.modeId === "teddySing" ? store.project.animation.teddySing.phonemeCues : []} selectedPhonemeId={selectedPhonemeId} subtitles={store.project.subtitles.cues} selectedSubtitleId={selectedSubtitleId} selectedEventId={store.selectedEventId} selectedEventIds={store.selectedEventIds} currentTime={audio.currentTime} duration={duration} playing={audio.playing} looping={audio.looping} onPlayPause={playPause} onStop={stop} onSeek={seek} onLoop={audio.setLooping} onSelectPhoneme={(id) => { setSelectedPhonemeId(id); setSelectedSubtitleId(null); if (id) useProjectStore.getState().selectEvent(null); }} onDeletePhoneme={(id) => store.deleteTeddySingPhoneme(id)} onSplitPhoneme={(id, time) => store.splitTeddySingPhoneme(id, time)} onAddSubtitle={(time) => { const id = store.addSubtitleCue(time); setSelectedSubtitleId(id); setSelectedPhonemeId(null); }} onSelectSubtitle={(id) => { setSelectedSubtitleId(id); setSelectedPhonemeId(null); if (id) useProjectStore.getState().selectEvent(null); }} onMoveSubtitle={store.moveSubtitleCue} onDeleteSubtitle={store.deleteSubtitleCue} onSplitSubtitle={store.splitSubtitleCue} onSelectEvent={handleSelectMusicEvent} onAddEvent={addElementAtBeat} onMoveEvent={store.moveEvent} onDeleteEvent={store.deleteEvent} onDeleteEvents={store.deleteEvents} />
+    <Toolbar name={store.project.project.name} dirty={store.dirty} subtitleVideoMode={subtitleVideoMode} audioLoading={audio.loading} canAnalyze={Boolean(imported)} analysisRunning={analysis.running} analysisProgress={analysis.progress?.progress ?? 0} canGenerate={store.project.events.length > 0 && !characterMode && !stereoUnfoldMode && !subtitleVideoMode && store.project.animation.modeId !== "coverSphere"} canExport={duration > 0 && (subtitleVideoMode ? subtitleVideoReady : store.project.animation.modeId === "coverSphere" || stereoUnfoldMode || characterMode || trajectory.segments.length > 0)} canUndo={store.eventHistory.length > 0} canRedo={store.eventFuture.length > 0} onNew={newProject} onOpen={() => void openProject()} onSave={() => void saveProject()} onImportAudio={() => void handleImportAudio()} onAnalyze={() => void handleAnalyze()} onGenerate={handleGenerateScene} onExport={exportState.show} onUndo={store.undoEvents} onRedo={store.redoEvents} />
+    <div className="workspace"><LibraryPanel canRegenerate={store.project.events.length > 0} onRegenerate={handleGenerateScene} onImportSubtitleVideo={handleImportSubtitleVideo} audioUrl={imported?.url ?? null} duration={duration} currentTime={audio.currentTime} selectedSubtitleId={selectedSubtitleId} onSelectSubtitle={setSelectedSubtitleId} /><Viewport key={`${sceneBall.innerShape}-${store.project.animation.modeId}`} timeSeconds={displayTime} durationSeconds={duration} playing={audio.playing || exportState.running} ballPosition={trajectory.segments.length ? ballState.position : undefined} ballVelocity={trajectory.segments.length ? ballState.velocity : undefined} activeObjectIndex={activeObjectIndex} aspectRatio={store.project.canvas.aspectRatio} animationModeId={store.project.animation.modeId} newYorkSettings={store.project.animation.newYorkStreets} coverSphereSettings={store.project.animation.coverSphere} stereoUnfoldSettings={store.project.animation.stereoUnfold} walkingCubeSettings={store.project.animation.walkingCube} pixelArtSettings={store.project.animation.pixelArt} teddyWalkSettings={store.project.animation.teddyWalk} teddySingSettings={store.project.animation.teddySing} addSubtitlesSettings={store.project.animation.addSubtitles} proSubtitlesSettings={store.project.animation.proSubtitles} teddyLipSync={teddyLipSync} subtitles={viewportSubtitles} spectrumBands={coverSpectrum.bands} stereoLeftBands={coverSpectrum.leftBands} stereoRightBands={coverSpectrum.rightBands} stereoWidth={coverSpectrum.stereoWidth} stereoLeftPulse={coverSpectrum.leftPulse} stereoRightPulse={coverSpectrum.rightPulse} audioPulse={coverSpectrum.pulse} rhythmPulse={rhythmPulse} globalBpm={globalBpm} trajectorySegments={trajectory.segments} projectSeed={store.project.project.seed} motionKinds={trajectory.objectMotionKinds} impactResponses={impactResponses} onRendererReady={onRendererReady} onSelectObject={handleSelectObject} /><InspectorPanel name={store.project.project.name} aspectRatio={store.project.canvas.aspectRatio} event={selectedMusicEvent} events={store.project.events} duration={duration} availableObjectTypes={availableObjectTypes} onRename={store.renameProject} onAspectRatio={store.setAspectRatio} onSelectObject={(id) => handleSelectObject(id)} onChangeObjectType={handleChangeObjectType} onUpdateEvent={handleUpdateEvent} onDeleteEvent={store.deleteEvent} /></div>
+    <Timeline peaks={imported?.waveform ?? store.project.analysis.waveform} events={store.project.events} beats={analysis.result?.beats ?? store.project.events.map((event) => event.timeSeconds)} subtitleOnly={subtitleVideoMode} showPhonemes={store.project.animation.modeId === "teddySing"} phonemes={store.project.animation.modeId === "teddySing" ? store.project.animation.teddySing.phonemeCues : []} selectedPhonemeId={selectedPhonemeId} subtitles={timelineSubtitles} selectedSubtitleId={selectedSubtitleId} selectedEventId={store.selectedEventId} selectedEventIds={store.selectedEventIds} currentTime={audio.currentTime} duration={duration} playing={audio.playing} looping={audio.looping} onPlayPause={playPause} onStop={stop} onSeek={seek} onLoop={audio.setLooping} onSelectPhoneme={(id) => { setSelectedPhonemeId(id); setSelectedSubtitleId(null); if (id) useProjectStore.getState().selectEvent(null); }} onDeletePhoneme={(id) => store.deleteTeddySingPhoneme(id)} onSplitPhoneme={(id, time) => store.splitTeddySingPhoneme(id, time)} onAddSubtitle={(time) => { const id = store.addSubtitleCue(time); setSelectedSubtitleId(id); setSelectedPhonemeId(null); }} onSelectSubtitle={(id) => { setSelectedSubtitleId(id); setSelectedPhonemeId(null); if (id) useProjectStore.getState().selectEvent(null); }} onMoveSubtitle={store.moveSubtitleCue} onResizeSubtitle={store.resizeSubtitleCue} onDeleteSubtitle={store.deleteSubtitleCue} onSplitSubtitle={store.splitSubtitleCue} onSelectEvent={handleSelectMusicEvent} onAddEvent={addElementAtBeat} onMoveEvent={store.moveEvent} onDeleteEvent={store.deleteEvent} onDeleteEvents={store.deleteEvents} />
     <footer className="statusbar"><span className={audio.error || analysis.error ? "status-error" : ""}>{audio.error ?? analysis.error ?? store.status}</span><span>{audio.playing ? `${audio.previewFps.toFixed(0)} FPS · ${audio.droppedFrames} drop · drift ${audio.driftMs.toFixed(1)} ms` : analysis.result ? `${analysis.result.globalBpm?.toFixed(1) ?? "—"} BPM · ${store.project.events.filter((event) => event.action !== "nearMiss" && event.action !== "freeFall").length} rimbalzi · percorso emozionale${analysis.cached ? " · cache" : ""}` : imported ? `${imported.metadata.sampleRate} Hz · ${imported.metadata.channels} ch · ${imported.metadata.codec}` : "Fase 8 · Preview audio-master"}</span></footer>
     <ApplicationAssistant context={{ modeId: animationMode.id, modeLabel: animationMode.label, aspectRatio: store.project.canvas.aspectRatio, hasAudio: Boolean(imported), analysisReady: Boolean(analysis.result) }} />
-    {exportState.open ? <ExportDialog duration={exportDuration} running={exportState.running} progress={exportState.progress} currentFrame={exportState.currentFrame} totalFrames={exportState.totalFrames} error={exportState.error} onClose={exportState.hide} onCancel={exportState.cancel} onStart={(settings) => void startExport(settings)} /> : null}
+    {exportState.open ? <ExportDialog duration={exportDuration} aspectRatio={store.project.canvas.aspectRatio === "16:9" ? "16:9" : "9:16"} {...(proSubtitlesMode ? { proSubtitles: { backgroundMode: store.project.animation.proSubtitles.backgroundMode, backgroundColor: store.project.animation.proSubtitles.backgroundColor, exportFormat: store.project.animation.proSubtitles.exportFormat, hasSourceVideo: Boolean(store.project.animation.proSubtitles.videoUrl) } } : {})} running={exportState.running} progress={exportState.progress} currentFrame={exportState.currentFrame} totalFrames={exportState.totalFrames} error={exportState.error} onClose={exportState.hide} onCancel={exportState.cancel} onStart={(settings) => void startExport(settings)} /> : null}
   </div>;
 }

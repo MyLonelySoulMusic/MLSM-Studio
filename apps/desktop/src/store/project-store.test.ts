@@ -28,6 +28,184 @@ describe("project event history", () => {
   it("configura Stereo Unfold e conserva la palette manuale", () => { const store = useProjectStore.getState(); store.setAnimationMode("stereoUnfold", ["platform"]); store.setStereoUnfoldPalette(["#ef476f", "#06d6a0"]); store.updateStereoUnfold({ coverImageUrl: "data:image/png;base64,AAAA", spectrumStyle: "aurora", stereoDepth: 1.8 }); expect(useProjectStore.getState().project.animation.stereoUnfold).toMatchObject({ primaryColor: "#ef476f", secondaryColor: "#06d6a0", coverImageUrl: "data:image/png;base64,AAAA", spectrumStyle: "aurora", stereoDepth: 1.8 }); useProjectStore.getState().setStereoUnfoldAutoPalette(false); useProjectStore.getState().updateStereoUnfold({ primaryColor: "#ffffff" }); useProjectStore.getState().setStereoUnfoldPalette(["#111111", "#222222"]); expect(useProjectStore.getState().project.animation.stereoUnfold).toMatchObject({ autoPalette: false, primaryColor: "#ffffff", palettePrimary: "#111111" }); });
   it("applica la cover Pixel Art a pantaloni, neon e sottotitoli mantenendo la felpa nera", () => { const store = useProjectStore.getState(); store.setAnimationMode("pixelArt", ["platform"]); store.setPixelArtPalette(["#ef476f", "#4252c8", "#06d6a0", "#ffd166"]); store.updatePixelArt({ venueName: "MIDNIGHT BAR", coverImageUrl: "data:image/png;base64,AAAA", hoodieColor: "#ff00ff" }); expect(useProjectStore.getState().project.animation.pixelArt).toMatchObject({ venueName: "MIDNIGHT BAR", hoodieColor: "#08090e", pantsColor: "#4252c8", neonPrimary: "#06d6a0", neonSecondary: "#ffd166" }); expect(useProjectStore.getState().project.subtitles).toMatchObject({ color: "#06d6a0", glowColor: "#ffd166" }); });
   it("applica la palette dell'immagine a Cube Animation e ai sottotitoli automatici", () => { const store = useProjectStore.getState(); store.setAnimationMode("walkingCube", ["platform"]); store.setWalkingCubePalette(["#10c7d9", "#5438dc", "#ff4f91"]); store.updateWalkingCube({ imageUrl: "data:image/png;base64,AAAA", rotationIntensity: 1.1 }); expect(useProjectStore.getState().project.animation.walkingCube).toMatchObject({ imageUrl: "data:image/png;base64,AAAA", palettePrimary: "#10c7d9", paletteSecondary: "#5438dc", paletteAccent: "#ff4f91", rotationIntensity: 1.1 }); expect(useProjectStore.getState().project.subtitles).toMatchObject({ color: "#10c7d9", glowColor: "#ff4f91" }); });
+  it("propaga la nuova palette ProSubtitles alle parole automatiche senza sovrascrivere i colori manuali", () => {
+    const store = useProjectStore.getState();
+    store.setAnimationMode("proSubtitles", ["platform"]);
+    store.attachAudio({ path: "video.mp4", fileName: "video.mp4", hash: "9".repeat(64), durationSeconds: 10, sampleRate: 48_000, channels: 2, codec: "aac", fileSize: 100 }, []);
+    const id = useProjectStore.getState().addSubtitleCue(1);
+    const initialPalette = useProjectStore.getState().project.animation.proSubtitles.palette;
+    useProjectStore.getState().updateProSubtitleWordStyle(id, 0, { color: initialPalette[0] });
+    useProjectStore.getState().updateProSubtitleWordStyle(id, 1, { color: "#123456" });
+    useProjectStore.getState().setProSubtitlesPalette(["#ef476f", "#06d6a0", "#ffd166"]);
+    const wordStyles = useProjectStore.getState().project.animation.proSubtitles.cueStyles.find((style) => style.cueId === id)?.wordStyles;
+    expect(wordStyles?.find((style) => style.index === 0)?.color).toBe("#ef476f");
+    expect(wordStyles?.find((style) => style.index === 1)?.color).toBe("#123456");
+  });
+  it("completa sempre la palette ProSubtitles con tre colori distinti", () => {
+    useProjectStore.getState().setProSubtitlesPalette(["#101820"]);
+    expect(new Set(useProjectStore.getState().project.animation.proSubtitles.palette).size).toBe(3);
+  });
+  it("preserva cue e personalizzazioni quando sostituisce il video guida ProSubtitles", () => {
+    const store = useProjectStore.getState();
+    store.setAnimationMode("proSubtitles", ["platform"]);
+    store.attachAudio({ path: "first.mov", fileName: "first.mov", hash: "1".repeat(64), durationSeconds: 12, sampleRate: 48_000, channels: 2, codec: "aac", fileSize: 100 }, []);
+    const cueId = useProjectStore.getState().addSubtitleCue(1.5);
+    useProjectStore.getState().updateSubtitleCue(cueId, { text: "Testo già sincronizzato" });
+    useProjectStore.getState().updateProSubtitleCueStyle(cueId, { animation: "letterOrbit", fontFamily: "Bebas Neue", fontSize: 144, shadowEnabled: false });
+    useProjectStore.getState().updateProSubtitleWordStyle(cueId, 1, { color: "#123456", fontSizeScale: 1.4 });
+    const before = useProjectStore.getState().project;
+    const cues = before.subtitles.cues;
+    const cueStyles = before.animation.proSubtitles.cueStyles;
+
+    useProjectStore.getState().attachAudio(
+      { path: "replacement.mov", fileName: "replacement.mov", hash: "2".repeat(64), durationSeconds: 24, sampleRate: 44_100, channels: 2, codec: "aac", fileSize: 200 },
+      [.1, .2],
+      { preserveSubtitleTrack: true }
+    );
+
+    const project = useProjectStore.getState().project;
+    expect(project.audio).toMatchObject({ sourcePath: "replacement.mov", durationSeconds: 24, sampleRate: 44_100 });
+    expect(project.analysis.waveform).toEqual([.1, .2]);
+    expect(project.subtitles.cues).toEqual(cues);
+    expect(project.animation.proSubtitles.cueStyles).toEqual(cueStyles);
+  });
+  it("marca come manuale soltanto una scelta esplicita dell'animazione ProSubtitles", () => {
+    const store = useProjectStore.getState();
+    store.setAnimationMode("proSubtitles", ["platform"]);
+    store.attachAudio({ path: "video.mov", fileName: "video.mov", hash: "3".repeat(64), durationSeconds: 8, sampleRate: 48_000, channels: 2, codec: "aac", fileSize: 100 }, []);
+    const cueId = useProjectStore.getState().addSubtitleCue(1);
+    useProjectStore.getState().updateProSubtitleCueStyle(cueId, { fontSize: 136 });
+    expect(useProjectStore.getState().project.animation.proSubtitles.cueStyles.find((style) => style.cueId === cueId)).toMatchObject({ animationAutomatic: true, fontSizeAutomatic: false });
+    useProjectStore.getState().updateProSubtitleCueStyle(cueId, { animation: "letterOrbit" });
+    expect(useProjectStore.getState().project.animation.proSubtitles.cueStyles.find((style) => style.cueId === cueId)).toMatchObject({ animation: "letterOrbit", animationAutomatic: false });
+    useProjectStore.getState().updateProSubtitleCueStyle(cueId, { animation: "wordRush", animationAutomatic: true });
+    expect(useProjectStore.getState().project.animation.proSubtitles.cueStyles.find((style) => style.cueId === cueId)).toMatchObject({ animation: "wordRush", animationAutomatic: true });
+  });
+  it("propaga font e dimensione globali ai cue automatici preservando gli override locali", () => {
+    const store = useProjectStore.getState();
+    store.setAnimationMode("proSubtitles", ["platform"]);
+    store.attachAudio({ path: "video.mov", fileName: "video.mov", hash: "5".repeat(64), durationSeconds: 8, sampleRate: 48_000, channels: 2, codec: "aac", fileSize: 100 }, []);
+    const automaticCueId = useProjectStore.getState().addSubtitleCue(1);
+    const manualCueId = useProjectStore.getState().addSubtitleCue(4);
+
+    useProjectStore.getState().updateProSubtitleCueStyle(manualCueId, { fontFamily: "Bebas Neue", fontSize: 148 });
+    useProjectStore.getState().updateProSubtitles({ defaultFontFamily: "Montserrat", defaultFontSize: 126 });
+
+    let styles = useProjectStore.getState().project.animation.proSubtitles.cueStyles;
+    expect(styles.find((style) => style.cueId === automaticCueId)).toMatchObject({
+      fontFamily: "Montserrat",
+      fontFamilyAutomatic: true,
+      fontSize: 126,
+      fontSizeAutomatic: true
+    });
+    expect(styles.find((style) => style.cueId === manualCueId)).toMatchObject({
+      fontFamily: "Bebas Neue",
+      fontFamilyAutomatic: false,
+      fontSize: 148,
+      fontSizeAutomatic: false
+    });
+
+    useProjectStore.getState().updateProSubtitleCueStyle(manualCueId, {
+      fontFamilyAutomatic: true,
+      fontSizeAutomatic: true
+    });
+    styles = useProjectStore.getState().project.animation.proSubtitles.cueStyles;
+    expect(styles.find((style) => style.cueId === manualCueId)).toMatchObject({
+      fontFamily: "Montserrat",
+      fontFamilyAutomatic: true,
+      fontSize: 126,
+      fontSizeAutomatic: true
+    });
+  });
+  it("applica i globali anche ai cue legacy già aperti senza flag di inheritance", () => {
+    const store = useProjectStore.getState();
+    store.setAnimationMode("proSubtitles", ["platform"]);
+    store.attachAudio({ path: "video.mov", fileName: "video.mov", hash: "7".repeat(64), durationSeconds: 8, sampleRate: 48_000, channels: 2, codec: "aac", fileSize: 100 }, []);
+    const cueId = useProjectStore.getState().addSubtitleCue(1);
+    const project = useProjectStore.getState().project;
+    const cueStyle = project.animation.proSubtitles.cueStyles.find((style) => style.cueId === cueId);
+    expect(cueStyle).toBeTruthy();
+    const legacyStyle = { ...cueStyle } as Record<string, unknown>;
+    delete legacyStyle.fontFamilyAutomatic;
+    delete legacyStyle.fontSizeAutomatic;
+    delete legacyStyle.positionAutomatic;
+    delete legacyStyle.opacityAutomatic;
+    useProjectStore.setState({
+      project: {
+        ...project,
+        animation: {
+          ...project.animation,
+          proSubtitles: {
+            ...project.animation.proSubtitles,
+            cueStyles: [legacyStyle as unknown as typeof project.animation.proSubtitles.cueStyles[number]]
+          }
+        }
+      }
+    });
+
+    useProjectStore.getState().updateProSubtitles({
+      defaultFontFamily: "Oswald",
+      defaultFontSize: 118,
+      positionX: 64,
+      positionY: 36,
+      opacity: .72
+    });
+    expect(useProjectStore.getState().project.animation.proSubtitles.cueStyles[0]).toMatchObject({
+      fontFamily: "Oswald",
+      fontFamilyAutomatic: true,
+      fontSize: 118,
+      fontSizeAutomatic: true,
+      positionX: 64,
+      positionY: 36,
+      positionAutomatic: true,
+      opacity: .72,
+      opacityAutomatic: true
+    });
+  });
+  it("gestisce posizione e opacità globali, locali e il ripristino dell'inheritance", () => {
+    const store = useProjectStore.getState();
+    store.setAnimationMode("proSubtitles", ["platform"]);
+    store.attachAudio({ path: "video.mov", fileName: "video.mov", hash: "6".repeat(64), durationSeconds: 8, sampleRate: 48_000, channels: 2, codec: "aac", fileSize: 100 }, []);
+    const cueId = useProjectStore.getState().addSubtitleCue(1);
+
+    useProjectStore.getState().updateProSubtitles({ positionX: 42, positionY: 68, opacity: .82 });
+    let style = useProjectStore.getState().project.animation.proSubtitles.cueStyles.find((candidate) => candidate.cueId === cueId);
+    expect(style).toMatchObject({
+      positionX: 42,
+      positionY: 68,
+      positionAutomatic: true,
+      opacity: .82,
+      opacityAutomatic: true
+    });
+
+    useProjectStore.getState().updateProSubtitleCueStyle(cueId, { positionX: 23, positionY: 31, opacity: .45 });
+    style = useProjectStore.getState().project.animation.proSubtitles.cueStyles.find((candidate) => candidate.cueId === cueId);
+    expect(style).toMatchObject({ positionX: 23, positionY: 31, positionAutomatic: false, opacity: .45, opacityAutomatic: false });
+
+    useProjectStore.getState().updateProSubtitles({ positionX: 55, positionY: 74, opacity: .9 });
+    style = useProjectStore.getState().project.animation.proSubtitles.cueStyles.find((candidate) => candidate.cueId === cueId);
+    expect(style).toMatchObject({ positionX: 23, positionY: 31, opacity: .45 });
+
+    useProjectStore.getState().updateProSubtitleCueStyle(cueId, { positionAutomatic: true, opacityAutomatic: true });
+    style = useProjectStore.getState().project.animation.proSubtitles.cueStyles.find((candidate) => candidate.cueId === cueId);
+    expect(style).toMatchObject({
+      positionX: 55,
+      positionY: 74,
+      positionAutomatic: true,
+      opacity: .9,
+      opacityAutomatic: true
+    });
+  });
+  it("usa nel fallback parola lo stesso slot palette del renderer ProSubtitles", () => {
+    const store = useProjectStore.getState();
+    store.setAnimationMode("proSubtitles", ["platform"]);
+    store.attachAudio({ path: "video.mov", fileName: "video.mov", hash: "4".repeat(64), durationSeconds: 8, sampleRate: 48_000, channels: 2, codec: "aac", fileSize: 100 }, []);
+    const cueId = useProjectStore.getState().addSubtitleCue(1);
+    useProjectStore.getState().updateSubtitleCue(cueId, { text: "uno due tre quattro" });
+    useProjectStore.getState().updateProSubtitleWordStyle(cueId, 2, { fontSizeScale: 1.25 });
+    const settings = useProjectStore.getState().project.animation.proSubtitles;
+    expect(settings.cueStyles.find((style) => style.cueId === cueId)?.wordStyles.find((word) => word.index === 2)?.color).toBe(settings.palette[0]);
+  });
   it("inserisce manualmente un blocco sottotitolo al playhead", () => { const store = useProjectStore.getState(); store.attachAudio({ path: "track.wav", fileName: "track.wav", hash: "e".repeat(64), durationSeconds: 10, sampleRate: 48_000, channels: 2, codec: "pcm", fileSize: 100 }, []); const id = useProjectStore.getState().addSubtitleCue(4.25); expect(useProjectStore.getState().project.subtitles).toMatchObject({ enabled: true, cues: [{ id, startSeconds: 4.25, endSeconds: 6.25, text: "Nuovo sottotitolo", manual: true }] }); });
   it("salva, divide ed elimina i fonemi di Teddy Sing", () => {
     const store = useProjectStore.getState();

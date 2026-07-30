@@ -35,11 +35,74 @@ async function decodeBrowserFile(file: File): Promise<ImportedAudio> {
   } finally { await context.close(); }
 }
 
+function probeVideoDuration(url: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement("video");
+    let settled = false;
+    const cleanup = () => {
+      video.onloadedmetadata = null;
+      video.onerror = null;
+      clearTimeout(timeout);
+      video.removeAttribute("src");
+      video.load();
+    };
+    const finish = (duration?: number, error?: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error || !Number.isFinite(duration) || duration! <= 0) reject(error ?? new Error("Durata video non valida."));
+      else resolve(duration!);
+    };
+    const timeout = window.setTimeout(() => finish(undefined, new Error("Timeout durante la lettura del video.")), 15_000);
+    video.preload = "metadata";
+    video.muted = true;
+    video.playsInline = true;
+    video.onloadedmetadata = () => finish(video.duration);
+    video.onerror = () => finish(undefined, new Error("Il browser non riesce a leggere i metadati del video."));
+    video.src = url;
+    video.load();
+  });
+}
+
 export async function importVideoFile(file: File): Promise<ImportedAudio> {
   if (!file.type.startsWith("video/") && !/\.(?:mp4|webm|mov|m4v)$/i.test(file.name)) throw new Error("Seleziona un file video MP4, WebM, MOV o M4V.");
-  try { return await decodeBrowserFile(file); }
-  catch {
-    throw new Error("Il browser non riesce a leggere la traccia audio di questo video. Converti l’audio in AAC/MP4 o Opus/WebM e riprova.");
+  const videoUrl = URL.createObjectURL(file);
+  let durationSeconds: number;
+  try {
+    durationSeconds = await probeVideoDuration(videoUrl);
+  } catch (error) {
+    URL.revokeObjectURL(videoUrl);
+    throw error;
+  }
+
+  try {
+    const decoded = await decodeBrowserFile(file);
+    URL.revokeObjectURL(videoUrl);
+    return {
+      ...decoded,
+      metadata: { ...decoded.metadata, durationSeconds }
+    };
+  } catch {
+    // A video can be a perfectly valid visual guide while containing no audio
+    // track (or an audio codec unsupported by AudioContext). ProSubtitles must
+    // still use the visual duration instead of rejecting the whole source.
+    const bytes = await file.arrayBuffer();
+    const digest = await crypto.subtle.digest("SHA-256", bytes.slice(0));
+    const hash = Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
+    return {
+      metadata: {
+        path: file.name,
+        fileName: file.name,
+        hash,
+        durationSeconds,
+        sampleRate: 48_000,
+        channels: 1,
+        codec: file.type || "video",
+        fileSize: file.size
+      },
+      waveform: [],
+      url: videoUrl
+    };
   }
 }
 

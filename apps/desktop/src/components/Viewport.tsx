@@ -22,6 +22,8 @@ import { deformStereoCoverVertex, resolveStereoUnfoldMotion } from "../services/
 import { createPixelArtNewYorkScene, updatePixelArtNewYorkScene } from "../services/pixel-art-new-york-renderer";
 import { createWalkingCubeMotionEvaluator } from "../services/walking-cube-motion";
 import { createWalkingCubeScene, updateWalkingCubeScene } from "../services/walking-cube-renderer";
+import { renderProSubtitleCompositionFrame } from "../services/pro-subtitles";
+import { subtitleFontWeight } from "../services/subtitle-fonts";
 
 type TintableMaterial = THREE.MeshStandardMaterial | THREE.MeshPhysicalMaterial;
 type NewYorkSettings = RhythmBallProject["animation"]["newYorkStreets"];
@@ -32,6 +34,7 @@ type PixelArtSettings = RhythmBallProject["animation"]["pixelArt"];
 type TeddyWalkSettings = RhythmBallProject["animation"]["teddyWalk"];
 type TeddySingSettings = RhythmBallProject["animation"]["teddySing"];
 type AddSubtitlesSettings = RhythmBallProject["animation"]["addSubtitles"];
+type ProSubtitlesSettings = RhythmBallProject["animation"]["proSubtitles"];
 
 function material(color: string, roughness: number, metalness: number, emissiveIntensity = .035): THREE.MeshStandardMaterial {
   const result = new THREE.MeshStandardMaterial({ color, roughness, metalness, emissive: color, emissiveIntensity });
@@ -938,7 +941,7 @@ function createStereoUnfoldScene(settings: StereoUnfoldSettings): THREE.Group {
   return root;
 }
 
-export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, ballVelocity, activeObjectIndex, aspectRatio, animationModeId, newYorkSettings, coverSphereSettings, stereoUnfoldSettings, walkingCubeSettings, pixelArtSettings, teddyWalkSettings, teddySingSettings, addSubtitlesSettings, teddyLipSync, subtitles, spectrumBands, stereoLeftBands, stereoRightBands, stereoWidth, stereoLeftPulse, stereoRightPulse, audioPulse, rhythmPulse, globalBpm, trajectorySegments, projectSeed, motionKinds, impactResponses, onRendererReady, onSelectObject }: { timeSeconds: number; durationSeconds: number; playing: boolean; ballPosition: Vector3Data | undefined; ballVelocity: Vector3Data | undefined; activeObjectIndex: number; aspectRatio: string; animationModeId: string; newYorkSettings: NewYorkSettings; coverSphereSettings: CoverSphereSettings; stereoUnfoldSettings: StereoUnfoldSettings; walkingCubeSettings: WalkingCubeSettings; pixelArtSettings: PixelArtSettings; teddyWalkSettings: TeddyWalkSettings; teddySingSettings: TeddySingSettings; addSubtitlesSettings: AddSubtitlesSettings; teddyLipSync: TeddyLipSyncPose; subtitles: RhythmBallProject["subtitles"]; spectrumBands: readonly number[]; stereoLeftBands: readonly number[]; stereoRightBands: readonly number[]; stereoWidth: number; stereoLeftPulse: number; stereoRightPulse: number; audioPulse: number; rhythmPulse: number; globalBpm: number; trajectorySegments: readonly TrajectorySegment[]; projectSeed: number; motionKinds: readonly MotionKind[]; impactResponses: readonly { timeSeconds: number; strength: number }[]; onRendererReady: (renderer: SharedViewportRenderer | null) => void; onSelectObject: (id: string | null) => void }) {
+export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, ballVelocity, activeObjectIndex, aspectRatio, animationModeId, newYorkSettings, coverSphereSettings, stereoUnfoldSettings, walkingCubeSettings, pixelArtSettings, teddyWalkSettings, teddySingSettings, addSubtitlesSettings, proSubtitlesSettings, teddyLipSync, subtitles, spectrumBands, stereoLeftBands, stereoRightBands, stereoWidth, stereoLeftPulse, stereoRightPulse, audioPulse, rhythmPulse, globalBpm, trajectorySegments, projectSeed, motionKinds, impactResponses, onRendererReady, onSelectObject }: { timeSeconds: number; durationSeconds: number; playing: boolean; ballPosition: Vector3Data | undefined; ballVelocity: Vector3Data | undefined; activeObjectIndex: number; aspectRatio: string; animationModeId: string; newYorkSettings: NewYorkSettings; coverSphereSettings: CoverSphereSettings; stereoUnfoldSettings: StereoUnfoldSettings; walkingCubeSettings: WalkingCubeSettings; pixelArtSettings: PixelArtSettings; teddyWalkSettings: TeddyWalkSettings; teddySingSettings: TeddySingSettings; addSubtitlesSettings: AddSubtitlesSettings; proSubtitlesSettings: ProSubtitlesSettings; teddyLipSync: TeddyLipSyncPose; subtitles: RhythmBallProject["subtitles"]; spectrumBands: readonly number[]; stereoLeftBands: readonly number[]; stereoRightBands: readonly number[]; stereoWidth: number; stereoLeftPulse: number; stereoRightPulse: number; audioPulse: number; rhythmPulse: number; globalBpm: number; trajectorySegments: readonly TrajectorySegment[]; projectSeed: number; motionKinds: readonly MotionKind[]; impactResponses: readonly { timeSeconds: number; strength: number }[]; onRendererReady: (renderer: SharedViewportRenderer | null) => void; onSelectObject: (id: string | null) => void }) {
   const host = useRef<HTMLDivElement>(null);
   const backgroundVideo = useRef<HTMLVideoElement>(null);
   const [teddyMocap, setTeddyMocap] = useState<TeddyMocapLibrary | null>(null);
@@ -1000,6 +1003,7 @@ export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, 
   const customLightBeam = useRef<THREE.Group | null>(null);
   const marbleGlint = useRef<THREE.Sprite | null>(null);
   const subtitleSprite = useRef<THREE.Sprite | null>(null);
+  const proSubtitleCanvas = useRef<HTMLCanvasElement | null>(null);
   const camera = useRef<THREE.PerspectiveCamera | null>(null);
   const desiredCameraPosition = useRef(new THREE.Vector3(0, 0, 11.5));
   const desiredCameraTarget = useRef(new THREE.Vector3(0, -.25, 0));
@@ -1028,7 +1032,10 @@ export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, 
     activeCamera.position.set(0, 0, 11.5);
     camera.current = activeCamera;
     scene.add(activeCamera);
-    const activeRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: "high-performance" });
+    // ProSubtitles is read back frame-by-frame by the deterministic encoder.
+    // Keeping its drawing buffer avoids transparent/black captures on browsers
+    // that discard the WebGL back buffer immediately after presentation.
+    const activeRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: "high-performance", preserveDrawingBuffer: initialAnimationModeId.current === "proSubtitles" });
     activeRenderer.setClearColor(0x000000, 0);
     const previewPixelRatio = Math.min(devicePixelRatio, 1.25);
     activeRenderer.setPixelRatio(previewPixelRatio);
@@ -1120,6 +1127,18 @@ export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, 
     glint.name = "marble-physical-glint"; glint.userData.lightGizmo = true; glint.renderOrder = 5; scene.add(glint); marbleGlint.current = glint;
     const caption = new THREE.Sprite(new THREE.SpriteMaterial({ transparent: true, opacity: 0, depthTest: false, depthWrite: false, blending: THREE.NormalBlending, toneMapped: false }));
     caption.name = "global-led-subtitle"; caption.position.set(0, 2.6, -8); caption.scale.set(7.2, 1.8, 1); caption.renderOrder = 100; caption.frustumCulled = false; activeCamera.add(caption); subtitleSprite.current = caption;
+    // ProSubtitles is already a high-resolution RGBA canvas. Display it
+    // directly above WebGL instead of converting it to a CanvasTexture first:
+    // that extra GPU upload could leave the preview/export with a transparent
+    // texture on some drivers even though the text canvas contained pixels.
+    const kineticCanvas = document.createElement("canvas");
+    kineticCanvas.width = 720;
+    kineticCanvas.height = 1280;
+    kineticCanvas.className = "pro-subtitles-canvas-layer";
+    kineticCanvas.style.display = "none";
+    kineticCanvas.setAttribute("aria-hidden", "true");
+    element.append(kineticCanvas);
+    proSubtitleCanvas.current = kineticCanvas;
 
     const groupMap = objectGroups.current;
     if (initialAnimationModeId.current === "instrumentalFalling") for (const object of initialObjects.current) {
@@ -1133,7 +1152,7 @@ export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, 
     const railGroup = initialAnimationModeId.current === "instrumentalFalling" ? createRails(initialObjects.current, initialRailColors.current, initialBall.current.radius, initialMotionKinds.current, initialActiveObjectIndex.current) : new THREE.Group();
     scene.add(railGroup);
     rails.current = railGroup;
-    const initialNeonSigns = ["coverSphere", "stereoUnfold", "walkingCube", "pixelArt", "teddyWalk", "teddySing", "addSubtitles"].includes(initialAnimationModeId.current) ? new THREE.Group() : createNeonSigns(initialObjects.current, initialBackground.current.neon, initialActiveObjectIndex.current); scene.add(initialNeonSigns); neonSigns.current = initialNeonSigns;
+    const initialNeonSigns = ["coverSphere", "stereoUnfold", "walkingCube", "pixelArt", "teddyWalk", "teddySing", "addSubtitles", "proSubtitles"].includes(initialAnimationModeId.current) ? new THREE.Group() : createNeonSigns(initialObjects.current, initialBackground.current.neon, initialActiveObjectIndex.current); scene.add(initialNeonSigns); neonSigns.current = initialNeonSigns;
 
     const lowest = initialObjects.current.at(-1)?.position[1] ?? -12;
     const starPositions = new Float32Array(Math.min(900, Math.max(240, initialObjects.current.length * 8)) * 3);
@@ -1144,7 +1163,7 @@ export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, 
     }
     const starGeometry = new THREE.BufferGeometry();
     starGeometry.setAttribute("position", new THREE.BufferAttribute(starPositions, 3));
-    const starField = new THREE.Points(starGeometry, new THREE.PointsMaterial({ color: "#8197c6", size: .025, transparent: true, opacity: .55, sizeAttenuation: true })); starField.visible = initialAnimationModeId.current !== "addSubtitles" && initialAnimationModeId.current !== "pixelArt" && initialAnimationModeId.current !== "walkingCube" && initialBackground.current.effects.particles; scene.add(starField); stars.current = starField;
+    const starField = new THREE.Points(starGeometry, new THREE.PointsMaterial({ color: "#8197c6", size: .025, transparent: true, opacity: .55, sizeAttenuation: true })); starField.visible = initialAnimationModeId.current !== "addSubtitles" && initialAnimationModeId.current !== "proSubtitles" && initialAnimationModeId.current !== "pixelArt" && initialAnimationModeId.current !== "walkingCube" && initialBackground.current.effects.particles; scene.add(starField); stars.current = starField;
 
     const resize = () => {
       const width = element.clientWidth;
@@ -1160,7 +1179,7 @@ export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, 
     // A local cubemap captures the actual route lights and neon sprites, including
     // signs behind the marble, instead of faking their colors with a static tint.
     const updateMarbleReflections = (force: boolean) => {
-      if (initialAnimationModeId.current === "stereoUnfold" || initialAnimationModeId.current === "walkingCube" || initialAnimationModeId.current === "pixelArt" || initialAnimationModeId.current === "teddyWalk" || initialAnimationModeId.current === "teddySing" || initialAnimationModeId.current === "addSubtitles") return;
+      if (initialAnimationModeId.current === "stereoUnfold" || initialAnimationModeId.current === "walkingCube" || initialAnimationModeId.current === "pixelArt" || initialAnimationModeId.current === "teddyWalk" || initialAnimationModeId.current === "teddySing" || initialAnimationModeId.current === "addSubtitles" || initialAnimationModeId.current === "proSubtitles") return;
       reflectionFrame += 1;
       if (!force && reflectionFrame % 7 !== 0) return;
       reflectionCamera.position.copy(marbleGroup.position);
@@ -1257,6 +1276,8 @@ export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, 
       customLightBeam.current = null;
       marbleGlint.current = null;
       subtitleSprite.current = null;
+      proSubtitleCanvas.current = null;
+      kineticCanvas.remove();
       camera.current = null;
       sceneRef.current = null;
     };
@@ -1264,14 +1285,22 @@ export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, 
 
   useEffect(() => {
     let active = true;
-    void document.fonts.load(`800 64px "${subtitles.fontFamily}"`).then(() => {
+    void document.fonts.load(`${subtitleFontWeight(subtitles.fontFamily)} 64px "${subtitles.fontFamily}"`).then(() => {
       if (active) setSubtitleFontRevision((revision) => revision + 1);
     });
     return () => { active = false; };
   }, [subtitles.fontFamily]);
 
+  useEffect(() => {
+    if (animationModeId !== "proSubtitles") return;
+    let active = true; const families = new Set([proSubtitlesSettings.defaultFontFamily, ...proSubtitlesSettings.cueStyles.map((style) => style.fontFamily)]);
+    void Promise.all([...families].map((family) => document.fonts.load(`${subtitleFontWeight(family)} 64px "${family}"`))).then(() => { if (active) setSubtitleFontRevision((revision) => revision + 1); });
+    return () => { active = false; };
+  }, [animationModeId, proSubtitlesSettings.cueStyles, proSubtitlesSettings.defaultFontFamily]);
+
   useLayoutEffect(() => {
     const sprite = subtitleSprite.current; if (!sprite || !(sprite.material instanceof THREE.SpriteMaterial)) return;
+    if (animationModeId === "proSubtitles") { sprite.visible = false; sprite.material.opacity = 0; return; }
     const cue = subtitles.enabled ? subtitles.cues.find((item) => timeSeconds >= item.startSeconds && timeSeconds <= item.endSeconds) : undefined;
     if (!cue) { sprite.visible = false; sprite.material.opacity = 0; return; }
     const textureKey = `${cue.id}:${cue.text}:${subtitles.fontFamily}:${subtitles.fontSize}:${subtitles.color}:${subtitles.glowColor}:${subtitleFontRevision}`;
@@ -1286,7 +1315,17 @@ export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, 
     const pose = resolveSubtitleAnimation(subtitles.animation, progress, layout, subtitles.fallSpeed);
     sprite.position.set(pose.x, pose.y, -8); sprite.scale.set(layout.width * pose.scale, layout.height * pose.scale, 1);
     sprite.material.opacity = pose.opacity; sprite.visible = true;
-  }, [aspectRatio, subtitleFontRevision, subtitles, timeSeconds]);
+  }, [animationModeId, aspectRatio, subtitleFontRevision, subtitles, timeSeconds]);
+
+  useLayoutEffect(() => {
+    const canvas = proSubtitleCanvas.current;
+    if (!canvas) return;
+    if (animationModeId !== "proSubtitles") { canvas.style.display = "none"; return; }
+    const rendererCanvas = host.current?.querySelector("canvas"); const width = Math.max(1, rendererCanvas?.width ?? (aspectRatio === "16:9" ? 1920 : 1080)); const height = Math.max(1, rendererCanvas?.height ?? (aspectRatio === "16:9" ? 1080 : 1920));
+    if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
+    const composition = renderProSubtitleCompositionFrame(canvas, subtitles.cues, proSubtitlesSettings, { timeSeconds, width, height, clear: true });
+    canvas.style.display = composition.activeCueIds.length ? "block" : "none";
+  }, [animationModeId, aspectRatio, proSubtitlesSettings, subtitleFontRevision, subtitles, timeSeconds]);
 
   useLayoutEffect(() => {
     const spot = customSpotLight.current; const spill = customLightSpill.current; const target = customLightTarget.current; const source = customLightSource.current; const halo = customLightHalo.current; const beam = customLightBeam.current;
@@ -1535,7 +1574,7 @@ export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, 
   useEffect(() => {
     if (!sceneRef.current) return;
     if (neonSigns.current) { sceneRef.current.remove(neonSigns.current); disposeGroup(neonSigns.current); }
-    const nextSigns = animationModeId === "coverSphere" || animationModeId === "stereoUnfold" || animationModeId === "walkingCube" || animationModeId === "pixelArt" || animationModeId === "teddyWalk" || animationModeId === "teddySing" || animationModeId === "addSubtitles" ? new THREE.Group() : createNeonSigns(objects, background.neon, activeObjectIndexRef.current); sceneRef.current.add(nextSigns); neonSigns.current = nextSigns;
+    const nextSigns = animationModeId === "coverSphere" || animationModeId === "stereoUnfold" || animationModeId === "walkingCube" || animationModeId === "pixelArt" || animationModeId === "teddyWalk" || animationModeId === "teddySing" || animationModeId === "addSubtitles" || animationModeId === "proSubtitles" ? new THREE.Group() : createNeonSigns(objects, background.neon, activeObjectIndexRef.current); sceneRef.current.add(nextSigns); neonSigns.current = nextSigns;
   }, [animationModeId, background.neon, objects]);
 
   useEffect(() => { neonSigns.current?.children.forEach((sign) => { sign.visible = Math.abs(Number(sign.userData.routeIndex) - activeObjectIndex) <= 5; }); }, [activeObjectIndex]);
@@ -1581,17 +1620,17 @@ export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, 
     sceneRef.current.fog = night ? new THREE.FogExp2("#18232a", .0038) : singer ? new THREE.FogExp2(teddySingSettings.roomColor, .0018) : null;
     const hemisphere = sceneRef.current.getObjectByName("global-hemisphere") as THREE.HemisphereLight | undefined; const key = sceneRef.current.getObjectByName("global-key") as THREE.DirectionalLight | undefined; const cyan = sceneRef.current.getObjectByName("global-cyan-rim") as THREE.PointLight | undefined; const violet = sceneRef.current.getObjectByName("global-violet-rim") as THREE.PointLight | undefined;
     if (hemisphere) { hemisphere.intensity = night ? .34 : singer ? .62 : 1.25; hemisphere.color.set(night ? "#48617b" : singer ? "#9ea9c4" : "#c8d8ff"); hemisphere.groundColor.set(night ? "#050708" : singer ? "#11131a" : "#180d2d"); } if (key) { key.intensity = night ? .58 : singer ? 1.5 : 4.2; key.color.set(night ? "#8295ad" : singer ? "#f7e9dc" : "#ffffff"); } if (cyan) cyan.intensity = night ? .35 : singer ? .8 : 13; if (violet) violet.intensity = night ? .25 : singer ? .8 : 15;
-    if (stars.current) stars.current.visible = animationModeId !== "addSubtitles" && animationModeId !== "pixelArt" && animationModeId !== "walkingCube" && background.effects.particles;
-    if (customLightRig.current) customLightRig.current.visible = animationModeId !== "addSubtitles" && animationModeId !== "pixelArt" && animationModeId !== "walkingCube";
+    if (stars.current) stars.current.visible = animationModeId !== "addSubtitles" && animationModeId !== "proSubtitles" && animationModeId !== "pixelArt" && animationModeId !== "walkingCube" && background.effects.particles;
+    if (customLightRig.current) customLightRig.current.visible = animationModeId !== "addSubtitles" && animationModeId !== "proSubtitles" && animationModeId !== "pixelArt" && animationModeId !== "walkingCube";
   }, [animationModeId, background, teddySingSettings.roomColor]);
 
   useEffect(() => {
     const video = backgroundVideo.current;
-    const videoSource = animationModeId === "addSubtitles" ? addSubtitlesSettings.videoUrl : background.mediaType === "video" ? background.imageUrl : null;
+    const videoSource = animationModeId === "addSubtitles" ? addSubtitlesSettings.videoUrl : animationModeId === "proSubtitles" ? proSubtitlesSettings.videoUrl : background.mediaType === "video" ? background.imageUrl : null;
     if (!video || !videoSource) return;
     const sync = () => { if (!Number.isFinite(video.duration) || video.duration <= 0) return; const target = timeSeconds % video.duration; if (Math.abs(video.currentTime - target) > .12) video.currentTime = target; };
     sync(); if (playing) void video.play().catch(() => undefined); else video.pause();
-  }, [addSubtitlesSettings.videoUrl, animationModeId, background.imageUrl, background.mediaType, playing, timeSeconds]);
+  }, [addSubtitlesSettings.videoUrl, animationModeId, background.imageUrl, background.mediaType, playing, proSubtitlesSettings.videoUrl, timeSeconds]);
 
   useLayoutEffect(() => {
     const swarm = secondaryMarbles.current; if (!swarm || animationModeId !== "newYorkStreets") return; const states = raceEvaluator(timeSeconds);
@@ -1603,7 +1642,7 @@ export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, 
 
   useLayoutEffect(() => {
     if (!marble.current) return;
-    marble.current.visible = animationModeId !== "stereoUnfold" && animationModeId !== "walkingCube" && animationModeId !== "pixelArt" && animationModeId !== "teddyWalk" && animationModeId !== "teddySing" && animationModeId !== "addSubtitles";
+    marble.current.visible = animationModeId !== "stereoUnfold" && animationModeId !== "walkingCube" && animationModeId !== "pixelArt" && animationModeId !== "teddyWalk" && animationModeId !== "teddySing" && animationModeId !== "addSubtitles" && animationModeId !== "proSubtitles";
     const position = animationModeId === "coverSphere" ? { x: 0, y: .55 + audioPulse * .08, z: 0 } : animationModeId === "stereoUnfold" ? { x: 0, y: .34, z: .28 } : ballPosition ?? { x: 0, y: 2.25 + Math.sin(timeSeconds * 2.2) * .1, z: 0 };
     marble.current.position.set(position.x, position.y, position.z);
     if (animationModeId === "coverSphere") { const rotation = timeSeconds * .48 * coverSphereSettings.rotationIntensity; marble.current.rotation.set(Math.sin(timeSeconds * .28) * .13, rotation, Math.sin(timeSeconds * .41) * .075); marble.current.scale.setScalar((1.62 + audioPulse * .055) / .42); }
@@ -1634,7 +1673,7 @@ export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, 
         desiredCameraPosition.current.set(0, -.05, aspectRatio === "9:16" ? 11.2 : 9.6); desiredCameraTarget.current.set(0, -.38, -.35); const nextFov = aspectRatio === "9:16" ? 39 : 42; if (camera.current.fov !== nextFov) { camera.current.fov = nextFov; camera.current.updateProjectionMatrix(); }
       } else if (animationModeId === "teddySing") {
         desiredCameraPosition.current.set(.15, -2.08, aspectRatio === "9:16" ? 6.15 : 5.55); desiredCameraTarget.current.set(-.18, .02, -1.02); const nextFov = aspectRatio === "9:16" ? 42 : 39; if (camera.current.fov !== nextFov) { camera.current.fov = nextFov; camera.current.updateProjectionMatrix(); }
-      } else if (animationModeId === "addSubtitles") {
+      } else if (animationModeId === "addSubtitles" || animationModeId === "proSubtitles") {
         desiredCameraPosition.current.set(0, 0, 11.5); desiredCameraTarget.current.set(0, 0, 0); const nextFov = aspectRatio === "9:16" ? 43 : 39; if (camera.current.fov !== nextFov) { camera.current.fov = nextFov; camera.current.updateProjectionMatrix(); }
       } else {
         const horizontalLookAhead = ballVelocity ? Math.max(-.85, Math.min(.85, ballVelocity.x * .16)) : 0; desiredCameraPosition.current.set(position.x + .42, position.y + .45, 11.5); desiredCameraTarget.current.set(position.x + horizontalLookAhead, position.y - .4, position.z * .72); if (camera.current.fov !== 38) { camera.current.fov = 38; camera.current.updateProjectionMatrix(); }
@@ -1642,27 +1681,28 @@ export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, 
     }
   }, [activeObjectIndex, animationModeId, aspectRatio, audioPulse, ballAppearance, ballPosition, ballVelocity, coverSphereSettings.rotationIntensity, durationSeconds, objects, rollingOrientation, sceneLight.enabled, sceneLight.reflectionBoost, timeSeconds, trajectorySegments]);
 
-  const subtitleVideoMode = animationModeId === "addSubtitles";
+  const proSubtitleMode = animationModeId === "proSubtitles";
+  const subtitleVideoMode = animationModeId === "addSubtitles" || proSubtitleMode;
   const walkingCubeMode = animationModeId === "walkingCube";
-  const activeVideoUrl = subtitleVideoMode ? addSubtitlesSettings.videoUrl : background.mediaType === "video" ? background.imageUrl : null;
+  const activeVideoUrl = proSubtitleMode ? proSubtitlesSettings.videoUrl : animationModeId === "addSubtitles" ? addSubtitlesSettings.videoUrl : background.mediaType === "video" ? background.imageUrl : null;
   const cubeBackgroundUrl = walkingCubeMode ? effectiveWalkingCubeSettings.backgroundImageUrl?.replace(/["\\]/g, "") : undefined;
   const safeImageUrl = cubeBackgroundUrl ?? (!subtitleVideoMode && background.mediaType === "image" ? background.imageUrl?.replace(/["\\]/g, "") : undefined);
   const cubeDim = Math.round(walkingCubeSettings.backgroundDim * 255).toString(16).padStart(2, "0");
   const backdropStyle = { backgroundImage: subtitleVideoMode ? "none" : walkingCubeMode && safeImageUrl ? `linear-gradient(#000000${cubeDim}, #000000${cubeDim}), url("${safeImageUrl}")` : safeImageUrl ? `linear-gradient(180deg, ${background.colors[0]}22, ${background.colors[1]}55), url("${safeImageUrl}")` : `radial-gradient(circle at 50% 35%, ${walkingCubeMode ? walkingCubeSettings.paletteSecondary : background.colors[1]}, ${walkingCubeMode ? walkingCubeSettings.palettePrimary : background.colors[0]} 72%)`, backgroundColor: subtitleVideoMode ? "#000000" : undefined, backgroundPosition: "center", backgroundRepeat: "no-repeat", backgroundSize: walkingCubeMode && safeImageUrl ? "100% 100%" : "cover", inset: walkingCubeMode ? 0 : "-10px", transform: walkingCubeMode ? "none" : "scale(1.02)", opacity: walkingCubeMode ? 1 : activeVideoUrl ? 1 : background.opacity, filter: `blur(${walkingCubeMode || activeVideoUrl ? 0 : background.blur}px)` };
-  const videoStyle = subtitleVideoMode ? { opacity: 1, filter: "none", objectFit: addSubtitlesSettings.fit, backgroundColor: "#000000" } : walkingCubeMode ? { inset: 0, width: "100%", height: "100%", transform: "none", opacity: 1, filter: "none", objectFit: "fill" as const, backgroundColor: "#070b18" } : { opacity: background.opacity, filter: `blur(${background.blur}px)`, objectFit: "cover" as const };
+  const videoStyle = subtitleVideoMode ? { opacity: 1, filter: "none", objectFit: proSubtitleMode ? proSubtitlesSettings.fit : addSubtitlesSettings.fit, backgroundColor: "#000000" } : walkingCubeMode ? { inset: 0, width: "100%", height: "100%", transform: "none", opacity: 1, filter: "none", objectFit: "fill" as const, backgroundColor: "#070b18" } : { opacity: background.opacity, filter: `blur(${background.blur}px)`, objectFit: "cover" as const };
   const revealProgress = getRevealProgress(ballAppearance, timeSeconds, durationSeconds); const imageProgress = Math.max(0, Math.min(1, (revealProgress - .16) / .84)); const easedImage = 1 - Math.pow(1 - imageProgress, 3);
   const revealStyle = animationModeId !== "stereoUnfold" && !walkingCubeMode && animationModeId !== "pixelArt" && animationModeId !== "teddyWalk" && animationModeId !== "teddySing" && !subtitleVideoMode && ballAppearance.innerImageUrl ? { backgroundImage: `url("${ballAppearance.innerImageUrl.replace(/["\\]/g, "")}")`, opacity: easedImage, transform: `perspective(1200px) rotateY(${(1 - easedImage) * 104}deg) scale(${.58 + easedImage * .42})`, filter: `blur(${(1 - easedImage) * 5}px) drop-shadow(0 28px 45px #000c)` } : undefined;
   const flashOpacity = revealProgress > 0 ? Math.max(0, Math.sin(Math.min(1, revealProgress * 2.6) * Math.PI)) : 0;
   const standaloneGpuMode = subtitleVideoMode || walkingCubeMode || animationModeId === "pixelArt";
-  const viewportLabel = animationModeId === "coverSphere" ? "Vista visualizer" : animationModeId === "stereoUnfold" ? "Vista Stereo Unfold" : walkingCubeMode ? "Vista Cube Animation" : animationModeId === "pixelArt" ? "Vista Pixel Art" : animationModeId === "teddyWalk" ? "Vista Teddy Walk" : animationModeId === "teddySing" ? "Vista Teddy Sing" : subtitleVideoMode ? "Vista sottotitoli" : "Vista percorso";
-  const qualityLabel = subtitleVideoMode ? "Video originale · overlay sottotitoli GPU" : walkingCubeMode ? "Cover fedele · vetro PBR · increspature GPU" : animationModeId === "pixelArt" ? "Personaggi articolati · spettro stereo pixel · export GPU" : "PBR · AgX · Preview GPU ottimizzata";
-  const footerLabel = subtitleVideoMode ? `Add Subtitles · ${addSubtitlesSettings.videoName || "carica un video"} · ${subtitles.cues.length} blocchi` : animationModeId === "newYorkStreets" ? `New York Streets · ${newYorkSettings.secondaryMarbleCount + 1} biglie · strada + fognature` : animationModeId === "coverSphere" ? "Cover Sphere · spettrogramma reale a 48 bande · effetti audio-reattivi" : animationModeId === "stereoUnfold" ? `Stereo Unfold · analisi L/R reale · ampiezza stereo ${Math.round(stereoWidth * 100)}%` : walkingCubeMode ? `Cube Animation · rotazione 3D · increspature sui beat · spettrogramma 48 bande · stereo ${Math.round(stereoWidth * 100)}%` : animationModeId === "pixelArt" ? `Pixel Art · Walking Through New York · deck 48 bande L/R · ingresso ${durationSeconds > 0 ? (durationSeconds / 2).toFixed(1) : "—"} s · ${pixelArtSettings.venueName || "BAR"}` : animationModeId === "teddyWalk" ? `Teddy Walk · ${teddyMocap ? "motion capture Mixamo attivo" : "caricamento motion capture"} · strada PBR` : animationModeId === "teddySing" ? `Teddy Sing · labiale 3D ${teddyLipSync.voicing > .02 ? "attivo" : "in attesa della voce"} · stanza LED` : `${background.finish === "worn" ? "Ambiente usurato" : "Ambiente limpido"} · viaggio orizzontale audio-reattivo`;
+  const viewportLabel = animationModeId === "coverSphere" ? "Vista visualizer" : animationModeId === "stereoUnfold" ? "Vista Stereo Unfold" : walkingCubeMode ? "Vista Cube Animation" : animationModeId === "pixelArt" ? "Vista Pixel Art" : animationModeId === "teddyWalk" ? "Vista Teddy Walk" : animationModeId === "teddySing" ? "Vista Teddy Sing" : proSubtitleMode ? "Vista ProSubtitles" : subtitleVideoMode ? "Vista sottotitoli" : "Vista percorso";
+  const qualityLabel = proSubtitleMode ? "Kinetic typography RGBA · title-safe · stile per parola" : subtitleVideoMode ? "Video originale · overlay sottotitoli GPU" : walkingCubeMode ? "Cover fedele · vetro PBR · increspature GPU" : animationModeId === "pixelArt" ? "Personaggi articolati · spettro stereo pixel · export GPU" : "PBR · AgX · Preview GPU ottimizzata";
+  const footerLabel = proSubtitleMode ? `ProSubtitles · ${proSubtitlesSettings.videoName || "carica un video"} · ${subtitles.cues.length} blocchi · ${proSubtitlesSettings.backgroundMode === "transparent" ? "alpha" : "fondo pieno"}` : subtitleVideoMode ? `Add Subtitles · ${addSubtitlesSettings.videoName || "carica un video"} · ${subtitles.cues.length} blocchi` : animationModeId === "newYorkStreets" ? `New York Streets · ${newYorkSettings.secondaryMarbleCount + 1} biglie · strada + fognature` : animationModeId === "coverSphere" ? "Cover Sphere · spettrogramma reale a 48 bande · effetti audio-reattivi" : animationModeId === "stereoUnfold" ? `Stereo Unfold · analisi L/R reale · ampiezza stereo ${Math.round(stereoWidth * 100)}%` : walkingCubeMode ? `Cube Animation · rotazione 3D · increspature sui beat · spettrogramma 48 bande · stereo ${Math.round(stereoWidth * 100)}%` : animationModeId === "pixelArt" ? `Pixel Art · Walking Through New York · deck 48 bande L/R · ingresso ${durationSeconds > 0 ? (durationSeconds / 2).toFixed(1) : "—"} s · ${pixelArtSettings.venueName || "BAR"}` : animationModeId === "teddyWalk" ? `Teddy Walk · ${teddyMocap ? "motion capture Mixamo attivo" : "caricamento motion capture"} · strada PBR` : animationModeId === "teddySing" ? `Teddy Sing · labiale 3D ${teddyLipSync.voicing > .02 ? "attivo" : "in attesa della voce"} · stanza LED` : `${background.finish === "worn" ? "Ambiente usurato" : "Ambiente limpido"} · viaggio orizzontale audio-reattivo`;
   return <main className="viewport" aria-label="Viewport scena">
     <div className="viewport-tools"><button className="active-control">{viewportLabel}</button>{standaloneGpuMode ? null : <><button disabled>Sposta</button><button disabled>Ruota</button><button disabled>Scala</button></>}<span /><span className="viewport-quality">{qualityLabel}</span></div>
     <div className="three-stage"><div className={`preview-frame ${aspectRatio === "16:9" ? "ratio-landscape" : "ratio-portrait"}`}>
       <div className="scene-backdrop" style={backdropStyle} />
       {activeVideoUrl ? <video key={activeVideoUrl} ref={backgroundVideo} className={`scene-backdrop scene-backdrop-video${subtitleVideoMode ? " subtitle-source-video" : ""}`} src={activeVideoUrl} style={videoStyle} muted loop playsInline preload="auto" /> : null}
-      {subtitleVideoMode && addSubtitlesSettings.dimming > 0 ? <div className="subtitle-video-dimming" style={{ opacity: addSubtitlesSettings.dimming }} /> : null}
+      {subtitleVideoMode && (proSubtitleMode ? proSubtitlesSettings.dimming : addSubtitlesSettings.dimming) > 0 ? <div className="subtitle-video-dimming" style={{ opacity: proSubtitleMode ? proSubtitlesSettings.dimming : addSubtitlesSettings.dimming }} /> : null}
       {walkingCubeMode && activeVideoUrl && walkingCubeSettings.backgroundDim > 0 ? <div className="subtitle-video-dimming" style={{ opacity: walkingCubeSettings.backgroundDim }} /> : null}
       {!standaloneGpuMode && background.effects.glow ? <div className="scene-effect scene-glow" /> : null}
       {!standaloneGpuMode && background.effects.particles ? <div className="scene-effect scene-particles" /> : null}

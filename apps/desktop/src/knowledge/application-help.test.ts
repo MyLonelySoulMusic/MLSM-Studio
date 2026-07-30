@@ -22,6 +22,11 @@ describe("application assistant knowledge base", () => {
     expect(applicationHelpContext("Come azzero la memoria del bot?", "walkingCube")).toContain("Azzera memoria");
   });
 
+  it("spiega il workflow alpha e lo stile per parola di ProSubtitles", () => {
+    expect(retrieveApplicationHelp("Come esporto un overlay trasparente per CapCut?", "proSubtitles")[0]).toMatchObject({ id: "pro-subtitles" });
+    expect(applicationHelpContext("palette ombra e stile di ogni parola", "proSubtitles")).toContain("Stile per parola");
+  });
+
   it("fornisce sempre una risposta locale anche senza corrispondenze", () => {
     expect(fallbackApplicationHelpAnswer("xyz sconosciuto", "instrumentalFalling").length).toBeGreaterThan(80);
   });

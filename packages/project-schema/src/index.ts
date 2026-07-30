@@ -91,6 +91,72 @@ const addSubtitlesSchema = z.object({
   fit: z.enum(["cover", "contain"]).default(defaultAddSubtitles.fit),
   dimming: z.number().min(0).max(.8).default(defaultAddSubtitles.dimming)
 }).strict();
+const proSubtitleAnimationSchema = z.enum([
+  "wordRush", "letterOrbit", "perspectiveFlip", "kineticStack",
+  "maskReveal", "elasticScale", "trackingSweep", "cinematicDrift",
+  "depthZoom", "letterCascade", "waveAssembly", "splitSlide",
+  "radialBurst", "verticalRoll", "fullFrameOrbit", "editorialGrid",
+  "focusCarousel"
+]);
+const proSubtitleWordStyleSchema = z.object({
+  index: z.number().int().nonnegative().max(499),
+  color: z.string(),
+  fontSizeScale: z.number().min(.45).max(2.2).default(1),
+  animation: proSubtitleAnimationSchema.nullable().default(null)
+}).strict();
+const proSubtitleCueStyleSchema = z.object({
+  cueId: z.string().min(1),
+  animation: proSubtitleAnimationSchema,
+  animationAutomatic: z.boolean().default(true),
+  fontFamily: z.string().min(1).max(100),
+  fontFamilyAutomatic: z.boolean().default(true),
+  fontSize: z.number().int().min(24).max(260),
+  fontSizeAutomatic: z.boolean().default(true),
+  positionX: z.number().min(0).max(100).default(50),
+  positionY: z.number().min(0).max(100).default(50),
+  positionAutomatic: z.boolean().default(true),
+  opacity: z.number().min(0).max(1).default(1),
+  opacityAutomatic: z.boolean().default(true),
+  shadowEnabled: z.boolean(),
+  shadowColor: z.string(),
+  wordStyles: z.array(proSubtitleWordStyleSchema).max(500).default([])
+}).strict();
+const defaultProSubtitles = {
+  videoUrl: null, videoName: "", fit: "contain" as const, dimming: .12,
+  paletteImageUrl: null, palette: ["#f6f7fb", "#63f0d1", "#7657ff"] as [string, string, string],
+  paletteShadowEnabled: [true, true, true] as [boolean, boolean, boolean],
+  paletteShadowColors: ["#050611", "#071b1c", "#10082a"] as [string, string, string],
+  autoVaryAnimations: true, defaultAnimation: "wordRush" as const,
+  defaultFontFamily: "Space Grotesk", defaultFontSize: 104,
+  positionX: 50, positionY: 50, opacity: 1,
+  shadowEnabled: true, shadowColor: "#050611", titleSafe: .09,
+  backgroundMode: "transparent" as const, backgroundColor: "#00ff00",
+  exportFormat: "webmVp9Alpha" as const, cueStyles: []
+};
+const proSubtitlesSchema = z.object({
+  videoUrl: z.string().nullable().default(defaultProSubtitles.videoUrl),
+  videoName: z.string().max(500).default(defaultProSubtitles.videoName),
+  fit: z.enum(["cover", "contain"]).default(defaultProSubtitles.fit),
+  dimming: z.number().min(0).max(.8).default(defaultProSubtitles.dimming),
+  paletteImageUrl: z.string().nullable().default(defaultProSubtitles.paletteImageUrl),
+  palette: z.tuple([z.string(), z.string(), z.string()]).default(defaultProSubtitles.palette),
+  paletteShadowEnabled: z.tuple([z.boolean(), z.boolean(), z.boolean()]).default(defaultProSubtitles.paletteShadowEnabled),
+  paletteShadowColors: z.tuple([z.string(), z.string(), z.string()]).default(defaultProSubtitles.paletteShadowColors),
+  autoVaryAnimations: z.boolean().default(defaultProSubtitles.autoVaryAnimations),
+  defaultAnimation: proSubtitleAnimationSchema.default(defaultProSubtitles.defaultAnimation),
+  defaultFontFamily: z.string().min(1).max(100).default(defaultProSubtitles.defaultFontFamily),
+  defaultFontSize: z.number().int().min(24).max(260).default(defaultProSubtitles.defaultFontSize),
+  positionX: z.number().min(0).max(100).default(defaultProSubtitles.positionX),
+  positionY: z.number().min(0).max(100).default(defaultProSubtitles.positionY),
+  opacity: z.number().min(0).max(1).default(defaultProSubtitles.opacity),
+  shadowEnabled: z.boolean().default(defaultProSubtitles.shadowEnabled),
+  shadowColor: z.string().default(defaultProSubtitles.shadowColor),
+  titleSafe: z.number().min(.05).max(.2).default(defaultProSubtitles.titleSafe),
+  backgroundMode: z.enum(["transparent", "solid"]).default(defaultProSubtitles.backgroundMode),
+  backgroundColor: z.string().default(defaultProSubtitles.backgroundColor),
+  exportFormat: z.enum(["webmVp9Alpha", "movProRes4444"]).default(defaultProSubtitles.exportFormat),
+  cueStyles: z.array(proSubtitleCueStyleSchema).default(defaultProSubtitles.cueStyles)
+}).strict();
 const defaultSceneLighting = {
   enabled: false, origin: { x: 4, y: 6, z: 6 }, target: { x: 0, y: 1, z: 0 }, color: "#fff0cf",
   intensity: 32, distance: 28, angleDegrees: 34, penumbra: .42, decay: 2, castShadow: true,
@@ -168,7 +234,7 @@ export const projectSchema = z.object({
   canvas: z.object({ aspectRatio: z.enum(["9:16", "16:9", "1:1", "4:5", "custom"]), previewWidth: z.number().int().positive(), previewHeight: z.number().int().positive(), previewFps: fpsSchema, exportWidth: z.number().int().positive(), exportHeight: z.number().int().positive(), exportFps: fpsSchema }).strict(),
   analysis: z.object({ analyzerVersion: z.string(), cacheKey: z.string(), globalBpm: z.number().positive().nullable(), latencyCompensationMs: z.number(), waveform: z.array(z.number().min(-1).max(1)), localTempo: z.array(z.unknown()).default([]), segments: z.array(z.unknown()).default([]) }).strict(),
   events: z.array(musicEventSchema),
-  animation: z.object({ modeId: z.string().min(1), baseObjectTypes: z.array(z.enum(["drum", "kick", "snare", "cymbal", "piano", "guitar", "strings", "peg", "platform", "block", "spring", "pebble"])).min(1), newYorkStreets: newYorkStreetsSchema.default(defaultNewYorkStreets), coverSphere: coverSphereSchema.default(defaultCoverSphere), stereoUnfold: stereoUnfoldSchema.default(defaultStereoUnfold), walkingCube: walkingCubeSchema.default(defaultWalkingCube), pixelArt: pixelArtSchema.default(defaultPixelArt), teddyWalk: teddyWalkSchema.default(defaultTeddyWalk), teddySing: teddySingSchema.default(defaultTeddySing), addSubtitles: addSubtitlesSchema.default(defaultAddSubtitles) }).default({ modeId: "instrumentalFalling", baseObjectTypes: ["kick", "snare", "drum", "cymbal"], newYorkStreets: defaultNewYorkStreets, coverSphere: defaultCoverSphere, stereoUnfold: defaultStereoUnfold, walkingCube: defaultWalkingCube, pixelArt: defaultPixelArt, teddyWalk: defaultTeddyWalk, teddySing: defaultTeddySing, addSubtitles: defaultAddSubtitles }),
+  animation: z.object({ modeId: z.string().min(1), baseObjectTypes: z.array(z.enum(["drum", "kick", "snare", "cymbal", "piano", "guitar", "strings", "peg", "platform", "block", "spring", "pebble"])).min(1), newYorkStreets: newYorkStreetsSchema.default(defaultNewYorkStreets), coverSphere: coverSphereSchema.default(defaultCoverSphere), stereoUnfold: stereoUnfoldSchema.default(defaultStereoUnfold), walkingCube: walkingCubeSchema.default(defaultWalkingCube), pixelArt: pixelArtSchema.default(defaultPixelArt), teddyWalk: teddyWalkSchema.default(defaultTeddyWalk), teddySing: teddySingSchema.default(defaultTeddySing), addSubtitles: addSubtitlesSchema.default(defaultAddSubtitles), proSubtitles: proSubtitlesSchema.default(defaultProSubtitles) }).default({ modeId: "instrumentalFalling", baseObjectTypes: ["kick", "snare", "drum", "cymbal"], newYorkStreets: defaultNewYorkStreets, coverSphere: defaultCoverSphere, stereoUnfold: defaultStereoUnfold, walkingCube: defaultWalkingCube, pixelArt: defaultPixelArt, teddyWalk: defaultTeddyWalk, teddySing: defaultTeddySing, addSubtitles: defaultAddSubtitles, proSubtitles: defaultProSubtitles }),
   ball: z.object({ radius: z.number().positive(), visualMass: z.number().positive(), material: materialSchema, spinRate: z.number(), impactDeformation: z.number().min(0).max(1), trailEnabled: z.boolean(), innerColor: z.string().default("#63f0d1"), innerShape: z.enum(["orb", "icosahedron", "torusKnot"]).default("icosahedron"), innerImageUrl: z.string().nullable().default(null), endRevealEnabled: z.boolean().default(false), revealMode: z.enum(["end", "time"]).default("end"), revealTimeSeconds: z.number().nonnegative().default(0), revealHoldSeconds: z.number().min(0).max(30).default(2) }).strict(),
   objects: z.array(sceneObjectSchema), trajectorySegments: z.array(trajectorySegmentSchema),
   camera: z.object({ mode: z.enum(["fixed", "verticalTracking", "fullTracking", "smoothFollow", "cinematic", "keyframed", "autoFraming", "spline"]), position: vector3Schema, target: vector3Schema, fieldOfView: z.number().positive().max(179), damping: z.number().min(0).max(1), lookAhead: z.number().nonnegative() }).strict(),
@@ -200,7 +266,39 @@ export function parseProject(input: unknown): RhythmBallProject {
   if (!animation || typeof animation !== "object" || Array.isArray(animation)) return projectSchema.parse(input);
   const legacyAnimation = animation as Record<string, unknown>; const legacyTeddy = legacyAnimation.teddyWheel;
   const legacyPixelArt = legacyAnimation.pixelArt;
+  const legacyProSubtitles = legacyAnimation.proSubtitles;
   const migratedPixelArt = legacyPixelArt && typeof legacyPixelArt === "object" && !Array.isArray(legacyPixelArt) ? { ...legacyPixelArt as Record<string, unknown>, hoodieColor: "#08090e" } : defaultPixelArt;
+  const migratedProSubtitles = legacyProSubtitles && typeof legacyProSubtitles === "object" && !Array.isArray(legacyProSubtitles)
+    ? (() => {
+      const settings = legacyProSubtitles as Record<string, unknown>;
+      const defaultFontFamily = typeof settings.defaultFontFamily === "string" ? settings.defaultFontFamily : defaultProSubtitles.defaultFontFamily;
+      const defaultFontSize = typeof settings.defaultFontSize === "number" ? settings.defaultFontSize : defaultProSubtitles.defaultFontSize;
+      const positionX = typeof settings.positionX === "number" ? settings.positionX : defaultProSubtitles.positionX;
+      const positionY = typeof settings.positionY === "number" ? settings.positionY : defaultProSubtitles.positionY;
+      const opacity = typeof settings.opacity === "number" ? settings.opacity : defaultProSubtitles.opacity;
+      const cueStyles = Array.isArray(settings.cueStyles)
+        ? settings.cueStyles.map((candidate) => {
+          if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return candidate;
+          const style = candidate as Record<string, unknown>;
+          return {
+            ...style,
+            fontFamilyAutomatic: typeof style.fontFamilyAutomatic === "boolean"
+              ? style.fontFamilyAutomatic
+              : style.fontFamily === defaultFontFamily,
+            fontSizeAutomatic: typeof style.fontSizeAutomatic === "boolean"
+              ? style.fontSizeAutomatic
+              : style.fontSize === defaultFontSize,
+            positionX: typeof style.positionX === "number" ? style.positionX : positionX,
+            positionY: typeof style.positionY === "number" ? style.positionY : positionY,
+            positionAutomatic: typeof style.positionAutomatic === "boolean" ? style.positionAutomatic : true,
+            opacity: typeof style.opacity === "number" ? style.opacity : opacity,
+            opacityAutomatic: typeof style.opacityAutomatic === "boolean" ? style.opacityAutomatic : true
+          };
+        })
+        : [];
+      return { ...settings, positionX, positionY, opacity, cueStyles };
+    })()
+    : defaultProSubtitles;
   const migratedTeddy = legacyAnimation.teddyWalk ?? (legacyTeddy && typeof legacyTeddy === "object" && !Array.isArray(legacyTeddy) ? {
     coverImageUrl: (legacyTeddy as Record<string, unknown>).coverImageUrl ?? null,
     furColor: (legacyTeddy as Record<string, unknown>).furColor ?? defaultTeddyWalk.furColor,
@@ -211,7 +309,7 @@ export function parseProject(input: unknown): RhythmBallProject {
     pulseIntensity: defaultTeddyWalk.pulseIntensity,
     danceEnabled: defaultTeddyWalk.danceEnabled
   } : defaultTeddyWalk);
-  return projectSchema.parse({ ...candidate, animation: { ...legacyAnimation, modeId: legacyAnimation.modeId === "teddyWheel" ? "teddyWalk" : legacyAnimation.modeId, pixelArt: migratedPixelArt, teddyWalk: migratedTeddy } });
+  return projectSchema.parse({ ...candidate, animation: { ...legacyAnimation, modeId: legacyAnimation.modeId === "teddyWheel" ? "teddyWalk" : legacyAnimation.modeId, pixelArt: migratedPixelArt, teddyWalk: migratedTeddy, proSubtitles: migratedProSubtitles } });
 }
 
 export function createProject(name = "Progetto senza titolo", now = new Date()): RhythmBallProject {
@@ -223,7 +321,7 @@ export function createProject(name = "Progetto senza titolo", now = new Date()):
     canvas: { aspectRatio: "9:16", previewWidth: 540, previewHeight: 960, previewFps: { numerator: 30, denominator: 1 }, exportWidth: 1080, exportHeight: 1920, exportFps: { numerator: 60, denominator: 1 } },
     analysis: { analyzerVersion: "", cacheKey: "", globalBpm: null, latencyCompensationMs: 0, waveform: [], localTempo: [], segments: [] },
     events: [],
-    animation: { modeId: "instrumentalFalling", baseObjectTypes: ["kick", "snare", "drum", "cymbal"], newYorkStreets: defaultNewYorkStreets, coverSphere: defaultCoverSphere, stereoUnfold: defaultStereoUnfold, walkingCube: defaultWalkingCube, pixelArt: defaultPixelArt, teddyWalk: defaultTeddyWalk, teddySing: defaultTeddySing, addSubtitles: defaultAddSubtitles },
+    animation: { modeId: "instrumentalFalling", baseObjectTypes: ["kick", "snare", "drum", "cymbal"], newYorkStreets: defaultNewYorkStreets, coverSphere: defaultCoverSphere, stereoUnfold: defaultStereoUnfold, walkingCube: defaultWalkingCube, pixelArt: defaultPixelArt, teddyWalk: defaultTeddyWalk, teddySing: defaultTeddySing, addSubtitles: defaultAddSubtitles, proSubtitles: defaultProSubtitles },
     ball: { radius: 0.45, visualMass: 1, material: { color: "#dffeff", palette: ["#63f0d1", "#7857ff"], roughness: 0.05, metalness: 0, emission: 0.2, opacity: .32, textureAssetId: null }, spinRate: 1, impactDeformation: 0.2, trailEnabled: true, innerColor: "#63f0d1", innerShape: "icosahedron", innerImageUrl: null, endRevealEnabled: false, revealMode: "end", revealTimeSeconds: 0, revealHoldSeconds: 2 },
     objects: [], trajectorySegments: [],
     camera: { mode: "smoothFollow", position: { x: 0, y: 2, z: 10 }, target: { x: 0, y: 2, z: 0 }, fieldOfView: 45, damping: 0.12, lookAhead: 1.5 },

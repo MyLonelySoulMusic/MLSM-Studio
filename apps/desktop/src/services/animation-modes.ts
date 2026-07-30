@@ -5,8 +5,8 @@ export interface AnimationModeDefinition {
   id: string;
   label: string;
   description: string;
-  generator: "instrumentalFalling" | "newYorkStreets" | "coverSphere" | "stereoUnfold" | "walkingCube" | "pixelArt" | "teddyWalk" | "teddySing" | "addSubtitles";
-  panel: "instrumentalObjects" | "newYorkStreets" | "coverSphere" | "stereoUnfold" | "walkingCube" | "pixelArt" | "teddyWalk" | "teddySing" | "addSubtitles";
+  generator: "instrumentalFalling" | "newYorkStreets" | "coverSphere" | "stereoUnfold" | "walkingCube" | "pixelArt" | "teddyWalk" | "teddySing" | "addSubtitles" | "proSubtitles";
+  panel: "instrumentalObjects" | "newYorkStreets" | "coverSphere" | "stereoUnfold" | "walkingCube" | "pixelArt" | "teddyWalk" | "teddySing" | "addSubtitles" | "proSubtitles";
   objectTypes: readonly AnimationModeObjectType[];
   defaultBaseObjectTypes: readonly SceneObjectType[];
 }
@@ -89,6 +89,14 @@ export const animationModes: readonly AnimationModeDefinition[] = [{
   description: "Carica un video, trascrivine la voce in locale e crea sottotitoli animati modificabili senza elementi 3D estranei al flusso.",
   generator: "addSubtitles",
   panel: "addSubtitles",
+  objectTypes: [],
+  defaultBaseObjectTypes: ["platform"]
+}, {
+  id: "proSubtitles",
+  label: "ProSubtitles",
+  description: "Crea un livello di kinetic typography professionale sopra un video guida, con palette automatica, stile per parola ed export trasparente per il montaggio.",
+  generator: "proSubtitles",
+  panel: "proSubtitles",
   objectTypes: [],
   defaultBaseObjectTypes: ["platform"]
 }];
