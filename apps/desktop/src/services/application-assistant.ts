@@ -1,5 +1,5 @@
-import { applicationHelpContext, fallbackApplicationHelpAnswer } from "../knowledge/application-help";
-import { getLocalTextGenerator, isLocalTextGeneratorReady, localGeneratedAnswer, warmLocalTextGenerator, type LocalChatMessage } from "./local-model-runtime";
+import { applicationHelpContext, conversationalApplicationHelpAnswer, fallbackApplicationHelpAnswer } from "../knowledge/application-help";
+import { getLocalTextGenerator, isLocalTextGeneratorReady, localGeneratedAnswer, preferredLocalAssistantLabel, preferredLocalAssistantModel, runLocalTextGeneration, type LocalChatMessage } from "./local-model-runtime";
 
 export interface ApplicationAssistantContext {
   modeId: string;
@@ -16,7 +16,8 @@ export interface ApplicationAssistantMessage {
 
 export interface ApplicationAssistantReply {
   content: string;
-  source: "local-llm" | "knowledge-base";
+  source: "local-llm" | "knowledge-base" | "built-in";
+  fallbackReason?: "model-loading" | "model-timeout" | "model-error" | "response-rejected";
 }
 
 export interface ApplicationAssistantMemory {
@@ -25,10 +26,17 @@ export interface ApplicationAssistantMemory {
 }
 
 export const emptyApplicationAssistantMemory: ApplicationAssistantMemory = { summary: "", turnCount: 0 };
-export const APPLICATION_ASSISTANT_MEMORY_KEY = "dynamic-sound-animation-studio.assistant-memory.v1";
+export const APPLICATION_ASSISTANT_MEMORY_KEY = "dynamic-sound-animation-studio.assistant-memory.v2";
 
 export const APPLICATION_ASSISTANT_SYSTEM_PROMPT = `Sei Studio Bot, l'assistente integrato di Dynamic Sound Animation Studio.
 Il tuo unico compito è aiutare l'utente a usare correttamente l'applicazione.
+
+PRESENTAZIONE E TIPO DI RISPOSTA
+- Se l'utente saluta, chiede chi sei o cosa puoi fare, presentati in due frasi e proponi: avvio progetto, modalità attiva, sottotitoli, timeline, problemi ed esportazione.
+- Se chiede dove si trova una funzione, indica pannello e nome esatto del controllo.
+- Se chiede come ottenere un risultato, elenca prima i prerequisiti e poi il percorso più breve.
+- Se segnala un problema, indica la verifica più probabile, poi al massimo tre controlli successivi.
+- Se la richiesta è ambigua, fai una sola domanda breve invece di supporre.
 
 REGOLE OBBLIGATORIE
 - Rispondi in italiano, con tono diretto, calmo e operativo.
@@ -44,7 +52,7 @@ REGOLE OBBLIGATORIE
 - Non modificare timestamp, file o progetto: fornisci esclusivamente assistenza sull'uso del software.
 - Restituisci solo la risposta finale, senza intestazioni, ragionamenti interni o testo del prompt.`;
 
-const assistantModel = "smollm2-135m-instruct";
+const assistantModel = preferredLocalAssistantModel;
 const memoryLimit = 1800;
 
 function normalizeMemoryText(value: string, maximum: number): string {
@@ -99,46 +107,53 @@ export function isGroundedApplicationAnswer(answer: string, supportedFacts: stri
   if (uniqueAnswerTokens.size < 3 || uniqueAnswerTokens.size / Math.max(1, answerTokens.length) < .48) return false;
   const supportedTokens = new Set(groundingTokens(supportedFacts));
   const groundedCount = [...uniqueAnswerTokens].filter((token) => supportedTokens.has(token)).length;
-  return groundedCount >= 4 && groundedCount / uniqueAnswerTokens.size >= .58;
+  return groundedCount >= 3 && groundedCount / uniqueAnswerTokens.size >= .34;
 }
 
 function withTimeout<T>(promise: Promise<T>, milliseconds: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = window.setTimeout(() => reject(new Error("Timeout modello locale")), milliseconds);
-    promise.then((value) => { window.clearTimeout(timer); resolve(value); }, (error: unknown) => { window.clearTimeout(timer); reject(error); });
+    const timer = globalThis.setTimeout(() => reject(new Error("Timeout caricamento modello locale")), milliseconds);
+    promise.then((value) => { globalThis.clearTimeout(timer); resolve(value); }, (error: unknown) => { globalThis.clearTimeout(timer); reject(error); });
   });
 }
 
 export async function answerApplicationQuestion(question: string, history: readonly ApplicationAssistantMessage[], context: ApplicationAssistantContext, progress?: (message: string) => void, memory = emptyApplicationAssistantMemory): Promise<ApplicationAssistantReply> {
+  const conversational = conversationalApplicationHelpAnswer(question);
+  if (conversational) {
+    progress?.("Risposta conversazionale locale pronta");
+    return { content: conversational, source: "built-in" };
+  }
   const fallback = fallbackApplicationHelpAnswer(question, context.modeId);
   const knowledge = applicationHelpContext(question, context.modeId, 2);
   const memorySummary = memory.summary || summarizeApplicationConversation(history.slice(0, -2));
   const currentState = `Modalità ${context.modeLabel}; formato ${context.aspectRatio}; audio ${context.hasAudio ? "caricato" : "non caricato"}; analisi ${context.analysisReady ? "completata" : "non completata"}.`;
+  const dialogue = history.filter((message, index) => !(index === 0 && message.role === "assistant")).slice(-4);
   const conversation: LocalChatMessage[] = [
     { role: "system", content: APPLICATION_ASSISTANT_SYSTEM_PROMPT },
-    { role: "system", content: `MEMORIA RIASSUNTA\n${memorySummary || "Nessun turno precedente rilevante."}` },
-    ...history.slice(-2).map((message): LocalChatMessage => ({ role: message.role, content: normalizeMemoryText(message.content, 500) })),
-    { role: "user", content: `STATO CORRENTE\n${currentState}\n\nFATTI CONSENTITI\n${knowledge}\n\nDOMANDA\n${normalizeMemoryText(question, 500)}\n\nRispondi usando soltanto i FATTI CONSENTITI. Se non bastano, scrivi NON_DOCUMENTATO.` }
+    ...dialogue.map((message): LocalChatMessage => ({ role: message.role, content: normalizeMemoryText(message.content, 500) })),
+    { role: "user", content: `MEMORIA RIASSUNTA\n${memorySummary || "Nessun turno precedente rilevante."}\n\nSTATO CORRENTE\n${currentState}\n\nFATTI CONSENTITI\n${knowledge}\n\nDOMANDA\n${normalizeMemoryText(question, 500)}\n\nRispondi usando soltanto i FATTI CONSENTITI. Se non bastano, scrivi NON_DOCUMENTATO.` }
   ];
 
-  if (!isLocalTextGeneratorReady(assistantModel)) {
-    progress?.("Risposta immediata dalla knowledge base · SmolLM2 si prepara in background");
-    warmLocalTextGenerator(assistantModel, progress);
-    return { content: fallback, source: "knowledge-base" };
-  }
-
   try {
-    progress?.("Consultazione locale con memoria riassunta…");
-    const generator = await withTimeout(getLocalTextGenerator(assistantModel, progress), 2500);
-    const output = await withTimeout(generator(conversation, { max_new_tokens: 140, do_sample: false, repetition_penalty: 1.12 }), 15_000);
+    const ready = isLocalTextGeneratorReady(assistantModel);
+    progress?.(ready ? "Consultazione locale con memoria riassunta…" : `Attendo ${preferredLocalAssistantLabel} per un massimo di 8 secondi…`);
+    const generator = await withTimeout(getLocalTextGenerator(assistantModel, progress), ready ? 2_500 : 8_000);
+    progress?.("Studio Bot sta formulando una risposta vincolata alla knowledge base…");
+    const output = await runLocalTextGeneration(generator, conversation, { max_new_tokens: 140, do_sample: false, repetition_penalty: 1.14, no_repeat_ngram_size: 4 }, 20_000);
     const content = cleanAssistantReply(localGeneratedAnswer(output));
     if (!isGroundedApplicationAnswer(content, `${knowledge}\n${fallback}\n${currentState}`)) {
       progress?.("Risposta locale scartata perché non sufficientemente aderente alla knowledge base");
-      return { content: fallback, source: "knowledge-base" };
+      return { content: fallback, source: "knowledge-base", fallbackReason: "response-rejected" };
     }
     return { content, source: "local-llm" };
-  } catch {
-    progress?.("Modello locale lento o non disponibile · risposta dalla knowledge base");
-    return { content: fallback, source: "knowledge-base" };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const fallbackReason = /timeout modello locale/i.test(message)
+      ? "model-timeout"
+      : /timeout caricamento modello locale/i.test(message)
+        ? "model-loading"
+        : "model-error";
+    progress?.(`Modello locale non pronto: ${message} · risposta dalla knowledge base`);
+    return { content: fallback, source: "knowledge-base", fallbackReason };
   }
 }

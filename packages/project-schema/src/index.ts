@@ -173,7 +173,7 @@ const defaultSubtitles = {
   maxCueDuration: 4.2, maxCharsPerLine: 34, maxReadingSpeed: 19,
   sourceLyrics: "", language: "auto", autoPalette: true,
   whisperModel: "whisper-base_timestamped" as const,
-  llmEnabled: true, llmModel: "smollm2-135m-instruct" as const, llmPasses: 2,
+  llmEnabled: true, llmModel: "qwen2.5-0.5b-instruct" as const, llmPasses: 5,
   cues: []
 };
 const subtitlesSchema = z.object({
@@ -192,7 +192,10 @@ const subtitlesSchema = z.object({
   autoPalette: z.boolean().default(defaultSubtitles.autoPalette),
   whisperModel: z.enum(["whisper-tiny_timestamped", "whisper-base_timestamped", "whisper-medium_timestamped"]).default(defaultSubtitles.whisperModel),
   llmEnabled: z.boolean().default(defaultSubtitles.llmEnabled),
-  llmModel: z.enum(["smollm2-135m-instruct"]).default(defaultSubtitles.llmModel),
+  llmModel: z.preprocess(
+    (value) => value === "smollm2-135m-instruct" ? "qwen2.5-0.5b-instruct" : value,
+    z.enum(["qwen2.5-0.5b-instruct"]).default(defaultSubtitles.llmModel)
+  ),
   llmPasses: z.number().int().min(1).max(10).default(defaultSubtitles.llmPasses),
   cues: z.array(subtitleCueSchema).default(defaultSubtitles.cues)
 }).strict();

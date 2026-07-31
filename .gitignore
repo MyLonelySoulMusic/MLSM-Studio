@@ -11,3 +11,7 @@ coverage/
 apps/desktop/public/models/
 .transformers-cache/
 **/.cache/huggingface/
+*.onnx
+*.onnx_data
+*.safetensors
+*.gguf

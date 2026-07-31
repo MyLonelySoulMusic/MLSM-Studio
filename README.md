@@ -122,9 +122,11 @@ L'esportazione registra in tempo reale la stessa scena mostrata nella preview e 
 
 La sezione **Sottotitoli globali** è disponibile nel pannello sinistro in ogni modalità. Incolla il testo ufficiale, scegli una lunghezza indicativa e avvia la generazione: il numero di parole è un obiettivo morbido, mentre pause vocali, punteggiatura, durata massima, due righe e velocità di lettura governano realmente i tagli. Il selettore offre **Whisper Tiny**, **Base** e **Medium** locali; se Whisper restituisce più parole in un singolo chunk, il programma ridistribuisce correttamente i timestamp interni invece di trattarlo come una frase lunghissima. Il testo ufficiale corregge soltanto parole allineabili e non viene mai spalmato proporzionalmente su sezioni non pronunciate.
 
-Il pannello **Consiglio LLM locale multi-agente** usa SmolLM2 e permette da uno a dieci turni. Editor del testo, montatore del timing, controllo qualità e coordinatore condividono la stessa conversazione e leggono i rapporti precedenti. Il modello propone e verifica; un montatore deterministico conserva l’autorità sui timestamp, chiude ogni blocco vicino all’ultima parola pronunciata e rifiuta durata, sovrapposizione, ingombro o velocità di lettura fuori specifica. Il comando di revisione rimonta anche blocchi già presenti usando questi stessi vincoli.
+Il pannello **Redazione LLM locale multi-agente** usa Qwen2.5 0.5B Instruct e permette da uno a dieci passaggi, cinque per impostazione predefinita. Pulizia Suno, allineamento parole, montaggio sulle pause, controllo qualità e coordinatore condividono rapporti compatti e validati. I tag tra parentesi quadre e le indicazioni strumentali vengono eliminati prima del confronto. Ogni risposta deve essere un JSON breve: loop testuali, output fuori schema o timeout vengono scartati, e dopo due errori il lavoro prosegue immediatamente con rapporti deterministici. Il modello propone e verifica; un montatore deterministico conserva l’autorità sui timestamp Whisper, chiude ogni blocco vicino all’ultima parola pronunciata e rifiuta durata, sovrapposizione, ingombro o velocità di lettura fuori specifica.
 
-I pesi quantizzati di Whisper e SmolLM2 non sono inclusi nel repository o nella build. Il modello selezionato viene scaricato da Hugging Face soltanto al primo utilizzo e conservato nella cache locale persistente del WebView; gli utilizzi successivi funzionano dalla cache senza ripetere il download. Il primo utilizzo richiede quindi una connessione e mostra l’avanzamento. Dettagli e repository verificati sono in [Modelli AI locali](docs/local-models.md). In **Cover Sphere Visualizer**, il flag **Colori automatici dalla cover** applica la palette estratta anche al colore e al bagliore dei sottotitoli; il rendering usa il colore reale, senza fusione additiva che lo trasformi in bianco. Sono disponibili sei font locali e cinque animazioni: **LED in caduta**, **Dissolvenza cinematografica**, **Word Pop**, **Karaoke Glow** e **Slide Up**. Le frasi diventano blocchi indipendenti nella corsia **Sottotitoli** e possono essere trascinate, divise, eliminate e modificate. Il pulsante **Esporta SRT** produce un file standard separato.
+Durante generazione e revisione si apre la finestra flottante **Smart Subtitles generation**. La barra superiore permette di trascinarla in qualsiasi punto della pagina oppure ridurla senza interrompere il lavoro. La finestra mostra avanzamento ed elapsed time, download/cache dei modelli, stato di Whisper, trascrizione completa con numero di parole e frasi, dialogo in tempo reale fra **Transcript Editor**, **Timing Director** e **Quality Supervisor**, validazione finale e log tecnico con orario. Dal compositore **Parla con gli agenti** puoi inviare un’istruzione ad A1, A2, A3 oppure a tutti: A1 corregge testo e punteggiatura, A2 divide/unisce blocchi e propone ritocchi temporali, A3 esegue il controllo qualità. Le operazioni sono accettate solo in JSON strutturato, validate contro sovrapposizioni, leggibilità e limiti di spostamento, quindi applicate direttamente alla timeline; una risposta ripetitiva o fuori schema non modifica nulla. Le richieste come **“manca la parte iniziale”** usano invece un recupero deterministico dedicato: prima cercano parole precedenti al primo blocco nel JSON Whisper, poi, se necessario, rianalizzano automaticamente solo i primi secondi dell’audio e inseriscono nuovi blocchi esclusivamente quando esistono timestamp vocali reali. Se l’apertura non è rilevabile, i tre agenti spiegano quale dato manca invece di ripetere un errore JSON. Il pulsante **Parla con gli agenti** riapre la conversazione anche dopo aver chiuso la finestra. Whisper non espone una percentuale affidabile durante la singola decodifica: in quella fase viene quindi mostrato correttamente uno stato indeterminato, senza inventare una stima. La finestra diventa chiudibile quando la timeline è stata aggiornata oppure quando si verifica un errore.
+
+I pesi quantizzati di Whisper e Qwen non sono inclusi nel repository o nella build. Durante lo sviluppo web, Vite scarica ogni file da Hugging Face soltanto se assente e lo conserva in `.transformers-cache/`, una cache persistente su disco esclusa da Git e non soggetta alla quota del browser. Refresh, riavvio del browser e riavvio del server non causano quindi nuovi download; il WebView di produzione usa invece la propria cache persistente. Il primo utilizzo di ogni modello richiede una connessione e mostra l’avanzamento. Il risultato grezzo di Whisper può essere esportato come JSON con parole, frasi, confidenza e timestamp; il risultato editoriale resta esportabile in SRT. Dettagli e repository verificati sono in [Modelli AI locali](docs/local-models.md). In **Cover Sphere Visualizer**, il flag **Colori automatici dalla cover** applica la palette estratta anche al colore e al bagliore dei sottotitoli; il rendering usa il colore reale, senza fusione additiva che lo trasformi in bianco. Sono disponibili sei font locali e cinque animazioni: **LED in caduta**, **Dissolvenza cinematografica**, **Word Pop**, **Karaoke Glow** e **Slide Up**. Le frasi diventano blocchi indipendenti nella corsia **Sottotitoli** e possono essere trascinate, divise, eliminate e modificate.
 
 La corsia **Sottotitoli** resta visibile anche quando è vuota. Puoi inserire un blocco al playhead con **+ Sottotitolo**, con **Inserisci blocco al playhead** nel pannello oppure facendo doppio clic sulla corsia. La sezione **Blocchi manuali e libreria** salva l’intera traccia insieme a timestamp, animazione, font, dimensione e colori in una libreria locale indipendente dal progetto. Una traccia salvata può sostituire quella corrente mantenendo i tempi, adattarsi proporzionalmente alla durata di un altro video oppure essere inserita dal playhead senza eliminare i blocchi presenti. La libreria è disponibile in tutte le modalità e nei nuovi progetti; può inoltre essere esportata e importata come `dynamic-sound-subtitles.json`.
 
@@ -137,7 +139,7 @@ La modalità **ProSubtitles** crea un livello tipografico separato da sovrapporr
 Il flusso consigliato è:
 
 1. caricare il video guida;
-2. importare un file `.srt` o `.vtt`;
+2. importare un file `.srt`/`.vtt` oppure generare parole e frasi dal video con Whisper e la redazione Qwen locale;
 3. caricare un’immagine dalla quale estrarre automaticamente una palette di tre colori;
 4. rifinire frasi, tempi e stili nella timeline e nell’Inspector;
 5. esportare il solo livello dei sottotitoli oppure il video originale completo di sottotitoli.
@@ -154,16 +156,25 @@ L’export web offre due flussi reali:
 **MOV Apple ProRes 4444 con alpha non è prodotto dalla versione web.** Richiede una futura build desktop/native con FFmpeg o VideoToolbox: l’interfaccia lo indica come non disponibile e non genera un MOV fittizio o privo di trasparenza. Il supporto WebM alpha può variare fra versioni desktop e mobile di CapCut; prima di un export lungo è consigliata una breve prova, mantenendo lo sfondo pieno come fallback. I dettagli tecnici sono descritti in [Export video](docs/export.md).
 
 In basso a destra è disponibile **Assistente Studio**, una chat di aiuto che usa
-SmolLM2, scaricato e memorizzato localmente al primo utilizzo. Il bot recupera dalla knowledge base soltanto
+Qwen2.5 0.5B Instruct, scaricato e memorizzato localmente al primo utilizzo. Il bot recupera dalla knowledge base soltanto
 le guide pertinenti alla domanda e conosce modalità attiva, formato, presenza
-dell’audio e stato dell’analisi. La prima risposta non aspetta il download del
-modello: arriva subito dalla knowledge base mentre SmolLM2 viene preparato in
-background. Le richieste e le indicazioni precedenti vengono compattate in una
+dell’audio e stato dell’analisi. Aprire la chat avvia immediatamente il warm-up:
+lo stato mostra cache, inizializzazione WebGPU o fallback WASM e conferma quando
+Qwen è pronto. Saluti, ringraziamenti e richieste di presentazione sono gestiti
+subito da risposte conversazionali locali, senza essere erroneamente scartati dal
+validatore tecnico. Una domanda inviata durante il caricamento attende il modello per
+un intervallo breve, poi usa la knowledge base senza bloccare la chat. L’etichetta
+sotto la risposta distingue modello ancora in preparazione, timeout, errore e risposta
+scartata dal controllo qualità. Il recupero documentale richiede una corrispondenza
+reale con la domanda: la sola modalità attiva non può più far comparire una guida
+tecnica casuale. Le
+richieste e le indicazioni precedenti vengono compattate in una
 memoria riassunta locale e persistente, con un limite fisso per evitare che il
 contesto cresca senza controllo; **Azzera memoria** la elimina. Ogni inferenza ha
-un timeout e ricade sulla knowledge base, quindi la chat non può restare
+un’interruzione effettiva e ricade sulla knowledge base, quindi la chat non può restare
 indefinitamente in caricamento. Nessun testo viene inviato online. Se il runtime
-WebGPU/WASM non è disponibile, la chat continua a rispondere direttamente dalla
+WebGPU non restituisce un adapter utilizzabile o fallisce l’inizializzazione, il
+runtime prova automaticamente WASM; se anche quello non è disponibile, la chat continua a rispondere direttamente dalla
 knowledge base locale. La struttura, il prompt e le regole di manutenzione sono descritti
 in [Knowledge base dell’assistente locale](docs/assistant-knowledge-base.md).
 

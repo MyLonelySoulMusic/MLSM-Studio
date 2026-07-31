@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { alignLyricsToCues, phraseCues, reconcileWithLyrics, subtitleCueIssues, subtitleSrt, timestampedWords } from "./subtitle-generation";
+import { alignLyricsToCues, cleanReferenceLyrics, phraseCues, reconcileWithLyrics, subtitleCueIssues, subtitleSrt, subtitleTranscriptJson, timestampedWords } from "./subtitle-generation";
 
 describe("subtitle generation", () => {
   it("mantiene i timestamp Whisper ma corregge le parole con il testo ufficiale", () => {
@@ -10,6 +10,10 @@ describe("subtitle generation", () => {
     expect(aligned.map((word) => word.text)).toEqual(["Hello", "world"]);
     expect(aligned[0]?.start).toBe(0);
     expect(aligned[1]?.end).toBe(.8);
+  });
+
+  it("ripulisce tag Suno e sezioni strumentali senza cancellare i versi", () => {
+    expect(cleanReferenceLyrics("[Verse 1: Singer]\nHello tonight\n[Instrumental]\n\n[Chorus]\nStay with me")).toBe("Hello tonight\nStay with me");
   });
 
   it("non spalma sull'audio intere strofe che Whisper non ha pronunciato", () => {
@@ -48,6 +52,19 @@ describe("subtitle generation", () => {
     const srt = subtitleSrt([{ id: "cue", startSeconds: 1.25, endSeconds: 3.5, text: "Testo LED", confidence: 1, verified: true, manual: false }]);
     expect(srt).toContain("00:00:01,250 --> 00:00:03,500");
     expect(srt).toContain("Testo LED");
+  });
+
+  it("esporta il documento Whisper con parole e frasi verificabili", () => {
+    const json = subtitleTranscriptJson({
+      schemaVersion: 1,
+      engine: "Whisper",
+      model: "whisper-base_timestamped",
+      durationSeconds: 2,
+      transcript: "Hello world",
+      words: [{ text: "Hello", start: .1, end: .4, confidence: .9 }],
+      phrases: [{ start: .1, end: .8, text: "Hello world", confidence: .88 }]
+    });
+    expect(JSON.parse(json)).toMatchObject({ engine: "Whisper", model: "whisper-base_timestamped", words: [{ start: .1 }], phrases: [{ text: "Hello world" }] });
   });
 
   it("impone durata e ingombro senza prolungare la fine oltre la voce", () => {

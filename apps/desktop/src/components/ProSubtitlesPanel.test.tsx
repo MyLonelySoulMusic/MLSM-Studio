@@ -39,6 +39,30 @@ describe("ProSubtitles UI", () => {
     expect(screen.getByRole("button", { name: "16:9 orizzontale" })).toHaveAttribute("aria-pressed", "false");
   });
 
+  it("offre Whisper e la redazione Qwen accanto all'import SRT", () => {
+    render(<ProSubtitlesPanel audioUrl="blob:guide" duration={8} selectedSubtitleId={null} onSelectSubtitle={vi.fn()} onImportVideo={vi.fn(async () => undefined)} />);
+    const whisper = screen.getByRole("combobox", { name: "Modello Whisper ProSubtitles" });
+    const llm = screen.getByRole("combobox", { name: "Modello LLM ProSubtitles" });
+    expect(within(whisper).getByRole("option", { name: /Whisper Medium/ })).toBeInTheDocument();
+    expect(within(llm).getByRole("option", { name: /Qwen2.5 0.5B Instruct/ })).toBeInTheDocument();
+    expect(llm).toHaveValue("qwen2.5-0.5b-instruct");
+    expect(screen.getByLabelText("Passaggi agenti ProSubtitles")).toHaveValue("5");
+    expect(screen.getByLabelText("Testo completo ProSubtitles")).toHaveAttribute("placeholder", expect.stringContaining("[Instrumental]"));
+    expect(screen.getByRole("button", { name: "Esporta JSON Whisper" })).toBeDisabled();
+  });
+
+  it("riapre la chat e consente di scegliere a quale agente scrivere", () => {
+    useProjectStore.getState().setSubtitleCues([{ id: "cue-a", startSeconds: 1, endSeconds: 2, text: "TESTO DA CORREGGERE", confidence: .8, verified: false, manual: true }]);
+    useProjectStore.getState().updateSubtitles({ llmEnabled: true });
+    render(<ProSubtitlesPanel duration={8} selectedSubtitleId="cue-a" onSelectSubtitle={vi.fn()} onImportVideo={vi.fn(async () => undefined)} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Parla con gli agenti" }));
+
+    expect(screen.getByRole("dialog", { name: "Smart Subtitles generation" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Istruzione per gli agenti")).toBeEnabled();
+    expect(within(screen.getByLabelText("Agente destinatario")).getByRole("option", { name: "A2 · Timing Director" })).toBeInTheDocument();
+  });
+
   it("nasconde il formato alpha quando è selezionato un fondo pieno", () => {
     useProjectStore.getState().updateProSubtitles({ backgroundMode: "solid", backgroundColor: "#123456" });
     render(<ProSubtitlesPanel duration={0} selectedSubtitleId={null} onSelectSubtitle={vi.fn()} onImportVideo={vi.fn(async () => undefined)} />);

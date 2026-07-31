@@ -7,6 +7,12 @@ export interface ApplicationHelpArticle {
 }
 
 export const applicationHelpKnowledgeBase: readonly ApplicationHelpArticle[] = [{
+  id: "assistant-introduction",
+  title: "Presentazione di Studio Bot",
+  modeIds: [],
+  keywords: ["ciao", "salve", "buongiorno", "presentati", "chi sei", "cosa fai", "cosa puoi fare", "aiuto", "help", "funzioni"],
+  content: "Studio Bot è la guida locale di Dynamic Sound Animation Studio. Può spiegare come iniziare un progetto, usare la modalità attiva e i suoi controlli, importare e analizzare audio, lavorare con timeline e sottotitoli, configurare scene e palette, risolvere problemi documentati ed esportare il risultato. Per ricevere una risposta precisa, indica cosa vuoi ottenere, la modalità che stai usando oppure il punto in cui sei bloccato. Studio Bot fornisce istruzioni ma non modifica direttamente il progetto."
+}, {
   id: "quick-start",
   title: "Primo progetto: flusso consigliato",
   modeIds: [],
@@ -23,7 +29,7 @@ export const applicationHelpKnowledgeBase: readonly ApplicationHelpArticle[] = [
   title: "Assistente Studio e memoria locale",
   modeIds: [],
   keywords: ["assistente", "chat", "chatbot", "studio bot", "caricamento", "risponde", "memoria", "azzera", "smollm", "knowledge base"],
-  content: "Apri Guida in basso a destra e scrivi la domanda. La prima risposta arriva subito dalla knowledge base locale mentre SmolLM2 viene preparato in background; se il modello è lento o non disponibile, un timeout mantiene attiva la risposta deterministica. Dopo ogni scambio il programma conserva sul dispositivo un riepilogo compatto delle richieste e delle indicazioni recenti, così comprende domande collegate senza accumulare tutta la cronologia. Il contatore Memoria indica i turni conservati. Premi Azzera memoria per cancellare riepilogo e messaggi visibili. Nessuna domanda viene inviata online."
+  content: "Apri Guida in basso a destra: l’apertura prepara subito Qwen2.5 0.5B e lo stato sotto Assistente Studio indica cache, backend WebGPU/WASM e disponibilità. Saluti, ringraziamenti e presentazione ricevono subito una risposta conversazionale locale e non vengono sottoposti al validatore tecnico. Per le domande sull’app, se Qwen è ancora in preparazione, supera il tempo limite, non è disponibile oppure produce una risposta non aderente ai fatti, Studio Bot usa la knowledge base senza restare bloccato; sotto ogni risposta viene mostrato il motivo preciso, non una generica etichetta fallback. La ricerca non seleziona la guida della modalità attiva se la domanda non contiene un argomento pertinente. Studio Bot può guidare avvio progetto, modalità attiva, audio, timeline, sottotitoli, problemi ed esportazione. Dopo ogni scambio il programma conserva sul dispositivo un riepilogo compatto delle richieste e delle indicazioni recenti, così comprende domande collegate senza accumulare tutta la cronologia. Il contatore Memoria indica i turni conservati. Premi Azzera memoria per cancellare riepilogo e messaggi visibili. Nessuna domanda viene inviata online."
 }, {
   id: "audio-analysis",
   title: "Importazione e analisi del brano",
@@ -94,8 +100,8 @@ export const applicationHelpKnowledgeBase: readonly ApplicationHelpArticle[] = [
   id: "subtitles",
   title: "Sottotitoli automatici, Whisper e LLM locale",
   modeIds: [],
-  keywords: ["sottotitoli", "whisper", "llm", "smollm", "testo", "lyrics", "parole", "frasi", "srt", "font"],
-  content: "La sezione Sottotitoli globali è disponibile in tutte le modalità. Incolla il testo ufficiale, scegli lingua e Whisper Tiny, Base o Medium, poi avvia la generazione. Al primo utilizzo il modello scelto viene scaricato mostrando l’avanzamento e conservato nella cache locale; in seguito non viene riscaricato. Il numero di parole è un obiettivo morbido: pause, punteggiatura, durata e leggibilità decidono i tagli. SmolLM2 locale può eseguire fino a dieci turni di revisione; i timestamp restano sotto il controllo del validatore deterministico. Ogni frase è un blocco modificabile, spostabile, divisibile o eliminabile. Sono disponibili più font e animazioni. Puoi salvare una traccia nella libreria, riusarla in altri progetti ed esportarla in SRT."
+  keywords: ["sottotitoli", "whisper", "llm", "qwen", "agenti", "chat", "correggere", "istruzione", "testo", "lyrics", "parole", "frasi", "srt", "font"],
+  content: "La sezione Sottotitoli globali è disponibile in tutte le modalità; in ProSubtitles la generazione si trova accanto all’import SRT. Incolla anche il testo Suno completo con tag: la pipeline rimuove sezioni e indicazioni strumentali, poi allinea il testo alle parole e ai timestamp JSON di Whisper. Scegli lingua e Whisper Tiny, Base o Medium, quindi avvia la generazione. Al primo utilizzo il modello scelto viene scaricato mostrando l’avanzamento e conservato nella cache locale. Durante il lavoro si apre Smart Subtitles generation: trascina la barra superiore per spostarla, premi il trattino per ridurla e osserva stato Whisper, output trascritto, elapsed time, dialogo di Transcript Editor, Timing Director e Quality Supervisor e log tecnico. Nel riquadro Parla con gli agenti puoi scrivere una richiesta e indirizzarla ad A1 per testo e punteggiatura, A2 per divisioni, unioni e tempi, A3 per qualità, oppure a tutti e tre in sequenza. Le sole correzioni strutturate e validate vengono applicate direttamente ai blocchi della timeline; JSON errati, loop, sovrapposizioni e spostamenti temporali eccessivi sono rifiutati. Se segnali che manca la parte iniziale, il programma cerca l’apertura nel JSON Whisper e, quando necessario, rianalizza automaticamente fino ai primi 30 secondi dell’audio; inserisce nuovi blocchi soltanto in presenza di timestamp vocali reali. Se Whisper non rileva l’apertura, gli agenti spiegano che servono testo e riferimento temporale senza inventarli. Il pulsante Parla con gli agenti riapre la conversazione dopo la chiusura. Il numero di parole è un obiettivo morbido: pause, punteggiatura, durata e leggibilità decidono i tagli. La redazione Qwen2.5 locale usa da uno a dieci passaggi, cinque per impostazione predefinita. I timestamp restano sotto il controllo del validatore deterministico. Ogni frase è un blocco modificabile, spostabile, divisibile o eliminabile. Puoi esportare SRT e JSON Whisper."
 }, {
   id: "timeline",
   title: "Modifica della timeline",
@@ -138,6 +144,23 @@ function normalizedTokens(value: string): string[] {
   return value.normalize("NFKD").toLocaleLowerCase().replace(/[\u0300-\u036f]/g, "").replace(/[^\p{L}\p{N}]+/gu, " ").trim().split(/\s+/).filter((token) => token.length > 2);
 }
 
+function normalizedIntent(value: string): string {
+  return value.normalize("NFKD").toLocaleLowerCase().replace(/[\u0300-\u036f]/g, "").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
+export function conversationalApplicationHelpAnswer(query: string): string | null {
+  const intent = normalizedIntent(query);
+  const greeting = /^(?:ciao|ehi|hey|salve|buongiorno|buonasera)(?: (?:come va|come stai|tutto bene|ci sei))?$/.test(intent);
+  const wellbeing = /^(?:come va|come stai|tutto bene|va tutto bene|ci sei)$/.test(intent);
+  if (greeting || wellbeing) {
+    const acknowledgement = /come va|come stai|tutto bene|va tutto bene/.test(intent) ? "Tutto bene, grazie! " : "";
+    return `${acknowledgement}Sono qui e pronto ad aiutarti. Dimmi cosa vuoi creare oppure quale funzione dell’applicazione vuoi usare.`;
+  }
+  if (/^(?:grazie|grazie mille|perfetto grazie|ok grazie)$/.test(intent)) return "Prego! Quando vuoi, dimmi il prossimo risultato che vuoi ottenere nell’applicazione.";
+  if (/^(?:ciao )?(?:chi sei(?: e cosa puoi fare)?|presentati(?: e dimmi in cosa puoi aiutarmi)?|cosa fai|cosa puoi fare|come puoi aiutarmi)$/.test(intent)) return applicationHelpKnowledgeBase[0]!.content;
+  return null;
+}
+
 const synonymGroups: readonly (readonly string[])[] = [
   ["esporta", "export", "render", "video", "mp4", "webm"],
   ["audio", "brano", "musica", "traccia", "canzone"],
@@ -158,16 +181,19 @@ function expandedQueryTokens(query: string): Set<string> {
 }
 
 export function retrieveApplicationHelp(query: string, modeId: string, limit = 3): ApplicationHelpArticle[] {
+  if (conversationalApplicationHelpAnswer(query)) return [applicationHelpKnowledgeBase[0]!];
   const queryTokens = expandedQueryTokens(query); const normalizedQuery = normalizedTokens(query).join(" ");
+  const contextualModeRequest = queryTokens.has("modalita") && (queryTokens.has("questa") || queryTokens.has("attiva") || queryTokens.has("corrente"));
   const ranked = applicationHelpKnowledgeBase.map((article, index) => {
     const titleTokens = new Set(normalizedTokens(article.title)); const keywordTokens = new Set(article.keywords.flatMap(normalizedTokens)); const contentTokens = new Set(normalizedTokens(article.content));
-    let score = article.modeIds.includes(modeId) ? 5 : 0;
-    for (const token of queryTokens) { if (titleTokens.has(token)) score += 8; if (keywordTokens.has(token)) score += 6; if (contentTokens.has(token)) score += 1; }
-    if (normalizedQuery && normalizedTokens(article.title).join(" ").includes(normalizedQuery)) score += 14;
-    return { article, score, index };
+    let matchScore = 0;
+    for (const token of queryTokens) { if (titleTokens.has(token)) matchScore += 8; if (keywordTokens.has(token)) matchScore += 6; if (contentTokens.has(token)) matchScore += 1; }
+    if (normalizedQuery && normalizedTokens(article.title).join(" ").includes(normalizedQuery)) matchScore += 14;
+    const modeContext = article.modeIds.includes(modeId) && (matchScore > 0 || contextualModeRequest);
+    return { article, score: matchScore + (modeContext ? 5 : 0), matchScore, modeContext, index };
   }).sort((left, right) => right.score - left.score || left.index - right.index);
-  const relevant = ranked.filter((item) => item.score > 0).slice(0, Math.max(1, limit)).map((item) => item.article);
-  return relevant.length ? relevant : [applicationHelpKnowledgeBase[0]!, applicationHelpKnowledgeBase[1]!].slice(0, Math.max(1, limit));
+  const relevant = ranked.filter((item) => item.matchScore > 0 || item.modeContext).slice(0, Math.max(1, limit)).map((item) => item.article);
+  return relevant.length ? relevant : [applicationHelpKnowledgeBase[0]!];
 }
 
 export function applicationHelpContext(query: string, modeId: string, limit = 3): string {
@@ -175,7 +201,10 @@ export function applicationHelpContext(query: string, modeId: string, limit = 3)
 }
 
 export function fallbackApplicationHelpAnswer(query: string, modeId: string): string {
+  const conversational = conversationalApplicationHelpAnswer(query);
+  if (conversational) return conversational;
   const articles = retrieveApplicationHelp(query, modeId, 2); const primary = articles[0]!;
+  if (primary.id === "assistant-introduction") return "Non ho trovato una guida abbastanza pertinente per rispondere con precisione. Indicami la modalità che stai usando e il risultato che vuoi ottenere, oppure il nome del controllo che non trovi.";
   const related = articles[1] && articles[1].id !== primary.id ? `\n\nPuò esserti utile anche “${articles[1].title}”.` : "";
   return `${primary.content}${related}`;
 }

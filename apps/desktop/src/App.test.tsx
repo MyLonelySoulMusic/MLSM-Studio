@@ -39,7 +39,8 @@ describe("App", () => {
     render(<App />);
     fireEvent.click(screen.getByRole("button", { name: "Apri assistente applicazione" }));
     const assistant = screen.getByRole("region", { name: "Assistente applicazione" });
-    expect(within(assistant).getByText("SmolLM2 locale · knowledge base pronta")).toBeInTheDocument();
+    expect(within(assistant).getByText("Preparazione Qwen2.5 0.5B…")).toBeInTheDocument();
+    expect(within(assistant).getByRole("button", { name: "Cosa puoi fare?" })).toBeInTheDocument();
     fireEvent.click(within(assistant).getByRole("button", { name: "Modalità attiva" }));
     expect(within(assistant).getByLabelText("Domanda per l’assistente")).toHaveValue("Come uso bene la modalità Instrumental Falling?");
     fireEvent.click(within(assistant).getByRole("button", { name: "Chiudi assistente" }));

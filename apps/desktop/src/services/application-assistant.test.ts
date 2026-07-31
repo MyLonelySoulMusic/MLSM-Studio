@@ -7,9 +7,15 @@ const runtime = vi.hoisted(() => ({
 }));
 
 vi.mock("./local-model-runtime", () => ({
+  preferredLocalAssistantModel: "qwen2.5-0.5b-instruct",
+  preferredLocalAssistantLabel: "Qwen2.5 0.5B",
   isLocalTextGeneratorReady: () => runtime.ready,
   warmLocalTextGenerator: runtime.warm,
   getLocalTextGenerator: async () => runtime.generator,
+  runLocalTextGeneration: (generator: (input: unknown, options: unknown) => Promise<unknown>, input: unknown, options: unknown, timeoutMs: number) => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("Timeout modello locale")), timeoutMs);
+    generator(input, options).then((result) => { clearTimeout(timer); resolve(result); }, (error: unknown) => { clearTimeout(timer); reject(error); });
+  }),
   localGeneratedAnswer: (output: { generated_text?: string }[]) => output[0]?.generated_text ?? ""
 }));
 
@@ -20,11 +26,19 @@ const context = { modeId: "walkingCube", modeLabel: "Cube Animation", aspectRati
 describe("application assistant runtime", () => {
   beforeEach(() => { vi.useRealTimers(); runtime.ready = false; runtime.warm.mockReset(); runtime.generator.mockReset(); });
 
-  it("risponde subito dalla knowledge base mentre prepara il modello in background", async () => {
+  it("usa la knowledge base se il modello non riesce ancora a generare", async () => {
+    runtime.generator.mockRejectedValue(new Error("modello non pronto"));
     const reply = await answerApplicationQuestion("Come cambio lo sfondo?", [], context);
     expect(reply.source).toBe("knowledge-base");
+    expect(reply.fallbackReason).toBe("model-error");
     expect(reply.content.length).toBeGreaterThan(40);
-    expect(runtime.warm).toHaveBeenCalledOnce();
+  });
+
+  it("gestisce saluti e small talk localmente senza invocare Qwen o guide casuali", async () => {
+    const reply = await answerApplicationQuestion("Ehi, tutto bene?", [], { ...context, modeId: "instrumentalFalling", modeLabel: "Instrumental Falling" });
+    expect(reply).toMatchObject({ source: "built-in", content: expect.stringContaining("Tutto bene") });
+    expect(reply.content).not.toContain("biglia");
+    expect(runtime.generator).not.toHaveBeenCalled();
   });
 
   it("usa un prompt base vincolato all'interfaccia reale", () => {
@@ -32,6 +46,7 @@ describe("application assistant runtime", () => {
     expect(APPLICATION_ASSISTANT_SYSTEM_PROMPT).toContain("memoria riassunta");
     expect(APPLICATION_ASSISTANT_SYSTEM_PROMPT).toContain("Rispondi in italiano");
     expect(APPLICATION_ASSISTANT_SYSTEM_PROMPT).toContain("NON_DOCUMENTATO");
+    expect(APPLICATION_ASSISTANT_SYSTEM_PROMPT).toContain("Se l'utente saluta");
   });
 
   it("riassume e limita la memoria mantenendo i turni recenti", () => {
@@ -45,7 +60,7 @@ describe("application assistant runtime", () => {
     expect(summary).toContain("Nel pannello sinistro.");
   });
 
-  it("usa SmolLM2 quando è pronto senza perdere la memoria", async () => {
+  it("usa Qwen quando è pronto senza perdere la memoria", async () => {
     runtime.ready = true;
     runtime.generator.mockResolvedValue([{ generated_text: "Usa il controllo Sfondo immagine nel pannello sinistro." }]);
     const memory = updateApplicationAssistantMemory(emptyApplicationAssistantMemory, "Come carico la cover?", "Dal pannello sinistro.");
@@ -60,8 +75,8 @@ describe("application assistant runtime", () => {
     runtime.ready = true;
     runtime.generator.mockReturnValue(new Promise(() => undefined));
     const pendingReply = answerApplicationQuestion("Come esporto?", [], context);
-    await vi.advanceTimersByTimeAsync(15_100);
-    await expect(pendingReply).resolves.toMatchObject({ source: "knowledge-base" });
+    await vi.advanceTimersByTimeAsync(20_100);
+    await expect(pendingReply).resolves.toMatchObject({ source: "knowledge-base", fallbackReason: "model-timeout" });
   });
 
   it("scarta risposte senza senso o non supportate dalla knowledge base", async () => {
@@ -69,6 +84,6 @@ describe("application assistant runtime", () => {
     expect(isGroundedApplicationAnswer("Le giraffe quantistiche aprono il portale arcobaleno nel cloud lunare.", "Carica lo sfondo dal pannello Scena.")).toBe(false);
     runtime.ready = true;
     runtime.generator.mockResolvedValue([{ generated_text: "Le giraffe quantistiche aprono il portale arcobaleno nel cloud lunare." }]);
-    await expect(answerApplicationQuestion("Come cambio lo sfondo?", [], context)).resolves.toMatchObject({ source: "knowledge-base" });
+    await expect(answerApplicationQuestion("Come cambio lo sfondo?", [], context)).resolves.toMatchObject({ source: "knowledge-base", fallbackReason: "response-rejected" });
   });
 });

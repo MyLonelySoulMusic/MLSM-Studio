@@ -1,7 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { applicationHelpContext, fallbackApplicationHelpAnswer, retrieveApplicationHelp } from "./application-help";
+import { applicationHelpContext, conversationalApplicationHelpAnswer, fallbackApplicationHelpAnswer, retrieveApplicationHelp } from "./application-help";
 
 describe("application assistant knowledge base", () => {
+  it("sa presentarsi e propone ambiti di assistenza concreti", () => {
+    expect(retrieveApplicationHelp("Ciao, chi sei e cosa puoi fare?", "walkingCube")[0]).toMatchObject({ id: "assistant-introduction" });
+    expect(fallbackApplicationHelpAnswer("Presentati e dimmi in cosa puoi aiutarmi.", "walkingCube")).toContain("Studio Bot");
+  });
+
+  it("risponde ai saluti senza selezionare guide tecniche della modalità attiva", () => {
+    expect(conversationalApplicationHelpAnswer("Ciao, come va?")).toContain("Tutto bene");
+    expect(conversationalApplicationHelpAnswer("Ehi, tutto bene?")).toContain("pronto ad aiutarti");
+    expect(retrieveApplicationHelp("Ehi, tutto bene?", "instrumentalFalling")).toEqual([
+      expect.objectContaining({ id: "assistant-introduction" })
+    ]);
+    expect(fallbackApplicationHelpAnswer("Ehi, tutto bene?", "instrumentalFalling")).not.toContain("biglia");
+  });
+
   it("recupera la guida della modalità corrente per domande contestuali", () => {
     const results = retrieveApplicationHelp("Come imposto il nome del bar e i led?", "pixelArt");
     expect(results[0]).toMatchObject({ id: "pixel-art" });
@@ -28,6 +42,9 @@ describe("application assistant knowledge base", () => {
   });
 
   it("fornisce sempre una risposta locale anche senza corrispondenze", () => {
-    expect(fallbackApplicationHelpAnswer("xyz sconosciuto", "instrumentalFalling").length).toBeGreaterThan(80);
+    const answer = fallbackApplicationHelpAnswer("xyz sconosciuto", "instrumentalFalling");
+    expect(answer.length).toBeGreaterThan(80);
+    expect(answer).toContain("Non ho trovato una guida abbastanza pertinente");
+    expect(answer).not.toContain("biglia");
   });
 });

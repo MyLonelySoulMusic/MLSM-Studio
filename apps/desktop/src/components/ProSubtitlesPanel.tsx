@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent } from "react";
+import { useEffect, useState, type ChangeEvent } from "react";
 import type { RhythmBallProject } from "@rbs/project-schema";
 import { useProjectStore } from "../store/project-store";
 import { extractPaletteFromImage } from "../services/image-palette";
@@ -10,6 +10,19 @@ import {
   resolveProSubtitlePaletteColor,
   retargetProSubtitleAutomaticAnimations
 } from "../services/pro-subtitles";
+import {
+  generateSubtitles,
+  llmModelOptions,
+  reviseSubtitlesWithAgentInstruction,
+  reviewSubtitles,
+  subtitleTranscriptJson,
+  whisperModelOptions,
+  type SmartSubtitleAgentTarget,
+  type WhisperTranscriptDocument
+} from "../services/subtitle-generation";
+import { useSmartSubtitleGeneration } from "../hooks/use-smart-subtitle-generation";
+import { SmartSubtitleGenerationModal } from "./SmartSubtitleGenerationModal";
+import { warmLocalTextGenerator } from "../services/local-model-runtime";
 
 type ProSubtitleAnimation = RhythmBallProject["animation"]["proSubtitles"]["defaultAnimation"];
 const fullFrameAnimationIds = new Set<ProSubtitleAnimation>(["fullFrameOrbit", "editorialGrid", "focusCarousel"]);
@@ -70,17 +83,25 @@ function imageDataUrl(file: File): Promise<string | null> {
 }
 
 export interface ProSubtitlesPanelProps {
+  audioUrl?: string | null;
   duration: number;
   selectedSubtitleId: string | null;
   onSelectSubtitle: (id: string | null) => void;
   onImportVideo: (file: File) => Promise<void>;
 }
 
-export function ProSubtitlesPanel({ duration, selectedSubtitleId, onSelectSubtitle, onImportVideo }: ProSubtitlesPanelProps) {
+function downloadText(name: string, text: string, type: string): void {
+  const blob = new Blob([text], { type }); const url = URL.createObjectURL(blob); const link = document.createElement("a");
+  link.href = url; link.download = name; link.click(); setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+export function ProSubtitlesPanel({ audioUrl = null, duration, selectedSubtitleId, onSelectSubtitle, onImportVideo }: ProSubtitlesPanelProps) {
   const settings = useProjectStore((state) => state.project.animation.proSubtitles);
+  const subtitles = useProjectStore((state) => state.project.subtitles);
   const cues = useProjectStore((state) => state.project.subtitles.cues);
   const aspectRatio = useProjectStore((state) => state.project.canvas.aspectRatio);
   const updateSettings = useProjectStore((state) => state.updateProSubtitles);
+  const updateSubtitles = useProjectStore((state) => state.updateSubtitles);
   const setPalette = useProjectStore((state) => state.setProSubtitlesPalette);
   const setCues = useProjectStore((state) => state.setSubtitleCues);
   const updateCue = useProjectStore((state) => state.updateSubtitleCue);
@@ -90,6 +111,19 @@ export function ProSubtitlesPanel({ duration, selectedSubtitleId, onSelectSubtit
   const splitCue = useProjectStore((state) => state.splitSubtitleCue);
   const setAspectRatio = useProjectStore((state) => state.setAspectRatio);
   const [status, setStatus] = useState("Carica video, sottotitoli e immagine palette. Il video resta una guida e non entra nel layer esportato.");
+  const [generating, setGenerating] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
+  const [whisperJson, setWhisperJson] = useState<WhisperTranscriptDocument | null>(null);
+  const smartGeneration = useSmartSubtitleGeneration();
+  useEffect(() => {
+    if (!audioUrl || !subtitles.llmEnabled || !subtitles.sourceLyrics.trim()) return;
+    let active = true;
+    setStatus("Preparazione anticipata della redazione LLM locale…");
+    void warmLocalTextGenerator(subtitles.llmModel, (message) => { if (active) setStatus(`LLM · ${message}`); }).then((ready) => {
+      if (active) setStatus(ready ? "Redazione LLM locale pronta · puoi generare o revisionare senza attese di avvio." : "LLM non disponibile · la generazione userà i controlli deterministici.");
+    });
+    return () => { active = false; };
+  }, [audioUrl, subtitles.llmEnabled, subtitles.llmModel, subtitles.sourceLyrics]);
 
   const selectedCue = selectedSubtitleId ? cues.find((cue) => cue.id === selectedSubtitleId) ?? null : null;
   const selectedCueIndex = selectedCue ? Math.max(0, cues.findIndex((cue) => cue.id === selectedCue.id)) : 0;
@@ -114,9 +148,73 @@ export function ProSubtitlesPanel({ duration, selectedSubtitleId, onSelectSubtit
     try {
       const imported = parseProSubtitleFile(await file.text(), duration);
       const cueStyles = assignProSubtitleCueStyles(imported, settings);
-      setCues(imported); updateSettings({ cueStyles }); onSelectSubtitle(imported[0]?.id ?? null);
+      setCues(imported); updateSettings({ cueStyles }); onSelectSubtitle(imported[0]?.id ?? null); setWhisperJson(null);
       setStatus(`${imported.length} blocchi importati da ${file.name} · regia assegnata in base a durata, densità, enfasi e pause.`);
     } catch (error) { setStatus(error instanceof Error ? error.message : String(error)); }
+  };
+
+  const segmentation = {
+    preferredWords: subtitles.maxWordsPerPhrase,
+    maxCueDuration: subtitles.maxCueDuration,
+    maxCharsPerLine: subtitles.maxCharsPerLine,
+    maxReadingSpeed: subtitles.maxReadingSpeed
+  };
+
+  const generateFromVideo = async () => {
+    if (!audioUrl || !videoReady || generating || reviewing) return;
+    setGenerating(true); setWhisperJson(null); smartGeneration.begin("Avvio di Whisper e della redazione locale per ProSubtitles…");
+    try {
+      const generated = await generateSubtitles(audioUrl, duration, {
+        lyrics: subtitles.sourceLyrics,
+        maxWords: subtitles.maxWordsPerPhrase,
+        maxCueDuration: subtitles.maxCueDuration,
+        maxCharsPerLine: subtitles.maxCharsPerLine,
+        maxReadingSpeed: subtitles.maxReadingSpeed,
+        language: subtitles.language,
+        whisperModel: subtitles.whisperModel,
+        llmEnabled: subtitles.llmEnabled,
+        llmModel: subtitles.llmModel,
+        llmPasses: subtitles.llmPasses,
+        onWhisperJson: setWhisperJson,
+        onEvent: smartGeneration.receive
+      }, setStatus);
+      setCues(generated);
+      updateSubtitles({ enabled: true });
+      updateSettings({ cueStyles: assignProSubtitleCueStyles(generated, settings) });
+      onSelectSubtitle(generated[0]?.id ?? null);
+      setStatus(`${generated.length} frasi create dal video · JSON Whisper disponibile · ${generated.filter((cue) => cue.verified).length} verificate dal consiglio locale.`);
+      smartGeneration.finish(generated.length, generated.filter((cue) => cue.verified).length);
+    } catch (error) { const message = error instanceof Error ? error.message : String(error); setStatus(message); smartGeneration.fail(message); }
+    finally { setGenerating(false); }
+  };
+
+  const reviewGenerated = async () => {
+    if (!cues.length || !subtitles.sourceLyrics.trim() || generating || reviewing) return;
+    setReviewing(true); smartGeneration.begin("Revisione dei blocchi esistenti con la redazione locale…");
+    try {
+      const reviewed = await reviewSubtitles(cues, subtitles.sourceLyrics, subtitles.llmModel, subtitles.llmPasses, setStatus, segmentation, undefined, smartGeneration.receive);
+      setCues(reviewed);
+      updateSettings({ cueStyles: assignProSubtitleCueStyles(reviewed, settings) });
+      setStatus(`Revisione locale completata · ${reviewed.filter((cue) => cue.verified).length}/${reviewed.length} frasi confermate.`);
+      smartGeneration.finish(reviewed.length, reviewed.filter((cue) => cue.verified).length);
+    } catch (error) { const message = error instanceof Error ? error.message : String(error); setStatus(message); smartGeneration.fail(message); }
+    finally { setReviewing(false); }
+  };
+
+  const instructAgents = async (message: string, target: SmartSubtitleAgentTarget) => {
+    const result = await reviseSubtitlesWithAgentInstruction(cues, message, target, subtitles.llmModel, subtitles.sourceLyrics, segmentation, setStatus, smartGeneration.receive, {
+      ...(whisperJson ? { exactWordTimeline: whisperJson.words } : {}),
+      audioUrl,
+      durationSeconds: duration,
+      whisperModel: subtitles.whisperModel,
+      language: subtitles.language
+    });
+    const existingStyles = new Map(settings.cueStyles.map((style) => [style.cueId, style]));
+    const cueStyles = assignProSubtitleCueStyles(result.cues, settings).map((style) => existingStyles.get(style.cueId) ?? style);
+    setCues(result.cues); updateSubtitles({ enabled: true }); updateSettings({ cueStyles });
+    if (selectedSubtitleId && !result.cues.some((cue) => cue.id === selectedSubtitleId)) onSelectSubtitle(result.cues[0]?.id ?? null);
+    setStatus(result.summary ?? `Intervento agenti completato · ${result.changedCount} modifiche validate · stili ProSubtitles conservati.`);
+    return { cueCount: result.cues.length, changedCount: result.changedCount };
   };
 
   const importPalette = async (change: ChangeEvent<HTMLInputElement>) => {
@@ -154,6 +252,34 @@ export function ProSubtitlesPanel({ duration, selectedSubtitleId, onSelectSubtit
       <h2>2 · File sottotitoli</h2>
       <label className={`flyer-upload${videoReady ? "" : " disabled-upload"}`}>Importa SRT o WebVTT<input aria-label="Importa sottotitoli ProSubtitles" aria-describedby="pro-subtitle-import-help" type="file" accept=".srt,.vtt,application/x-subrip,text/vtt,text/plain" disabled={!videoReady} onChange={(event) => void importSubtitles(event)} /></label>
       <p className="muted" id="pro-subtitle-import-help">{videoReady ? "I blocchi compaiono nella timeline: trascina per spostarli, usa le maniglie per accorciarli e doppio clic per dividerli." : "Carica prima il video guida: la sua durata impedisce timestamp fuori scena e blocchi invisibili."}</p>
+      <div className="pro-subtitle-ai-source">
+        <header><strong>Oppure genera dal video</strong><span>Whisper crea parole e frasi con timestamp; il consiglio Qwen ripulisce e riallinea il testo senza spostare arbitrariamente l’audio.</span></header>
+        <div className="local-model-panel">
+          <h3>Whisper locale</h3>
+          <label>Modello Whisper<select aria-label="Modello Whisper ProSubtitles" value={subtitles.whisperModel} onChange={(event) => updateSubtitles({ whisperModel: event.target.value as typeof subtitles.whisperModel })}>{whisperModelOptions.map((model) => <option key={model.id} value={model.id}>{model.label} · {model.localSize}</option>)}</select></label>
+          <p>{whisperModelOptions.find((model) => model.id === subtitles.whisperModel)?.detail}</p>
+          <span className="model-installed">● Download soltanto al primo utilizzo · cache locale persistente · nessun peso nel progetto</span>
+        </div>
+        <label>Testo completo della canzone<textarea aria-label="Testo completo ProSubtitles" rows={7} value={subtitles.sourceLyrics} onChange={(event) => updateSubtitles({ sourceLyrics: event.target.value })} placeholder={"Incolla anche il testo Suno originale:\n[Verse 1]\n...\n[Instrumental]\nI tag e le sezioni strumentali verranno rimossi prima dell’allineamento."} /></label>
+        <label>Lingua<select aria-label="Lingua Whisper ProSubtitles" value={subtitles.language} onChange={(event) => updateSubtitles({ language: event.target.value })}><option value="auto">Rilevamento automatico</option><option value="it">Italiano</option><option value="en">Inglese</option><option value="es">Spagnolo</option><option value="fr">Francese</option><option value="de">Tedesco</option></select></label>
+        <label>Lunghezza indicativa: circa {subtitles.maxWordsPerPhrase} parole<input aria-label="Parole indicative ProSubtitles" type="range" min="2" max="20" step="1" value={subtitles.maxWordsPerPhrase} onChange={(event) => updateSubtitles({ maxWordsPerPhrase: Number(event.target.value) })} /></label>
+        <p className="muted">È un obiettivo morbido: pause vocali, punteggiatura, durata e velocità di lettura decidono i tagli effettivi.</p>
+        <div className="local-model-panel llm-review-panel">
+          <h3>Redazione LLM locale multi-agente</h3>
+          <label className="teddy-dance-toggle"><span>Ripulisci, allinea e verifica dopo Whisper</span><input aria-label="Abilita LLM ProSubtitles" type="checkbox" checked={subtitles.llmEnabled} onChange={(event) => updateSubtitles({ llmEnabled: event.target.checked })} /></label>
+          <label>Modello<select aria-label="Modello LLM ProSubtitles" disabled={!subtitles.llmEnabled} value={subtitles.llmModel} onChange={(event) => updateSubtitles({ llmModel: event.target.value as typeof subtitles.llmModel })}>{llmModelOptions.map((model) => <option key={model.id} value={model.id}>{model.label} · {model.localSize}</option>)}</select></label>
+          <label>Passaggi tra agenti: {subtitles.llmPasses}<input aria-label="Passaggi agenti ProSubtitles" type="range" min="1" max="10" step="1" disabled={!subtitles.llmEnabled} value={subtitles.llmPasses} onChange={(event) => updateSubtitles({ llmPasses: Number(event.target.value) })} /></label>
+          <div className="subtitle-agent-flow"><span>Pulizia Suno</span><i>→</i><span>Allineamento</span><i>→</i><span>Pause</span><i>→</i><span>QC</span><i>→</i><span>Coordinatore</span></div>
+          <p>{llmModelOptions.find((model) => model.id === subtitles.llmModel)?.detail}. I timestamp parola-per-parola di Whisper e i controlli deterministici restano l’autorità.</p>
+          {subtitles.llmEnabled && !subtitles.sourceLyrics.trim() ? <p className="muted">LLM in attesa: incolla il testo completo della canzone per attivare preparazione e confronto multi-agente.</p> : null}
+        </div>
+        <button className="regenerate-base" disabled={!videoReady || !audioUrl || generating || reviewing} onClick={() => void generateFromVideo()}>{generating ? "Whisper e redazione locale in corso…" : "Genera sottotitoli dal video"}</button>
+        <div className="subtitle-library-actions">
+          <button disabled={!whisperJson || generating} onClick={() => { if (whisperJson) downloadText("whisper-parole-frasi.json", subtitleTranscriptJson(whisperJson), "application/json;charset=utf-8"); }}>Esporta JSON Whisper</button>
+          <button disabled={!cues.length || !subtitles.sourceLyrics.trim() || generating || reviewing || !subtitles.llmEnabled} onClick={() => void reviewGenerated()}>{reviewing ? "Revisione in corso…" : "Rivedi blocchi esistenti"}</button>
+        </div>
+        <button disabled={!cues.length || generating || reviewing || !subtitles.llmEnabled} onClick={smartGeneration.reopen}>Parla con gli agenti</button>
+      </div>
     </div>
 
     <div className="pro-workflow">
@@ -236,5 +362,6 @@ export function ProSubtitlesPanel({ duration, selectedSubtitleId, onSelectSubtit
       <div className="pro-export-note"><strong>{settings.backgroundMode === "solid" ? "MP4 · H.264 con fondo pieno" : settings.exportFormat === "movProRes4444" ? "Pipeline desktop FFmpeg" : "WebCodecs VP9 alpha"}</strong><span>{settings.backgroundMode === "solid" ? "Il formato alpha non viene applicato: l’export usa il colore scelto come sfondo compatibile con CapCut." : settings.exportFormat === "movProRes4444" ? "ProRes 4444 sarà disponibile nella build desktop con FFmpeg; il browser non lo simulerà con un codec sbagliato." : "La compatibilità viene verificata prima dell’export. Se il browser non conserva l’alpha, l’operazione si ferma e puoi scegliere il fondo pieno."}</span></div>
     </div>
     <p className="pro-status" role="status" aria-live="polite" aria-atomic="true">{status}</p>
+    <SmartSubtitleGenerationModal controller={smartGeneration} canInteract={subtitles.llmEnabled && cues.length > 0 && !generating && !reviewing} interactiveDisabledReason={!cues.length ? "Genera o importa prima almeno un blocco di sottotitoli." : !subtitles.llmEnabled ? "Abilita la redazione LLM locale per parlare con gli agenti." : "Attendi il completamento dell’operazione in corso."} onAgentInstruction={instructAgents} />
   </section>;
 }
