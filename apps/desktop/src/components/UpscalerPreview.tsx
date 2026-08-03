@@ -1,0 +1,85 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { RhythmBallProject } from "@rbs/project-schema";
+import { createUpscalerFrameRenderer } from "../services/upscaler-renderer";
+import { generateAiUpscalerPreview, type ModelLoadProgress } from "../services/upscaler-ai";
+import { upscalerModels } from "../services/upscaler-runtime";
+import { exportUpscaledVideo } from "../services/upscaler-video-exporter";
+import { useProjectStore } from "../store/project-store";
+
+type Settings = RhythmBallProject["animation"]["upscaler"];
+
+function loadImage(url: string): Promise<HTMLImageElement> { return new Promise((resolve, reject) => { const image = new Image(); image.onload = () => resolve(image); image.onerror = () => reject(new Error("Immagine non leggibile")); image.src = url; }); }
+
+export function UpscalerPreview({ settings, fullscreen = false }: { settings: Settings; fullscreen?: boolean }) {
+  const canvas = useRef<HTMLCanvasElement>(null); const scrollHost = useRef<HTMLDivElement>(null); const video = useRef<HTMLVideoElement>(null); const image = useRef<HTMLImageElement | null>(null);
+  const panStart = useRef<{ pointerId: number; x: number; y: number; left: number; top: number } | null>(null);
+  const aiPreview = useRef<HTMLCanvasElement | null>(null); const previewController = useRef<AbortController | null>(null); const exportController = useRef<AbortController | null>(null); const exportAction = useRef<() => void>(() => undefined); const projectName = useProjectStore((state) => state.project.project.name); const update = useProjectStore((state) => state.updateUpscaler);
+  const [ready, setReady] = useState(false); const [playing, setPlaying] = useState(false); const [time, setTime] = useState(0); const [exporting, setExporting] = useState(false); const [progress, setProgress] = useState(0); const [error, setError] = useState(""); const [previewGenerated, setPreviewGenerated] = useState(false); const [generatingPreview, setGeneratingPreview] = useState(false); const [modelProgress, setModelProgress] = useState<ModelLoadProgress | null>(null); const [previewRevision, setPreviewRevision] = useState(0); const [detailZoom, setDetailZoom] = useState(1); const [panning, setPanning] = useState(false);
+  const previewSize = useMemo(() => { const ratio = settings.finalWidth / Math.max(1, settings.finalHeight); return ratio >= 1 ? { width: 1400, height: Math.max(2, Math.round(1400 / ratio)) } : { width: Math.max(2, Math.round(1400 * ratio)), height: 1400 }; }, [settings.finalHeight, settings.finalWidth]);
+  useEffect(() => {
+    previewController.current?.abort(); aiPreview.current = null; setReady(false); setPlaying(false); setPreviewGenerated(false); setModelProgress(null); image.current = null; const item = video.current;
+    if (!settings.sourceUrl) return;
+    if (settings.sourceKind === "image") { let active = true; void loadImage(settings.sourceUrl).then((loaded) => { if (active) { image.current = loaded; setReady(true); } }).catch((reason: unknown) => { if (active) setError(reason instanceof Error ? reason.message : String(reason)); }); return () => { active = false; }; }
+    if (item) { item.src = settings.sourceUrl; item.load(); }
+  }, [settings.sourceKind, settings.sourceUrl]);
+  const generatePreview = useCallback(async () => {
+    const source = settings.sourceKind === "video" ? video.current : image.current; if (!settings.sourceUrl || !source || generatingPreview) return false;
+    previewController.current?.abort(); const controller = new AbortController(); previewController.current = controller; setGeneratingPreview(true); setError(""); setModelProgress(null);
+    try {
+      aiPreview.current = settings.model === "canvas" ? null : await generateAiUpscalerPreview(source, settings, setModelProgress, controller.signal);
+      setPreviewGenerated(true); setPreviewRevision((value) => value + 1);
+      return true;
+    } catch (reason) { if (!(reason instanceof DOMException && reason.name === "AbortError")) setError(reason instanceof Error ? reason.message : String(reason)); return false; }
+    finally { if (previewController.current === controller) previewController.current = null; setGeneratingPreview(false); }
+  }, [generatingPreview, settings]);
+  useEffect(() => { const handle = () => generatePreview(); window.addEventListener("upscaler:generate-preview", handle); return () => window.removeEventListener("upscaler:generate-preview", handle); }, [generatePreview]);
+  useEffect(() => { previewController.current?.abort(); aiPreview.current = null; setPreviewGenerated(false); setModelProgress(null); }, [settings.model, settings.sourceUrl, settings.tileSize, settings.tta]);
+  useEffect(() => {
+    const surface = canvas.current; if (!surface || !ready) return; surface.width = previewSize.width; surface.height = previewSize.height;
+    const context = surface.getContext("2d", { alpha: false }); if (!context) return; const render = createUpscalerFrameRenderer(surface.width, surface.height); let frame = 0;
+    const draw = () => { const source = settings.sourceKind === "video" ? video.current : image.current; if (source) render(context, source, previewGenerated ? settings : { ...settings, comparisonMode: "original", originalBlend: 0 }, true, aiPreview.current); if (settings.sourceKind === "video" && playing) frame = requestAnimationFrame(draw); };
+    draw(); return () => cancelAnimationFrame(frame);
+  }, [playing, previewGenerated, previewRevision, previewSize, ready, settings]);
+  const toggleVideo = () => { const item = video.current; if (!item) return; if (item.paused) void item.play().then(() => setPlaying(true)).catch(() => undefined); else { item.pause(); setPlaying(false); } };
+  const exportImage = async () => {
+    if (!image.current) return; setExporting(true); setError("");
+    try {
+      if (settings.model !== "canvas" && !previewGenerated) {
+        const generated = await generatePreview();
+        if (!generated || !aiPreview.current) return;
+      }
+      const output = document.createElement("canvas"); output.width = settings.finalWidth; output.height = settings.finalHeight; const context = output.getContext("2d", { alpha: false }); if (!context) throw new Error("Canvas di esportazione non disponibile.");
+      createUpscalerFrameRenderer(output.width, output.height)(context, image.current, settings, false, settings.model === "canvas" ? null : aiPreview.current);
+      const blob = await new Promise<Blob>((resolve, reject) => output.toBlob((value) => value ? resolve(value) : reject(new Error("Impossibile codificare l’immagine finale.")), "image/png"));
+      const url = URL.createObjectURL(blob); const link = document.createElement("a"); link.href = url; link.download = `${settings.sourceName.replace(/\.[^.]+$/, "") || "image"}-upscaled-${settings.finalWidth}x${settings.finalHeight}.png`; link.click(); window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); } finally { setExporting(false); }
+  };
+  const exportVideo = async () => {
+    if (!settings.sourceUrl) return; video.current?.pause(); setPlaying(false); setExporting(true); setProgress(0); setError(""); const controller = new AbortController(); exportController.current = controller;
+    try { await exportUpscaledVideo({ projectName, quality: "maximum", sourceVideoUrl: settings.sourceUrl, upscalerSettings: settings }, controller.signal, (status) => setProgress(status.progress)); }
+    catch (reason) { if (!(reason instanceof DOMException && reason.name === "AbortError")) setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { exportController.current = null; setExporting(false); }
+  };
+  exportAction.current = () => { if (settings.sourceKind === "image") void exportImage(); else void exportVideo(); };
+  useEffect(() => { const handleExport = () => exportAction.current(); window.addEventListener("upscaler:export", handleExport); return () => window.removeEventListener("upscaler:export", handleExport); }, []);
+  const changeZoom = (next: number) => {
+    const host = scrollHost.current; const centerX = host ? (host.scrollLeft + host.clientWidth / 2) / Math.max(1, host.scrollWidth) : .5; const centerY = host ? (host.scrollTop + host.clientHeight / 2) / Math.max(1, host.scrollHeight) : .5;
+    setDetailZoom(next);
+    if (host) requestAnimationFrame(() => { host.scrollLeft = Math.max(0, centerX * host.scrollWidth - host.clientWidth / 2); host.scrollTop = Math.max(0, centerY * host.scrollHeight - host.clientHeight / 2); });
+  };
+  const resetZoom = () => { setDetailZoom(1); const host = scrollHost.current; if (host) { host.scrollLeft = 0; host.scrollTop = 0; } };
+  const endPan = (element: HTMLDivElement, pointerId: number) => { if (typeof element.hasPointerCapture === "function" && element.hasPointerCapture(pointerId)) element.releasePointerCapture(pointerId); panStart.current = null; setPanning(false); };
+  return <div className="upscaler-preview">
+    <video ref={video} playsInline preload="metadata" onLoadedData={() => setReady(true)} onLoadedMetadata={() => setReady(true)} onTimeUpdate={(event) => setTime(event.currentTarget.currentTime)} onEnded={() => setPlaying(false)} />
+    {settings.sourceUrl ? <div ref={scrollHost} className={`upscaler-canvas-scroll${detailZoom > 1 ? " is-zoomed" : ""}${panning ? " is-panning" : ""}`} title={detailZoom > 1 ? "Trascina l’immagine per esplorare i dettagli" : undefined} onPointerDown={(event) => { if (detailZoom <= 1 || event.button !== 0) return; if (typeof event.currentTarget.setPointerCapture === "function") event.currentTarget.setPointerCapture(event.pointerId); panStart.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, left: event.currentTarget.scrollLeft, top: event.currentTarget.scrollTop }; setPanning(true); }} onPointerMove={(event) => { const start = panStart.current; if (!start || start.pointerId !== event.pointerId) return; event.currentTarget.scrollLeft = start.left - (event.clientX - start.x); event.currentTarget.scrollTop = start.top - (event.clientY - start.y); }} onPointerUp={(event) => endPan(event.currentTarget, event.pointerId)} onPointerCancel={(event) => endPan(event.currentTarget, event.pointerId)}><canvas ref={canvas} aria-label="Preview Upscaler" draggable={false} style={{ width: `${detailZoom * 100}%`, height: `${detailZoom * 100}%` }} /></div> : <div className="static-watermark-empty"><strong>Carica una foto o un video</strong><span>La preview mostrerà originale e versione migliorata alla stessa risoluzione finale.</span></div>}
+    {ready ? <div className="upscaler-preview-badges"><span>{previewGenerated ? (settings.comparisonMode === "split" ? "ORIGINALE  |  MIGLIORATO" : settings.comparisonMode.toUpperCase()) : "ORIGINALE · ANTEPRIMA NON GENERATA"}</span><span>{settings.finalWidth} × {settings.finalHeight}</span></div> : null}
+    {ready && !previewGenerated ? <button className="upscaler-preview-generate" type="button" disabled={generatingPreview} onClick={generatePreview}>{generatingPreview ? "Generazione anteprima…" : "Genera anteprima upscaling"}</button> : null}
+    {generatingPreview ? <div className="upscaler-model-progress"><strong>{!modelProgress ? "Preparazione upscaling…" : modelProgress.phase === "download" ? "Download modello" : modelProgress.phase === "initializing" ? "Inizializzazione modello" : modelProgress.phase === "inference" ? "Upscaling AI a tile" : modelProgress.phase === "cache" ? "Modello trovato in cache" : "Completamento"}</strong><progress max="1" value={modelProgress?.progress || undefined} /><span>{modelProgress ? `${Math.round(modelProgress.progress * 100)}%${modelProgress.loadedBytes ? ` · ${(modelProgress.loadedBytes / 1024 / 1024).toFixed(1)} MB${modelProgress.totalBytes ? ` / ${(modelProgress.totalBytes / 1024 / 1024).toFixed(1)} MB` : ""}` : ""}` : "Caricamento runtime e preparazione immagine"}</span></div> : null}
+    {ready ? <div className="upscaler-detail-controls"><label>Zoom dettaglio: {Math.round(detailZoom * 100)}%<input aria-label="Zoom dettaglio Upscaler" type="range" min="1" max="4" step=".25" value={detailZoom} onChange={(event) => changeZoom(Number(event.target.value))} /></label><button type="button" onClick={resetZoom}>Adatta</button><label>Confronto<select aria-label="Confronto dettagliato Upscaler" value={settings.comparisonMode} onChange={(event) => update({ comparisonMode: event.target.value as Settings["comparisonMode"] })}><option value="split">Separatore prima/dopo</option><option value="enhanced">Solo migliorato</option><option value="original">Solo originale</option><option value="blend">Fusione</option></select></label>{settings.comparisonMode === "split" ? <label>Separatore {Math.round(settings.comparisonPosition * 100)}%<input type="range" min="0" max="1" step=".01" value={settings.comparisonPosition} onChange={(event) => update({ comparisonPosition: Number(event.target.value) })} /></label> : <label>Mix originale {Math.round(settings.originalBlend * 100)}%<input type="range" min="0" max="1" step=".01" value={settings.originalBlend} onChange={(event) => update({ originalBlend: Number(event.target.value) })} /></label>}</div> : null}
+    {fullscreen ? <div className="upscaler-fullscreen-controls"><label>Modello<select value={settings.model} onChange={(event) => update({ model: event.target.value as Settings["model"] })}>{upscalerModels.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}</select></label><label>Vista<select value={settings.comparisonMode} onChange={(event) => update({ comparisonMode: event.target.value as Settings["comparisonMode"] })}><option value="split">Prima / dopo</option><option value="enhanced">Migliorato</option><option value="original">Originale</option><option value="blend">Fusione</option></select></label><label>Separatore<input type="range" min="0" max="1" step=".01" value={settings.comparisonPosition} onChange={(event) => update({ comparisonPosition: Number(event.target.value) })} /></label><label>Originale {Math.round(settings.originalBlend * 100)}%<input type="range" min="0" max="1" step=".01" value={settings.originalBlend} onChange={(event) => update({ originalBlend: Number(event.target.value) })} /></label><label>Contrasto {settings.adjustments.contrast}<input type="range" min="-100" max="100" value={settings.adjustments.contrast} onChange={(event) => update({ adjustments: { ...settings.adjustments, contrast: Number(event.target.value) } })} /></label><label>Saturazione {settings.adjustments.saturation}<input type="range" min="-100" max="100" value={settings.adjustments.saturation} onChange={(event) => update({ adjustments: { ...settings.adjustments, saturation: Number(event.target.value) } })} /></label><label>Nitidezza {settings.adjustments.sharpness}<input type="range" min="0" max="100" value={settings.adjustments.sharpness} onChange={(event) => update({ adjustments: { ...settings.adjustments, sharpness: Number(event.target.value) } })} /></label><button type="button" disabled={generatingPreview} onClick={generatePreview}>Rigenera</button></div> : null}
+    {ready && settings.sourceKind === "video" ? <div className="upscaler-video-transport"><button type="button" onClick={toggleVideo}>{playing ? "Pausa" : "Play"}</button><input aria-label="Posizione video Upscaler" type="range" min="0" max={Math.max(.01, settings.durationSeconds)} step=".01" value={time} onChange={(event) => { const next = Number(event.target.value); if (video.current) video.current.currentTime = next; setTime(next); }} /><span>{time.toFixed(1)} / {settings.durationSeconds.toFixed(1)} s</span></div> : null}
+    {ready && settings.sourceKind === "image" ? <button className="upscaler-export-image" type="button" disabled={exporting || generatingPreview} onClick={() => void exportImage()}>{exporting ? "Generazione ed esportazione…" : generatingPreview ? "Generazione AI in corso…" : settings.model !== "canvas" && !previewGenerated ? "Genera upscaling e scarica PNG" : "Scarica PNG alla risoluzione finale"}</button> : null}
+    {ready && settings.sourceKind === "video" ? <div className="upscaler-video-export"><button type="button" disabled={exporting} onClick={() => void exportVideo()}>{exporting ? `Upscaling ${Math.round(progress * 100)}%` : "Esporta video upscalato offline"}</button>{exporting ? <button type="button" onClick={() => exportController.current?.abort()}>Annulla</button> : null}</div> : null}
+    {error ? <div className="upscaler-preview-error">{error}</div> : null}
+  </div>;
+}

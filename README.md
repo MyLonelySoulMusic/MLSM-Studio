@@ -1,8 +1,8 @@
-# Dynamic Sound Animation Studio
+# MLSM Studio
 
-![Dynamic Sound Animation Studio](apps/desktop/public/brand/dynamic-sound-logo.svg)
+![MLSM Studio — My Lonely Soul Music Studio](apps/desktop/public/mlsm-studio-favicon-192.png)
 
-Studio web locale per creare animazioni professionali sincronizzate alla musica: scene 3D, visualizer, personaggi, lip sync e sottotitoli animati modificabili.
+**My Lonely Soul Music Studio** è uno studio web locale per creare animazioni professionali sincronizzate alla musica: scene 3D, visualizer, personaggi, lip sync, sottotitoli animati e strumenti per foto e video.
 
 ## Requisiti
 
@@ -49,6 +49,10 @@ L'avvio del server è sempre manuale: nessun passaggio di build o test avvia aut
 8. Premi **Esporta**, scegli nome e destinazione e attendi il video finale con audio.
 
 Durante la preview premi `Spazio` per alternare play e pausa. La scorciatoia non interviene mentre stai scrivendo in un campo o nella casella delle frasi neon.
+
+I pannelli laterali sono ridimensionabili trascinando i due separatori verticali: ciascun pannello può variare da 180 a 480 px, mentre la viewport conserva sempre una larghezza minima utilizzabile. La scelta viene salvata nel browser; doppio clic sul separatore ripristina la misura iniziale e le frecce permettono una regolazione accessibile da tastiera. Nella barra della viewport, **Tutto schermo** mostra soltanto l’animazione; **Torna all’editor** oppure `Esc` ripristinano l’interfaccia completa.
+
+L’interfaccia usa esclusivamente la palette del prodotto: bianco, nero e rosa, invertendo bianco e nero fra modalità Giorno e Notte. Anche Assistente Studio e i pannelli meno recenti ereditano queste variabili. Le modalità con una palette iniziale esplicita a tre colori, fra cui Pixels Subtitles e Pro Subtitles, partono da nero `#000000`, bianco `#ffffff` e rosa `#ed75a7`; il caricamento di una cover può poi sostituirli tramite l’estrazione automatica.
 
 L'analizzatore distingue euristicamente grancassa, rullante, piatti, pianoforte, chitarra e violini/strings usando distribuzione spettrale, piattezza, centroide e decadimento. La scena automatica traduce i riconoscimenti in parti professionali di batteria e segue la beat grid principale, non ogni onset; sopra 155 BPM usa un'interpretazione half-time. Tra due oggetti prevalgono i rimbalzi, mentre solo una parte dei passaggi diventa uno scorrimento laterale. I segmenti a bassa energia possono produrre cadute nel vuoto. Il viaggio usa anche la profondità, alternando movimenti in avanti e indietro sull'asse Z; la camera segue la biglia con parallasse e mantiene pochi step contemporaneamente in campo.
 
@@ -118,7 +122,7 @@ Il labiale di Teddy Sing è applicato al modello 3D: analizza intensità, attacc
 
 I pulsanti `9:16` e `16:9` cambiano la cornice effettiva della preview e causano il ridimensionamento del renderer WebGL nel formato scelto.
 
-L'esportazione registra in tempo reale la stessa scena mostrata nella preview e aggiunge l'audio. Il browser sceglie automaticamente MP4 H.264/AAC quando disponibile, altrimenti WebM VP9/Opus. Nel dialogo puoi scegliere **Massima** (predefinita, fino a 160 Mbit/s) oppure **Alta**; la stima della dimensione si aggiorna in base alla scelta. L'audio viene richiesto a 320 kbit/s ma, durante l'export, è instradato soltanto nel registratore e non nelle cuffie o negli altoparlanti. Il compositing conserva la gestione colore AgX della preview, usa vignettatura molto tenue e non applica filtri opachi aggiuntivi. Nei browser compatibili i chunk vengono scritti direttamente nel file finale scelto dall’utente, evitando di duplicare il video nella quota privata del browser. La cartella temporanea viene usata soltanto come fallback, ripulendo eventuali export incompleti.
+L'esportazione delle scene 3D registra in tempo reale la stessa scena mostrata nella preview e aggiunge l'audio. Il browser sceglie automaticamente MP4 H.264/AAC quando disponibile, altrimenti WebM VP9/Opus. Nel dialogo puoi scegliere **Massima** (predefinita, fino a 160 Mbit/s) oppure **Alta**; la stima della dimensione si aggiorna in base alla scelta. L'audio viene richiesto a 320 kbit/s ma, durante l'export, è instradato soltanto nel registratore e non nelle cuffie o negli altoparlanti. Il compositing conserva la gestione colore AgX della preview, usa vignettatura molto tenue e non applica filtri opachi aggiuntivi. Nei browser compatibili i chunk vengono scritti direttamente nel file finale scelto dall’utente, evitando di duplicare il video nella quota privata del browser. La cartella temporanea viene usata soltanto come fallback, ripulendo eventuali export incompleti.
 
 La sezione **Sottotitoli globali** è disponibile nel pannello sinistro in ogni modalità. Incolla il testo ufficiale, scegli una lunghezza indicativa e avvia la generazione: il numero di parole è un obiettivo morbido, mentre pause vocali, punteggiatura, durata massima, due righe e velocità di lettura governano realmente i tagli. Il selettore offre **Whisper Tiny**, **Base** e **Medium** locali; se Whisper restituisce più parole in un singolo chunk, il programma ridistribuisce correttamente i timestamp interni invece di trattarlo come una frase lunghissima. Il testo ufficiale corregge soltanto parole allineabili e non viene mai spalmato proporzionalmente su sezioni non pronunciate.
 
@@ -132,9 +136,48 @@ La corsia **Sottotitoli** resta visibile anche quando è vuota. Puoi inserire un
 
 La modalità **Add Subtitles** importa direttamente un video MP4, WebM, MOV o M4V, ne usa l’audio come clock principale e mostra soltanto i controlli pertinenti: video, formato, adattamento `cover/contain`, oscuramento e sottotitoli. Strumenti, sfera, illuminazione di scena e generatori 3D restano nascosti. Preview ed export condividono lo stesso fotogramma video e la stessa animazione dei sottotitoli.
 
-### ProSubtitles
+### Photo & Video Studio · Static Watermark Remover
 
-La modalità **ProSubtitles** crea un livello tipografico separato da sovrapporre in CapCut o in un altro editor, oppure un MP4 già completo di video originale e sottotitoli incorporati. Nel layer trasparente il video caricato è soltanto una guida visiva e temporale; nell’export completo ogni frame sorgente viene decodificato e composto una sola volta mantenendo risoluzione, ordine, timestamp e durata originali, inclusi i video VFR. Un controllo anti-drop annulla il file se il conteggio finale differisce anche di un frame. L’audio originale viene muxato senza essere riprodotto durante l’export. La cornice di lavoro può essere impostata in `9:16` oppure `16:9`.
+Nel selettore **Area** scegli **Photo & Video Studio**, quindi **Static Watermark Remover**. La modalità è destinata esclusivamente a contenuti propri o per i quali si dispone dell’autorizzazione necessaria. Carica il video con watermark e la fotografia originale pulita usata per generarlo; la timeline adotta durata e audio del video e nasconde corsie e controlli non pertinenti.
+
+Trascina direttamente sulla preview per delimitare il watermark. La selezione resta normalizzata rispetto al video ed è regolabile anche numericamente. Per riallineare una fotografia non perfettamente coincidente sono disponibili adattamento `cover`, `contain` o `stretch`, scala e offset orizzontale/verticale. **Sfumatura esterna** parte sempre da `0 px`: l’intera selezione viene quindi sostituita in modo pieno. Impostando da 1 a 24 px, la dissolvenza interessa soltanto la piccola fascia di video confinante fuori dalla selezione, senza rendere trasparenti i pixel corretti al suo interno. La correzione automatica della luminosità parte dal `5%`. Il comando **Anteprima zona rimozione** apre a schermo intero la regione trattata al centro insieme a un’ampia porzione del video circostante, senza cornice, e replica sotto l’immagine i controlli di allineamento, fusione, opacità e luminosità per una regolazione immediata. La cornice rosa e l’oscuramento esterno sono soltanto guide di lavoro e non compaiono nel file.
+
+L’esportazione non registra la preview. Decodifica ogni frame sorgente in ordine di presentazione, conserva dimensioni, timestamp, durata e frame rate variabile, applica la stessa funzione di compositing usata nella preview e ricodifica H.264 scegliendo automaticamente il backend hardware o software più stabile. I pacchetti audio originali vengono copiati senza ricodifica e senza essere riprodotti. Il contenitore MP4 finalizzato viene riaperto e confrontato col numero di frame sorgente: anche un solo frame mancante annulla la consegna del file parziale.
+
+### Photo & Video Studio · Upscaler
+
+La modalità **Upscaler** accetta fotografie e video. `Canvas Enhanced` conserva separatamente il miglioramento tradizionale immediato e senza download. I profili neurali disponibili sono `RealESRGAN_x4plus`, `RealESRGAN_x2plus`, `RealESRNet_x4plus`, `RealESRGAN_x4plus_anime_6B`, `realesr-general-x4v3` e `realesr-animevideov3`; ciascuno espone destinazione d’uso, vantaggi, limiti, fattore nativo e costo indicativo. I checkpoint ONNX compatibili vengono scaricati al primo utilizzo mostrando percentuale e MB, poi restano nella Cache Storage locale. RealESRNet e AnimeVideo v3 usano i checkpoint PyTorch ufficiali tramite il servizio locale collegato anche alla web app. Il rilevamento hardware distingue NVIDIA CUDA, Apple Silicon/Metal, WebGPU e CPU; `Automatico` sceglie il percorso migliore, ma il motore resta modificabile.
+
+L’utente imposta tile, TTA, rapporto e risoluzione finale fino a 16384 px. I preset Full HD/QHD/4K/8K ruotano automaticamente per una sorgente verticale e adattano il contenuto entro la risoluzione nominale conservando il rapporto originale, senza stretching o crop. **Genera anteprima upscaling**, disponibile sia nei controlli sia sulla viewport, distingue l’originale dalla preview elaborata; cambiando sorgente, modello, tile o TTA il risultato viene invalidato. In modalità a tutto schermo una plancia resta sotto l’immagine e permette di cambiare modello, confronto, separatore, fusione, contrasto, saturazione e nitidezza e di rigenerare. Originale e migliorato possono poi essere confrontati con split, vista singola o fusione alla stessa dimensione finale. Esposizione, contrasto, luci, ombre, bianchi, neri, saturazione, vividezza, temperatura, tinta, nitidezza e riduzione rumore sono applicati nella stessa pipeline della preview. Le immagini vengono esportate in PNG alla risoluzione scelta; i video vengono elaborati offline preservando timestamp, VFR e pacchetti audio, quindi verificati contro il numero di frame sorgente prima della consegna.
+
+La pipeline neurale riprende l’impostazione del precedente progetto `Video Editor`: i modelli fotografici completi pesano circa 67 MB e usano l’architettura RRDB a 23 blocchi. La sorgente non viene più ridotta a 384 px: viene processata interamente a tile con 10 px di sovrapposizione, ricomposta direttamente alla risoluzione finale e, con TTA attivo, mediata con una seconda inferenza specchiata. Durante il lavoro restano visibili download, inizializzazione e percentuale dei tile. La preview permette zoom dal 100 al 400%, scorrimento, split e mix con l’originale; la stessa funzione a tile viene richiamata dall’export video per ciascun frame.
+
+#### Servizio PyTorch locale per la web app
+
+`RealESRNet_x4plus` e gli altri checkpoint ufficiali `.pth` possono essere eseguiti dalla stessa interfaccia web tramite il servizio locale, senza attendere la build desktop. Preparazione iniziale:
+
+Il progetto blocca Python `3.11.9` in `.python-version`. Con `pyenv` già installato, la configurazione crea un `.venv` isolato e installa tutte le dipendenze senza toccare il Python globale:
+
+```bash
+npm run upscaler:setup
+npm run upscaler:server
+```
+
+Il primo comando va eseguito una sola volta; il secondo avvia esplicitamente il servizio usando `.venv/bin/python`. Non è necessario attivare manualmente il virtual environment.
+
+Durante lo sviluppo non serve più un secondo terminale: Vite avvia e arresta il servizio insieme alla web app. Funziona anche sovrascrivendo la porta della UI:
+
+```bash
+npm run dev --workspace @rbs/desktop -- --port 1421
+```
+
+Nel terminale compare sempre la riga `[PyTorch]` con PID, indirizzo o causa dell’eventuale mancato avvio. Se sulla porta `8765` esiste già un servizio sano, Vite lo riutilizza senza crearne un duplicato. I checkpoint restano separati dal runtime e vengono scaricati soltanto alla prima generazione con il singolo modello selezionato.
+
+Il servizio ascolta esclusivamente su `127.0.0.1:8765`, non viene avviato automaticamente e conserva i checkpoint in `.upscaler-cache/pytorch/`, esclusa da Git. L’interfaccia avvia il download al primo utilizzo, ne interroga percentuale e MB e invia localmente foto o frame video. Su Apple Silicon seleziona prima PyTorch MPS/Metal; su macchine NVIDIA usa CUDA e infine CPU. Se il servizio non è disponibile, i modelli ONNX continuano a usare WebGPU/WASM nel browser.
+
+### Pro Subtitles
+
+La modalità **Pro Subtitles** crea un livello tipografico separato da sovrapporre in CapCut o in un altro editor, oppure un MP4 già completo di video originale e sottotitoli incorporati. Nel layer trasparente il video caricato è soltanto una guida visiva e temporale; nell’export completo ogni frame sorgente viene decodificato e composto una sola volta mantenendo risoluzione, ordine, timestamp e durata originali, inclusi i video VFR. Un controllo anti-drop annulla il file se il conteggio finale differisce anche di un frame. L’audio originale viene muxato senza essere riprodotto durante l’export. La cornice di lavoro può essere impostata in `9:16` oppure `16:9`.
 
 Il flusso consigliato è:
 
@@ -154,6 +197,22 @@ L’export web offre due flussi reali:
 - **MP4 H.264 su sfondo pieno** nel colore scelto, come fallback universale per CapCut; se H.264 non è disponibile, l’eventuale WebM VP9 opaco richiede un consenso esplicito.
 
 **MOV Apple ProRes 4444 con alpha non è prodotto dalla versione web.** Richiede una futura build desktop/native con FFmpeg o VideoToolbox: l’interfaccia lo indica come non disponibile e non genera un MOV fittizio o privo di trasparenza. Il supporto WebM alpha può variare fra versioni desktop e mobile di CapCut; prima di un export lungo è consigliata una breve prova, mantenendo lo sfondo pieno come fallback. I dettagli tecnici sono descritti in [Export video](docs/export.md).
+
+### Pixels Subtitles
+
+La modalità **Pixels Subtitles** mantiene la cover pulita, intera e leggermente rientrata al centro anche quando immagine e video hanno entrambi rapporto 9:16. Un’area protetta impedisce ai pixel di invadere l’immagine. Ai lati e nel perimetro esterno, celle nette raggiungono sempre il bordo della cover e usano tutti e tre i colori reali della palette. Le frequenze cambiano esclusivamente densità e distribuzione cromatica, mai altezza o estensione del campo. La dimensione predefinita è 27 px. I kick e gli snare riconosciuti dall’analisi condivisa con la fisica della sfera attivano scambi deterministici fra coppie di celle: il kick muove gruppi più ampi, lo snare scambi più stretti e rapidi. Margine della cover, dimensione, velocità, reattività e scie sono configurabili.
+
+Le frasi vengono rasterizzate come tipografia pixel nitida sopra la cover, con adattamento automatico fino a tre righe. Sono incorporati localmente sei font pixel OFL: **Pixelify Sans**, **Press Start 2P**, **Silkscreen**, **VT323**, **Tiny5** e **Jersey 10**. Si può scegliere quale dei tre colori della palette usare, la posizione verticale e se applicare un’ombra pixel; colore e distanza dell’ombra sono modificabili. I sottotitoli possono essere importati da SRT/WebVTT, generati con Whisper, revisionati dal flusso LLM locale e modificati come blocchi indipendenti nella timeline. Preview ed export condividono lo stesso renderer deterministico.
+
+L’export di **Pixels Subtitles** non registra la preview in tempo reale. Genera offline ogni frame alla risoluzione selezionata, usando `frameIndex / fps` come clock, e attende che l’encoder H.264 abbia acquisito il frame prima di passare al successivo. L’audio viene transcodificato e muxato in AAC senza essere riprodotto. Prima della consegna il file MP4 viene riaperto: se il numero di pacchetti video non coincide con quello atteso o manca la traccia audio, l’export viene rifiutato invece di salvare un video congelato o incompleto. Questo flusso può essere più lento della durata del brano, ma non riduce volontariamente FPS o risoluzione quando la macchina è sotto carico.
+
+### From 9:16 to 16:9
+
+La modalità **From 9:16 to 16:9** crea una composizione orizzontale partendo da un video verticale. Il video resta intero al centro; una fotografia 9:16 riempie il lato scelto e viene specchiata sul lato opposto. Una cover separata alimenta il cubo in vetro. Il cubo percorre continuamente il canvas e rimbalza geometricamente sui quattro bordi senza vibrazioni o salti generati dagli impulsi musicali. Anche la rotazione è continua: ogni 8 quarti cambia verso e lo cambia inoltre quando tocca una parete, unificando gli eventi quasi coincidenti; cadenza, velocità della rotazione e velocità del moto sui bordi sono controlli indipendenti. L’analisi audio divide realmente le 48 bande stereo sui due lati. Per le barre si può scegliere la palette estratta dalla cover, quella estratta dall’immagine laterale oppure una palette manuale di tre colori. Pioggia, fulmini, piume e particelle si abilitano e regolano nel pannello sinistro, inclusa l’opacità; le particelle hanno un nucleo opaco e un alone intermittente da lucciola. La profondità si gestisce come una pila di tracce nella timeline. Tutti i livelli, compresi immagini laterali, cubo, video e spettro, sono riordinabili tramite trascinamento o frecce. La timeline dispone di una maniglia superiore per modificarne l’altezza e di scorrimento verticale permanente a destra; la preview viene sempre ricontenuta integralmente nella riga superiore. Gli effetti sono sovrapponibili e preview ed export seguono lo stesso ordine. Il pulsante **Modifica immagine specchiata** apre una modale con luminosità, esposizione, contrasto, saturazione, temperatura e sfocatura non distruttive.
+
+La preview usa un profilo di lavoro ottimizzato a 30 fps: canvas e texture del cubo sono limitati, mentre densità di particelle, glow, sfocatura e antialiasing vengono alleggeriti. La cornice 16:9 è rimossa dal flusso di dimensionamento della griglia, centrata in posizione assoluta e adattata sia alla larghezza sia all’altezza interne effettivamente disponibili; non può quindi espandere il workspace o finire sotto la timeline. Non vengono semplificati clock audio, movimento, spettro, livelli o composizione. L’export offline ricostruisce invece ogni frame alla risoluzione e agli fps selezionati con texture, effetti e antialiasing alla qualità completa.
+
+L’export è offline: decodifica il video sorgente, ricostruisce ogni frame al timestamp esatto e attende l’encoder prima di continuare. L’audio viene muxato senza riproduzione e il file viene consegnato soltanto se il controllo finale ritrova tutti i frame attesi. Sono disponibili Full HD, QHD/2K, 4K, 5K e 8K fino a 120 fps; con un video centrale 1080 × 1920 il preset suggerito è 4K 3840 × 2160.
 
 In basso a destra è disponibile **Assistente Studio**, una chat di aiuto che usa
 Qwen2.5 0.5B Instruct, scaricato e memorizzato localmente al primo utilizzo. Il bot recupera dalla knowledge base soltanto

@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { WaveformCanvas } from "./WaveformCanvas";
+import { useProjectStore } from "../store/project-store";
 
 interface TimelineEvent {
   id: string;
@@ -30,11 +31,14 @@ interface TimelineSubtitle {
   accentColors?: readonly string[];
 }
 
+export interface TimelineCompositorLayer { id: string; label: string; color: string; locked: boolean; opacity: number }
+
 interface TimelineProps {
   peaks: number[];
   events: TimelineEvent[];
   beats: number[];
   subtitleOnly?: boolean;
+  mediaOnly?: boolean;
   showPhonemes?: boolean;
   phonemes?: TimelinePhoneme[];
   selectedPhonemeId?: string | null;
@@ -42,6 +46,8 @@ interface TimelineProps {
   selectedSubtitleId?: string | null;
   selectedEventId: string | null;
   selectedEventIds: string[];
+  compositorLayers?: TimelineCompositorLayer[];
+  timelineHeight?: number;
   currentTime: number;
   duration: number;
   playing: boolean;
@@ -64,6 +70,8 @@ interface TimelineProps {
   onMoveEvent: (id: string, time: number) => void;
   onDeleteEvent: (id: string) => void;
   onDeleteEvents: (ids: readonly string[]) => void;
+  onMoveCompositorLayer?: (id: string, direction: "up" | "down") => void;
+  onResizeHeight?: (height: number) => void;
 }
 
 type SubtitleTrimEdge = "start" | "end";
@@ -155,11 +163,13 @@ function layoutSubtitleLanes(subtitles: readonly TimelineSubtitle[]): SubtitleLa
 }
 
 export function Timeline(props: TimelineProps) {
+  const staticWatermarkMode = useProjectStore((state) => state.project.animation.modeId === "staticWatermark");
   const {
     peaks,
     events,
     beats,
     subtitleOnly = false,
+    mediaOnly = staticWatermarkMode,
     showPhonemes = false,
     phonemes = [],
     selectedPhonemeId = null,
@@ -167,6 +177,8 @@ export function Timeline(props: TimelineProps) {
     selectedSubtitleId = null,
     selectedEventId,
     selectedEventIds,
+    compositorLayers = [],
+    timelineHeight = 270,
     currentTime,
     duration,
     playing,
@@ -188,24 +200,20 @@ export function Timeline(props: TimelineProps) {
     onAddEvent,
     onMoveEvent,
     onDeleteEvent,
-    onDeleteEvents
+    onDeleteEvents,
+    onMoveCompositorLayer,
+    onResizeHeight
   } = props;
   const ready = duration > 0;
   const [zoom, setZoom] = useState(1);
   const selectedPhoneme = phonemes.find((cue) => cue.id === selectedPhonemeId);
   const selectedSubtitle = subtitles.find((cue) => cue.id === selectedSubtitleId);
-  const showSubtitles = true;
+  const showSubtitles = !mediaOnly;
   const subtitleLaneLayout = layoutSubtitleLanes(subtitles);
-  const subtitleLaneHeight = subtitleLaneLayout.laneCount * timelineRowHeight;
-  const fixedTrackHeight = 90 + (subtitleOnly ? 0 : timelineRowHeight * 2) + (showPhonemes ? timelineRowHeight : 0);
+  const subtitleLaneHeight = showSubtitles ? subtitleLaneLayout.laneCount * timelineRowHeight : 0;
+  const fixedTrackHeight = 90 + compositorLayers.length * timelineRowHeight + (subtitleOnly || mediaOnly ? 0 : timelineRowHeight * 2) + (showPhonemes ? timelineRowHeight : 0);
   const trackContentHeight = fixedTrackHeight + subtitleLaneHeight;
-  const trackLabelRows = subtitleOnly
-    ? showPhonemes
-      ? `90px ${timelineRowHeight}px ${subtitleLaneHeight}px`
-      : `90px ${subtitleLaneHeight}px`
-    : showPhonemes
-      ? `90px ${timelineRowHeight}px ${timelineRowHeight}px ${timelineRowHeight}px ${subtitleLaneHeight}px`
-      : `90px ${timelineRowHeight}px ${timelineRowHeight}px ${subtitleLaneHeight}px`;
+  const trackLabelRows = ["90px", ...compositorLayers.map(() => `${timelineRowHeight}px`), ...(subtitleOnly || mediaOnly ? [] : [`${timelineRowHeight}px`, `${timelineRowHeight}px`]), ...(showPhonemes ? [`${timelineRowHeight}px`] : []), ...(showSubtitles ? [`${subtitleLaneHeight}px`] : [])].join(" ");
   const pointerSessionCleanups = useRef(new Set<() => void>());
 
   useEffect(() => () => {
@@ -252,6 +260,17 @@ export function Timeline(props: TimelineProps) {
     if (pointerId !== null && typeof target.setPointerCapture === "function") {
       try { target.setPointerCapture(pointerId); } catch { /* Window listeners remain the fallback. */ }
     }
+  };
+
+  const beginTimelineResize = (event: ReactPointerEvent<HTMLElement>) => {
+    if (!onResizeHeight) return;
+    event.preventDefault();
+    const startY = event.clientY;
+    const startHeight = timelineHeight;
+    startPointerSession(event, {
+      move: (pointer) => onResizeHeight(startHeight + startY - pointer.clientY),
+      end: (pointer) => onResizeHeight(startHeight + startY - pointer.clientY)
+    });
   };
 
   const beginDrag = (event: ReactPointerEvent<HTMLButtonElement>, marker: TimelineEvent) => {
@@ -313,6 +332,29 @@ export function Timeline(props: TimelineProps) {
     });
   };
 
+  const beginCompositorLayerDrag = (event: ReactPointerEvent<HTMLElement>, layer: TimelineCompositorLayer) => {
+    if (layer.locked || !onMoveCompositorLayer) return;
+    event.preventDefault();
+    const handle = event.currentTarget;
+    const clip = handle.closest<HTMLElement>(".compositor-layer-clip");
+    const startY = event.clientY;
+    let deltaY = 0;
+    startPointerSession(event, {
+      move: (pointer) => {
+        deltaY = pointer.clientY - startY;
+        if (clip) clip.style.transform = `translateY(${Math.max(-timelineRowHeight * 2, Math.min(timelineRowHeight * 2, deltaY))}px)`;
+      },
+      end: () => {
+        if (clip) clip.style.transform = "";
+        const steps = Math.min(compositorLayers.length - 1, Math.floor((Math.abs(deltaY) + timelineRowHeight / 2) / timelineRowHeight));
+        if (steps === 0) return;
+        const direction = deltaY < 0 ? "up" : "down";
+        for (let step = 0; step < steps; step += 1) onMoveCompositorLayer(layer.id, direction);
+      },
+      cancel: () => { if (clip) clip.style.transform = ""; }
+    });
+  };
+
   const resizeSubtitle = (cue: TimelineSubtitle, edge: SubtitleTrimEdge, requestedTime: number, previewElement?: HTMLElement) => {
     const range = subtitleTrimRange(cue, edge, requestedTime, duration);
     if (previewElement) applySubtitleRangePreview(previewElement, range, duration);
@@ -364,6 +406,7 @@ export function Timeline(props: TimelineProps) {
       if (deleted) event.preventDefault();
     }
   }}>
+    {onResizeHeight ? <div className="timeline-resize-handle" role="separator" aria-label="Ridimensiona altezza timeline" aria-orientation="horizontal" aria-valuemin={150} aria-valuenow={Math.round(timelineHeight)} tabIndex={0} title="Trascina per allargare o stringere la timeline · doppio clic per ripristinare" onPointerDown={beginTimelineResize} onDoubleClick={() => onResizeHeight(270)} onKeyDown={(event) => { if (event.key === "ArrowUp") { event.preventDefault(); onResizeHeight(timelineHeight + 20); } else if (event.key === "ArrowDown") { event.preventDefault(); onResizeHeight(timelineHeight - 20); } }}><span /></div> : null}
     <div className="transport">
       <button onClick={() => onSeek(Math.max(0, currentTime - 5))} disabled={!ready}>↶ 5</button>
       <button onClick={() => onSeek(0)} disabled={!ready}>◀</button>
@@ -372,8 +415,8 @@ export function Timeline(props: TimelineProps) {
       <button aria-label="Frame precedente" onClick={() => onSeek(Math.max(0, currentTime - subtitleFrameSeconds))} disabled={!ready || playing}>‹|</button>
       <button aria-label="Frame successivo" onClick={() => onSeek(Math.min(duration, currentTime + subtitleFrameSeconds))} disabled={!ready || playing}>|›</button>
       <button className={looping ? "active-control" : ""} aria-pressed={looping} onClick={() => onLoop(!looping)} disabled={!ready}>Loop</button>
-      {subtitleOnly ? null : <button onClick={() => onAddEvent(currentTime)} disabled={!ready}>+ Marker</button>}
-      <button className="add-subtitle-block" onClick={() => onAddSubtitle?.(currentTime)} disabled={!ready}>+ Sottotitolo</button>
+      {subtitleOnly || mediaOnly ? null : <button onClick={() => onAddEvent(currentTime)} disabled={!ready}>+ Marker</button>}
+      {mediaOnly ? null : <button className="add-subtitle-block" onClick={() => onAddSubtitle?.(currentTime)} disabled={!ready}>+ Sottotitolo</button>}
       {selectedSubtitle ? <>
         <button className="split-phoneme" onClick={() => onSplitSubtitle?.(selectedSubtitle.id, currentTime)}>Dividi frase</button>
         <button className="delete-selection" onClick={() => onDeleteSubtitle?.(selectedSubtitle.id)}>Elimina frase</button>
@@ -385,10 +428,11 @@ export function Timeline(props: TimelineProps) {
       <span className="master-clock">AUDIO MASTER</span>
       <label className="zoom">Zoom <input aria-label="Zoom timeline" type="range" min="1" max="6" step=".25" value={zoom} onChange={(event) => setZoom(Number(event.target.value))} /></label>
     </div>
-    <div className={`tracks${subtitleOnly ? " subtitle-only" : ""}${showPhonemes ? " has-phonemes" : ""}${showSubtitles ? " has-subtitles" : ""}${subtitleLaneLayout.laneCount > 1 ? " has-stacked-subtitles" : ""}`} style={{ overflowY: trackContentHeight > 201 ? "auto" : "hidden", alignItems: "start" }}>
+    <div className={`tracks${subtitleOnly ? " subtitle-only" : ""}${mediaOnly ? " media-only" : ""}${showPhonemes ? " has-phonemes" : ""}${showSubtitles ? " has-subtitles" : ""}${subtitleLaneLayout.laneCount > 1 ? " has-stacked-subtitles" : ""}`} style={{ overflowY: "scroll", alignItems: "start" }}>
       <div className="track-labels" style={{ gridTemplateRows: trackLabelRows, minHeight: trackContentHeight }}>
         <strong>Audio</strong>
-        {subtitleOnly ? null : <><span>Beat</span><span>Eventi</span></>}
+        {compositorLayers.map((layer) => <span className="compositor-layer-label" key={layer.id}><i style={{ backgroundColor: layer.color }} />{layer.label}</span>)}
+        {subtitleOnly || mediaOnly ? null : <><span>Beat</span><span>Eventi</span></>}
         {showPhonemes ? <span>Fonemi</span> : null}
         {showSubtitles ? <span>Sottotitoli</span> : null}
       </div>
@@ -396,7 +440,8 @@ export function Timeline(props: TimelineProps) {
         <div className="track-content" style={{ width: `${zoom * 100}%` }}>
           <div className="ruler">0:00 <i>{formatTime(duration / 3)}</i><i>{formatTime(duration * 2 / 3)}</i><i>{formatTime(duration)}</i></div>
           {ready ? <WaveformCanvas peaks={peaks} progress={currentTime / duration} onSeek={(progress) => onSeek(progress * duration)} /> : <div className="empty-waveform">Importa un MP3, WAV o video</div>}
-          {subtitleOnly ? null : <>
+          {compositorLayers.map((layer, index) => <div className={`marker-lane compositor-layer-lane${layer.locked ? " locked" : ""}`} key={layer.id}><div className="compositor-layer-clip" style={{ "--layer-color": layer.color, "--layer-opacity": layer.opacity } as CSSProperties}><span className="compositor-layer-handle" title={`Trascina ${layer.label} sopra o sotto`} onPointerDown={(event) => beginCompositorLayerDrag(event, layer)}>⋮⋮</span><strong>{layer.label}</strong><small>{layer.locked ? "Base" : `${Math.round(layer.opacity * 100)}%`}</small>{layer.locked ? <span className="compositor-layer-lock" aria-label={`${layer.label} bloccato`}>⌑</span> : <span className="compositor-layer-actions"><button type="button" aria-label={`Sposta ${layer.label} sopra`} disabled={index === 0} onClick={() => onMoveCompositorLayer?.(layer.id, "up")}>↑</button><button type="button" aria-label={`Sposta ${layer.label} sotto`} disabled={index === compositorLayers.length - 1} onClick={() => onMoveCompositorLayer?.(layer.id, "down")}>↓</button></span>}</div></div>)}
+          {subtitleOnly || mediaOnly ? null : <>
             <div className="marker-lane beat-lane">{beats.map((time, index) => {
               const occupied = events.some((marker) => Math.abs(marker.timeSeconds - time) < .035 && marker.enabled && marker.action !== "nearMiss" && marker.action !== "freeFall");
               return occupied ? <i key={`${time}-${index}`} style={{ left: `${time / duration * 100}%` }} /> : <button type="button" className="beat-add" aria-label={`Aggiungi elemento sul beat ${index + 1}`} title={`Aggiungi elemento · ${time.toFixed(3)} s`} key={`${time}-${index}`} style={{ left: `${time / duration * 100}%` }} onClick={() => onAddEvent(time)}>+</button>;

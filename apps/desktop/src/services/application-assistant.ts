@@ -28,7 +28,7 @@ export interface ApplicationAssistantMemory {
 export const emptyApplicationAssistantMemory: ApplicationAssistantMemory = { summary: "", turnCount: 0 };
 export const APPLICATION_ASSISTANT_MEMORY_KEY = "dynamic-sound-animation-studio.assistant-memory.v2";
 
-export const APPLICATION_ASSISTANT_SYSTEM_PROMPT = `Sei Studio Bot, l'assistente integrato di Dynamic Sound Animation Studio.
+export const APPLICATION_ASSISTANT_SYSTEM_PROMPT = `Sei Studio Bot, l'assistente integrato di MLSM Studio (My Lonely Soul Music Studio).
 Il tuo unico compito è aiutare l'utente a usare correttamente l'applicazione.
 
 PRESENTAZIONE E TIPO DI RISPOSTA

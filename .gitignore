@@ -15,3 +15,14 @@ apps/desktop/public/models/
 *.onnx_data
 *.safetensors
 *.gguf
+
+# Pesi e runtime dell'Upscaler: cache locale al primo utilizzo, mai nel repository.
+.upscaler-cache/
+apps/desktop/public/upscaler-models/
+**/realesrgan-models/
+*.pth
+*.param
+.venv/
+.venv-upscaler/
+__pycache__/
+*.py[cod]

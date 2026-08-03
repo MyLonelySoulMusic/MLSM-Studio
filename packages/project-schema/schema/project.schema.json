@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://dynamicsound.studio/schema/project/v1.json",
-  "title": "Dynamic Sound Animation Studio Project",
+  "title": "MLSM Studio Project",
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "project", "audio", "canvas", "analysis", "events", "ball", "objects", "trajectorySegments", "camera", "background", "lighting", "postProcessing", "exportPresets"],
@@ -12,7 +12,7 @@
     "canvas": { "$ref": "#/$defs/canvas" },
     "analysis": { "$ref": "#/$defs/analysis" },
     "events": { "type": "array", "items": { "$ref": "#/$defs/musicEvent" } },
-    "animation": { "type": "object", "additionalProperties": false, "required": ["modeId", "baseObjectTypes"], "properties": { "modeId": { "type": "string", "minLength": 1 }, "baseObjectTypes": { "type": "array", "minItems": 1, "items": { "enum": ["drum", "kick", "snare", "cymbal", "piano", "guitar", "strings", "peg", "platform", "block", "spring", "pebble"] } }, "newYorkStreets": { "type": "object", "additionalProperties": false, "required": ["secondaryMarbleCount", "secondaryGroupColor", "secondaryColors", "flyerImageUrls"], "properties": { "secondaryMarbleCount": { "type": "integer", "minimum": 1, "maximum": 13 }, "secondaryGroupColor": { "type": "string" }, "secondaryColors": { "type": "array", "maxItems": 13, "items": { "type": "string" } }, "flyerImageUrls": { "type": "array", "maxItems": 8, "items": { "type": "string" } } } } } },
+    "animation": { "type": "object", "additionalProperties": true, "required": ["modeId", "baseObjectTypes"], "properties": { "modeId": { "type": "string", "minLength": 1 }, "baseObjectTypes": { "type": "array", "minItems": 1, "items": { "enum": ["drum", "kick", "snare", "cymbal", "piano", "guitar", "strings", "peg", "platform", "block", "spring", "pebble"] } }, "newYorkStreets": { "type": "object", "additionalProperties": true }, "portraitLandscape": { "$ref": "#/$defs/portraitLandscape" } } },
     "ball": { "$ref": "#/$defs/ball" },
     "objects": { "type": "array", "items": { "$ref": "#/$defs/sceneObject" } },
     "trajectorySegments": { "type": "array", "items": { "$ref": "#/$defs/trajectorySegment" } },
@@ -127,6 +127,23 @@
     "background": {
       "type": "object", "additionalProperties": false, "required": ["type", "colors", "opacity", "blur", "brightness", "contrast", "saturation"],
       "properties": { "type": { "enum": ["solid", "linearGradient", "radialGradient", "image", "video", "texture", "wall", "abstract", "transparent"] }, "colors": { "type": "array", "minItems": 1, "items": { "type": "string" } }, "assetId": { "type": ["string", "null"] }, "imageUrl": { "type": ["string", "null"] }, "presetId": { "type": "string" }, "finish": { "enum": ["clean", "worn"] }, "opacity": { "$ref": "#/$defs/unit" }, "blur": { "type": "number", "minimum": 0 }, "brightness": { "type": "number", "minimum": 0 }, "contrast": { "type": "number", "minimum": 0 }, "saturation": { "type": "number", "minimum": 0 }, "effects": { "type": "object", "additionalProperties": false, "properties": { "glow": { "type": "boolean" }, "particles": { "type": "boolean" }, "vignette": { "type": "boolean" } }, "required": ["glow", "particles", "vignette"] }, "neon": { "type": "object", "additionalProperties": false, "properties": { "enabled": { "type": "boolean" }, "text": { "type": "string", "maxLength": 1000 }, "color": { "type": "string" } }, "required": ["enabled", "text", "color"] }, "railColors": { "type": "object", "additionalProperties": false, "properties": { "pinball": { "type": "string" }, "glassTube": { "type": "string" }, "bricks": { "type": "string" } }, "required": ["pinball", "glassTube", "bricks"] } }
+    },
+    "portraitLandscape": {
+      "type": "object", "additionalProperties": false,
+      "required": ["videoUrl", "videoName", "videoWidth", "videoHeight", "videoHasAudio", "sideImageUrl", "sideImagePlacement", "coverImageUrl", "palette", "autoPalette", "spectrumIntensity", "spectrumOpacity", "cubeScale", "cubeSpeed", "glassOpacity", "effects", "effectLayers", "effectColors", "effectOpacity", "layerOrder", "sideImageAdjustments", "effectIntensity"],
+      "properties": {
+        "videoUrl": { "type": ["string", "null"] }, "videoName": { "type": "string" }, "videoWidth": { "type": "integer", "minimum": 0 }, "videoHeight": { "type": "integer", "minimum": 0 }, "videoHasAudio": { "type": "boolean" },
+        "sideImageUrl": { "type": ["string", "null"] }, "sideImagePlacement": { "enum": ["left", "right"] }, "coverImageUrl": { "type": ["string", "null"] },
+        "palette": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "string" } }, "sideImagePalette": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "string" } }, "spectrumManualPalette": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "string" } }, "autoPalette": { "type": "boolean" }, "spectrumPaletteSource": { "enum": ["cover", "sideImage", "manual"] },
+        "spectrumIntensity": { "type": "number", "minimum": 0, "maximum": 3 }, "spectrumOpacity": { "$ref": "#/$defs/unit" }, "cubeScale": { "type": "number", "minimum": 0.4, "maximum": 2 }, "cubeSpeed": { "type": "number", "minimum": 0.1, "maximum": 2 }, "cubeRotationBeats": { "type": "integer", "minimum": 4, "maximum": 32 }, "cubeRotationSpeed": { "type": "number", "minimum": 0.25, "maximum": 2.5 }, "glassOpacity": { "$ref": "#/$defs/unit" },
+        "effects": { "type": "object", "additionalProperties": false, "required": ["rain", "lightning", "feathers", "particles"], "properties": { "rain": { "type": "boolean" }, "lightning": { "type": "boolean" }, "feathers": { "type": "boolean" }, "particles": { "type": "boolean" } } },
+        "effectLayers": { "type": "object", "additionalProperties": false, "required": ["rain", "lightning", "feathers", "particles"], "properties": { "rain": { "enum": ["behindCube", "behindVideo", "behindSpectrum", "foreground"] }, "lightning": { "enum": ["behindCube", "behindVideo", "behindSpectrum", "foreground"] }, "feathers": { "enum": ["behindCube", "behindVideo", "behindSpectrum", "foreground"] }, "particles": { "enum": ["behindCube", "behindVideo", "behindSpectrum", "foreground"] } } },
+        "effectColors": { "type": "object", "additionalProperties": false, "required": ["rain", "lightning", "feathers", "particles"], "properties": { "rain": { "type": "string" }, "lightning": { "type": "string" }, "feathers": { "type": "string" }, "particles": { "type": "string" } } },
+        "effectOpacity": { "type": "object", "additionalProperties": false, "required": ["rain", "lightning", "feathers", "particles"], "properties": { "rain": { "$ref": "#/$defs/unit" }, "lightning": { "$ref": "#/$defs/unit" }, "feathers": { "$ref": "#/$defs/unit" }, "particles": { "$ref": "#/$defs/unit" } } },
+        "layerOrder": { "type": "array", "minItems": 8, "maxItems": 8, "uniqueItems": true, "items": { "enum": ["sideImage", "cube", "centerVideo", "spectrum", "rain", "lightning", "feathers", "particles"] } },
+        "sideImageAdjustments": { "type": "object", "additionalProperties": false, "required": ["brightness", "exposure", "contrast", "saturation", "temperature", "blur"], "properties": { "brightness": { "type": "number", "minimum": 0.2, "maximum": 2 }, "exposure": { "type": "number", "minimum": -1, "maximum": 1 }, "contrast": { "type": "number", "minimum": 0.2, "maximum": 2 }, "saturation": { "type": "number", "minimum": 0, "maximum": 2.5 }, "temperature": { "type": "number", "minimum": -1, "maximum": 1 }, "blur": { "type": "number", "minimum": 0, "maximum": 12 } } },
+        "effectIntensity": { "type": "number", "minimum": 0, "maximum": 3 }
+      }
     },
     "exportPreset": {
       "type": "object", "additionalProperties": false, "required": ["id", "name", "format", "codec", "width", "height", "fps", "audioMode"],

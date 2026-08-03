@@ -44,6 +44,48 @@ struct AudioToolStatus {
     ffprobe: bool,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpscalerHardwareStatus {
+    platform: String,
+    architecture: String,
+    apple_silicon: bool,
+    cuda: bool,
+    gpu_name: Option<String>,
+}
+
+#[tauri::command]
+fn detect_upscaler_hardware() -> UpscalerHardwareStatus {
+    let architecture = std::env::consts::ARCH.to_owned();
+    let apple_silicon = cfg!(target_os = "macos") && architecture == "aarch64";
+    let nvidia = find_tool("nvidia-smi")
+        .and_then(|tool| {
+            Command::new(tool)
+                .args(["--query-gpu=name", "--format=csv,noheader"])
+                .output()
+                .ok()
+        })
+        .filter(|output| output.status.success());
+    let gpu_name = nvidia
+        .as_ref()
+        .and_then(|output| String::from_utf8(output.stdout.clone()).ok())
+        .and_then(|value| {
+            value
+                .lines()
+                .next()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+        });
+    UpscalerHardwareStatus {
+        platform: std::env::consts::OS.to_owned(),
+        architecture,
+        apple_silicon,
+        cuda: nvidia.is_some(),
+        gpu_name,
+    }
+}
+
 fn validate_audio_path(path: &Path) -> Result<PathBuf, ProjectIoError> {
     if !path.is_absolute() || !path.is_file() { return Err(ProjectIoError::InvalidPath); }
     match path.extension().and_then(|value| value.to_str()).map(str::to_ascii_lowercase).as_deref() {
@@ -153,8 +195,14 @@ fn write_project(path: String, content: String) -> Result<(), ProjectIoError> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default().plugin(tauri_plugin_dialog::init()).invoke_handler(tauri::generate_handler![
-        read_project, write_project, detect_audio_tools, probe_audio, generate_waveform, read_audio_data
-    ]).run(tauri::generate_context!()).expect("errore durante l'avvio di Dynamic Sound Animation Studio");
+        read_project,
+        write_project,
+        detect_audio_tools,
+        detect_upscaler_hardware,
+        probe_audio,
+        generate_waveform,
+        read_audio_data
+    ]).run(tauri::generate_context!()).expect("errore durante l'avvio di MLSM Studio");
 }
 
 #[cfg(test)]

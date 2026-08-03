@@ -1,24 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
   <title id="title">Dynamic Sound Animation Studio</title>
-  <desc id="desc">Un'onda sonora luminosa che attraversa un fotogramma dinamico.</desc>
-  <defs>
-    <linearGradient id="surface" x1="8" y1="6" x2="57" y2="60" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#171C31"/>
-      <stop offset="1" stop-color="#080B14"/>
-    </linearGradient>
-    <linearGradient id="signal" x1="11" y1="41" x2="54" y2="20" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#5EF4D2"/>
-      <stop offset=".52" stop-color="#7798FF"/>
-      <stop offset="1" stop-color="#C568FF"/>
-    </linearGradient>
-    <filter id="glow" x="-40%" y="-60%" width="180%" height="220%">
-      <feGaussianBlur stdDeviation="2.2" result="blur"/>
-      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
-    </filter>
-  </defs>
-  <rect x="2" y="2" width="60" height="60" rx="17" fill="url(#surface)" stroke="#39415E" stroke-width="1.5"/>
-  <path d="M13 18h-2v10M51 18h2v10M13 46h-2V36M51 46h2V36" fill="none" stroke="#8490B2" stroke-width="2.2" stroke-linecap="round" opacity=".7"/>
-  <path d="M10 34h7l3.3-8.4 5.1 17.2 5.3-24.3 5.7 27 4.8-16.8 3.6 8.1H54" fill="none" stroke="url(#signal)" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" filter="url(#glow)"/>
-  <circle cx="54" cy="36.8" r="3.2" fill="#D079FF"/>
-  <circle cx="54" cy="36.8" r="1.15" fill="#FFF"/>
+  <desc id="desc">Monogramma editoriale nero, bianco e rosa attraversato da un segnale sonoro.</desc>
+  <defs><linearGradient id="pink" x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse"><stop stop-color="#FFB3D1"/><stop offset="1" stop-color="#D94F8B"/></linearGradient></defs>
+  <rect x="2" y="2" width="60" height="60" rx="18" fill="#FCF8FA" stroke="#181317" stroke-width="2"/>
+  <path d="M19 15h12c11 0 18 6.5 18 17s-7 17-18 17H19V15Zm9 8v18h3c5.8 0 9.5-3.2 9.5-9S36.8 23 31 23h-3Z" fill="#181317"/>
+  <path d="M9 34h8l3-7 4.5 14 5-21 5 25 4.5-16 4 9h12" fill="none" stroke="url(#pink)" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="55" cy="38" r="3.2" fill="#D94F8B" stroke="#FCF8FA" stroke-width="1.5"/>
 </svg>

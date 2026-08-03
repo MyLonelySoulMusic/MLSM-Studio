@@ -1,0 +1,9 @@
+import { useEffect, useState } from "react";
+import { useProjectStore } from "../store/project-store";
+import { backendLabel, detectUpscalerHardware, effectiveUpscalerBackend, type UpscalerHardware } from "../services/upscaler-runtime";
+
+export function UpscalerInspector() {
+  const name = useProjectStore((state) => state.project.project.name); const settings = useProjectStore((state) => state.project.animation.upscaler); const rename = useProjectStore((state) => state.renameProject); const [hardware, setHardware] = useState<UpscalerHardware | null>(null);
+  useEffect(() => { let active = true; void detectUpscalerHardware().then((value) => { if (active) setHardware(value); }); return () => { active = false; }; }, []);
+  return <aside className="panel inspector upscaler-inspector" aria-label="Inspector Upscaler"><h2>Progetto</h2><label>Nome<input value={name} onChange={(event) => rename(event.target.value)} /></label><h2>Sorgente</h2><div className="property"><span>File</span><output>{settings.sourceName || "Non caricato"}</output></div><div className="property"><span>Originale</span><output>{settings.sourceWidth ? `${settings.sourceWidth} × ${settings.sourceHeight}` : "—"}</output></div><div className="property"><span>Tipo</span><output>{settings.sourceKind === "video" ? "Video" : "Immagine"}</output></div><h2>Output</h2><div className="watermark-pixel-readout"><strong>{settings.finalWidth} × {settings.finalHeight}</strong><span>{settings.model} · {settings.scale.toFixed(2)}×</span></div><h2>Calcolo</h2><div className="export-integrity-card"><strong>{hardware ? backendLabel(effectiveUpscalerBackend(settings.backend, hardware)) : "Rilevamento…"}</strong><span>{hardware?.gpuName ?? "Analisi della macchina in corso"}</span></div><div className="export-integrity-card"><strong>Tile ottimizzati</strong><span>{settings.tileSize}px · {settings.tta ? "TTA attivo" : "TTA disattivo"}</span></div></aside>;
+}

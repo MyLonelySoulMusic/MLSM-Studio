@@ -5,8 +5,8 @@
     "strict": true, "forceConsistentCasingInFileNames": true, "module": "ESNext", "moduleResolution": "Bundler",
     "resolveJsonModule": true, "isolatedModules": true, "noEmit": true, "jsx": "react-jsx",
     "noUncheckedIndexedAccess": true, "exactOptionalPropertyTypes": true, "composite": true,
-    "types": ["vite/client", "vitest/globals", "@testing-library/jest-dom"]
+    "types": ["node", "vite/client", "vitest/globals", "@testing-library/jest-dom"]
   },
   "references": [{ "path": "../../packages/project-schema" }, { "path": "../../packages/core" }, { "path": "../../packages/audio-analysis" }, { "path": "../../packages/trajectory" }, { "path": "../../packages/export" }],
-  "include": ["src", "vite.config.ts", "vite-model-cache.ts"]
+  "include": ["src", "vite.config.ts", "vite-model-cache.ts", "vite-pytorch-service.ts"]
 }

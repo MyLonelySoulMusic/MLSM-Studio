@@ -1,8 +1,11 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { WelcomeSplash } from "./components/WelcomeSplash";
+import { initializeUiPreferences } from "./services/ui-preferences";
 import "./styles.css";
 
 const root = document.getElementById("root");
 if (!root) throw new Error("Elemento root non trovato");
-createRoot(root).render(<StrictMode><App /></StrictMode>);
+initializeUiPreferences();
+createRoot(root).render(<StrictMode><App /><WelcomeSplash /></StrictMode>);

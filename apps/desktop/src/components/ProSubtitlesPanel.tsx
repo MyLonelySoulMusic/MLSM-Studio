@@ -87,7 +87,11 @@ export interface ProSubtitlesPanelProps {
   duration: number;
   selectedSubtitleId: string | null;
   onSelectSubtitle: (id: string | null) => void;
-  onImportVideo: (file: File) => Promise<void>;
+  source?:
+    | { kind: "standalone"; onImportVideo: (file: File) => Promise<void> }
+    | { kind: "embedded"; ready: boolean; name: string };
+  /** @deprecated Passa `source.kind === "standalone"`; resta supportato per i callsite legacy. */
+  onImportVideo?: (file: File) => Promise<void>;
 }
 
 function downloadText(name: string, text: string, type: string): void {
@@ -95,7 +99,7 @@ function downloadText(name: string, text: string, type: string): void {
   link.href = url; link.download = name; link.click(); setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
-export function ProSubtitlesPanel({ audioUrl = null, duration, selectedSubtitleId, onSelectSubtitle, onImportVideo }: ProSubtitlesPanelProps) {
+export function ProSubtitlesPanel({ audioUrl = null, duration, selectedSubtitleId, onSelectSubtitle, source, onImportVideo }: ProSubtitlesPanelProps) {
   const settings = useProjectStore((state) => state.project.animation.proSubtitles);
   const subtitles = useProjectStore((state) => state.project.subtitles);
   const cues = useProjectStore((state) => state.project.subtitles.cues);
@@ -110,7 +114,11 @@ export function ProSubtitlesPanel({ audioUrl = null, duration, selectedSubtitleI
   const deleteCue = useProjectStore((state) => state.deleteSubtitleCue);
   const splitCue = useProjectStore((state) => state.splitSubtitleCue);
   const setAspectRatio = useProjectStore((state) => state.setAspectRatio);
-  const [status, setStatus] = useState("Carica video, sottotitoli e immagine palette. Il video resta una guida e non entra nel layer esportato.");
+  const embedded = source?.kind === "embedded";
+  const importVideo = source?.kind === "standalone" ? source.onImportVideo : onImportVideo;
+  const [status, setStatus] = useState(() => embedded
+    ? "Il video verticale della composizione fornisce audio e durata. Importa o genera i sottotitoli e applica la stessa regia di Pro Subtitles."
+    : "Carica video, sottotitoli e immagine palette. Il video resta una guida e non entra nel layer esportato.");
   const [generating, setGenerating] = useState(false);
   const [reviewing, setReviewing] = useState(false);
   const [whisperJson, setWhisperJson] = useState<WhisperTranscriptDocument | null>(null);
@@ -129,7 +137,7 @@ export function ProSubtitlesPanel({ audioUrl = null, duration, selectedSubtitleI
   const selectedCueIndex = selectedCue ? Math.max(0, cues.findIndex((cue) => cue.id === selectedCue.id)) : 0;
   const selectedStyle = selectedCue ? settings.cueStyles.find((style) => style.cueId === selectedCue.id) : undefined;
   const words = selectedCue?.text.trim().split(/\s+/).filter(Boolean) ?? [];
-  const videoReady = Boolean(settings.videoUrl && Number.isFinite(duration) && duration > 0);
+  const videoReady = Boolean(Number.isFinite(duration) && duration > 0 && (embedded ? source.ready : settings.videoUrl));
   const defaultAnimationDetail = proSubtitleAnimationOptions.find((animation) => animation.id === settings.defaultAnimation)?.detail;
   const selectedAnimationDetail = proSubtitleAnimationOptions.find((animation) => animation.id === (selectedStyle?.animation ?? settings.defaultAnimation))?.detail;
   const cuePositionAutomatic = selectedStyle?.positionAutomatic ?? true;
@@ -144,7 +152,7 @@ export function ProSubtitlesPanel({ audioUrl = null, duration, selectedSubtitleI
 
   const importSubtitles = async (change: ChangeEvent<HTMLInputElement>) => {
     const file = change.target.files?.[0]; change.target.value = ""; if (!file) return;
-    if (!videoReady) { setStatus("Carica prima un video guida valido: serve la sua durata per importare e posizionare i sottotitoli."); return; }
+    if (!videoReady) { setStatus(embedded ? "Carica prima il video verticale della composizione: serve la sua durata per posizionare i sottotitoli." : "Carica prima un video guida valido: serve la sua durata per importare e posizionare i sottotitoli."); return; }
     try {
       const imported = parseProSubtitleFile(await file.text(), duration);
       const cueStyles = assignProSubtitleCueStyles(imported, settings);
@@ -162,7 +170,7 @@ export function ProSubtitlesPanel({ audioUrl = null, duration, selectedSubtitleI
 
   const generateFromVideo = async () => {
     if (!audioUrl || !videoReady || generating || reviewing) return;
-    setGenerating(true); setWhisperJson(null); smartGeneration.begin("Avvio di Whisper e della redazione locale per ProSubtitles…");
+    setGenerating(true); setWhisperJson(null); smartGeneration.begin("Avvio di Whisper e della redazione locale per Pro Subtitles…");
     try {
       const generated = await generateSubtitles(audioUrl, duration, {
         lyrics: subtitles.sourceLyrics,
@@ -213,7 +221,7 @@ export function ProSubtitlesPanel({ audioUrl = null, duration, selectedSubtitleI
     const cueStyles = assignProSubtitleCueStyles(result.cues, settings).map((style) => existingStyles.get(style.cueId) ?? style);
     setCues(result.cues); updateSubtitles({ enabled: true }); updateSettings({ cueStyles });
     if (selectedSubtitleId && !result.cues.some((cue) => cue.id === selectedSubtitleId)) onSelectSubtitle(result.cues[0]?.id ?? null);
-    setStatus(result.summary ?? `Intervento agenti completato · ${result.changedCount} modifiche validate · stili ProSubtitles conservati.`);
+    setStatus(result.summary ?? `Intervento agenti completato · ${result.changedCount} modifiche validate · stili Pro Subtitles conservati.`);
     return { cueCount: result.cues.length, changedCount: result.changedCount };
   };
 
@@ -239,19 +247,24 @@ export function ProSubtitlesPanel({ audioUrl = null, duration, selectedSubtitleI
   };
 
   return <section className="pro-subtitles-settings">
-    <div className="pro-workflow">
+    {embedded ? <div className="pro-workflow pro-subtitles-embedded-source">
+      <h2>Pro Subtitles nella composizione</h2>
+      <label className="teddy-dance-toggle"><span>Mostra sottotitoli Pro</span><input aria-label="Mostra sottotitoli Pro nella composizione" type="checkbox" checked={subtitles.enabled} onChange={(event) => updateSubtitles({ enabled: event.target.checked })} /></label>
+      {source.ready ? <div className="subtitle-video-loaded"><strong>{source.name || "Video verticale"}</strong><span>{duration.toFixed(2)} s · audio, timing e preview condivisi con From 9:16 to 16:9</span></div> : <p className="muted">Carica il video verticale sopra: verrà usato direttamente, senza una seconda copia.</p>}
+      <p className="muted">Blocchi, animazioni, font, palette, posizione, opacità e stile parola per parola sono gli stessi di Pro Subtitles e vengono inclusi nell’export finale.</p>
+    </div> : <div className="pro-workflow">
       <h2>1 · Video guida</h2>
-      <label className="flyer-upload">Carica video<input aria-label="Carica video ProSubtitles" type="file" accept="video/mp4,video/webm,video/quicktime,.m4v" onChange={(event) => { const file = event.target.files?.[0]; if (file) void onImportVideo(file); event.target.value = ""; }} /></label>
+      <label className="flyer-upload">Carica video<input aria-label="Carica video ProSubtitles" type="file" accept="video/mp4,video/webm,video/quicktime,.m4v" onChange={(event) => { const file = event.target.files?.[0]; if (file && importVideo) void importVideo(file); event.target.value = ""; }} /></label>
       {settings.videoUrl ? <div className="subtitle-video-loaded"><strong>{settings.videoName}</strong><span>{duration.toFixed(2)} s · sorgente di tempo e preview, esclusa dall’export overlay</span></div> : <p className="muted">Il video fornisce durata, audio e riferimento visivo.</p>}
       <div className="pro-ratio-switch" role="group" aria-label="Rapporto ProSubtitles"><button type="button" aria-pressed={aspectRatio === "9:16"} className={aspectRatio === "9:16" ? "active-control" : ""} onClick={() => setAspectRatio("9:16")}>9:16 verticale</button><button type="button" aria-pressed={aspectRatio === "16:9"} className={aspectRatio === "16:9" ? "active-control" : ""} onClick={() => setAspectRatio("16:9")}>16:9 orizzontale</button></div>
       <label>Adattamento video guida<select value={settings.fit} onChange={(event) => updateSettings({ fit: event.target.value as typeof settings.fit })}><option value="contain">Intero video · contain</option><option value="cover">Riempi preview · cover</option></select></label>
       <label>Oscuramento guida: {Math.round(settings.dimming * 100)}%<input type="range" min="0" max=".8" step=".01" value={settings.dimming} onChange={(event) => updateSettings({ dimming: Number(event.target.value) })} /></label>
-    </div>
+    </div>}
 
     <div className="pro-workflow">
-      <h2>2 · File sottotitoli</h2>
+      <h2>{embedded ? "1" : "2"} · File sottotitoli</h2>
       <label className={`flyer-upload${videoReady ? "" : " disabled-upload"}`}>Importa SRT o WebVTT<input aria-label="Importa sottotitoli ProSubtitles" aria-describedby="pro-subtitle-import-help" type="file" accept=".srt,.vtt,application/x-subrip,text/vtt,text/plain" disabled={!videoReady} onChange={(event) => void importSubtitles(event)} /></label>
-      <p className="muted" id="pro-subtitle-import-help">{videoReady ? "I blocchi compaiono nella timeline: trascina per spostarli, usa le maniglie per accorciarli e doppio clic per dividerli." : "Carica prima il video guida: la sua durata impedisce timestamp fuori scena e blocchi invisibili."}</p>
+      <p className="muted" id="pro-subtitle-import-help">{videoReady ? "I blocchi compaiono nella timeline: trascina per spostarli, usa le maniglie per accorciarli e doppio clic per dividerli." : embedded ? "Carica prima il video verticale: la sua durata impedisce timestamp fuori scena e blocchi invisibili." : "Carica prima il video guida: la sua durata impedisce timestamp fuori scena e blocchi invisibili."}</p>
       <div className="pro-subtitle-ai-source">
         <header><strong>Oppure genera dal video</strong><span>Whisper crea parole e frasi con timestamp; il consiglio Qwen ripulisce e riallinea il testo senza spostare arbitrariamente l’audio.</span></header>
         <div className="local-model-panel">
@@ -283,7 +296,7 @@ export function ProSubtitlesPanel({ audioUrl = null, duration, selectedSubtitleI
     </div>
 
     <div className="pro-workflow">
-      <h2>3 · Palette e ombre</h2>
+      <h2>{embedded ? "2" : "3"} · Palette e ombre</h2>
       <label className="flyer-upload">Immagine per palette automatica<input aria-label="Carica immagine palette ProSubtitles" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void importPalette(event)} /></label>
       {settings.paletteImageUrl ? <div className="pro-palette-source" role="img" aria-label="Anteprima immagine usata per estrarre la palette" style={{ backgroundImage: `url(${settings.paletteImageUrl})` }} /> : null}
       <div className="pro-palette-grid">{settings.palette.map((color, index) => <article key={index}>
@@ -294,7 +307,7 @@ export function ProSubtitlesPanel({ audioUrl = null, duration, selectedSubtitleI
     </div>
 
     <div className="pro-workflow">
-      <h2>4 · Regia automatica</h2>
+      <h2>{embedded ? "3" : "4"} · Regia automatica</h2>
       <label className="teddy-dance-toggle"><span>Regia intelligente per frase</span><input type="checkbox" checked={settings.autoVaryAnimations} onChange={(event) => {
         const autoVaryAnimations = event.target.checked;
         updateSettings({ autoVaryAnimations, cueStyles: retargetProSubtitleAutomaticAnimations(cues, settings, autoVaryAnimations) });
@@ -354,13 +367,13 @@ export function ProSubtitlesPanel({ audioUrl = null, duration, selectedSubtitleI
       })}</div>
     </div> : <p className="muted">Importa o inserisci un blocco per modificarne animazione, font, dimensione e singole parole.</p>}
 
-    <div className="pro-workflow pro-output-settings">
+    {!embedded ? <div className="pro-workflow pro-output-settings">
       <h2>5 · Output per il montaggio</h2>
       <label>Fondo<select value={settings.backgroundMode} onChange={(event) => updateSettings({ backgroundMode: event.target.value as typeof settings.backgroundMode })}><option value="transparent">Trasparente · solo sottotitoli</option><option value="solid">Colore pieno · fallback CapCut</option></select></label>
       {settings.backgroundMode === "solid" ? <label>Colore di fondo<input aria-label="Colore fondo ProSubtitles" type="color" value={settings.backgroundColor} onChange={(event) => updateSettings({ backgroundColor: event.target.value })} /></label> : null}
       {settings.backgroundMode === "transparent" ? <label>Formato trasparente<select value={settings.exportFormat} onChange={(event) => updateSettings({ exportFormat: event.target.value as typeof settings.exportFormat })}><option value="webmVp9Alpha">WebM · VP9 con alpha</option><option value="movProRes4444">MOV · Apple ProRes 4444 con alpha</option></select></label> : null}
       <div className="pro-export-note"><strong>{settings.backgroundMode === "solid" ? "MP4 · H.264 con fondo pieno" : settings.exportFormat === "movProRes4444" ? "Pipeline desktop FFmpeg" : "WebCodecs VP9 alpha"}</strong><span>{settings.backgroundMode === "solid" ? "Il formato alpha non viene applicato: l’export usa il colore scelto come sfondo compatibile con CapCut." : settings.exportFormat === "movProRes4444" ? "ProRes 4444 sarà disponibile nella build desktop con FFmpeg; il browser non lo simulerà con un codec sbagliato." : "La compatibilità viene verificata prima dell’export. Se il browser non conserva l’alpha, l’operazione si ferma e puoi scegliere il fondo pieno."}</span></div>
-    </div>
+    </div> : null}
     <p className="pro-status" role="status" aria-live="polite" aria-atomic="true">{status}</p>
     <SmartSubtitleGenerationModal controller={smartGeneration} canInteract={subtitles.llmEnabled && cues.length > 0 && !generating && !reviewing} interactiveDisabledReason={!cues.length ? "Genera o importa prima almeno un blocco di sottotitoli." : !subtitles.llmEnabled ? "Abilita la redazione LLM locale per parlare con gli agenti." : "Attendi il completamento dell’operazione in corso."} onAgentInstruction={instructAgents} />
   </section>;

@@ -1,8 +1,8 @@
 [package]
 name = "dynamic-sound-animation-studio"
 version = "0.1.0"
-description = "Professional sound-reactive animation studio"
-authors = ["Dynamic Sound Animation Studio contributors"]
+description = "MLSM Studio — professional sound-reactive animation and creative media studio"
+authors = ["My Lonely Soul Music Studio contributors"]
 edition = "2021"
 
 [lib]

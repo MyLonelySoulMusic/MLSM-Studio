@@ -29,6 +29,28 @@ describe("Timeline", () => {
     fireEvent.click(screen.getByRole("button", { name: "+ Sottotitolo" }));
     expect(addSubtitle).toHaveBeenCalledWith(7.5);
   });
+  it("mostra la pila dei livelli e consente di spostare anche video e cubo", () => {
+    const moveLayer = vi.fn();
+    render(<Timeline peaks={[]} events={[]} beats={[]} compositorLayers={[{ id: "rain", label: "Pioggia", color: "#89cfff", locked: false, opacity: .72 }, { id: "centerVideo", label: "Video 9:16", color: "#ffffff", locked: false, opacity: 1 }, { id: "cube", label: "Cubo 3D", color: "#ed75a7", locked: false, opacity: 1 }]} selectedEventId={null} selectedEventIds={[]} currentTime={2} duration={10} playing={false} looping={false} onPlayPause={vi.fn()} onStop={vi.fn()} onSeek={vi.fn()} onLoop={vi.fn()} onSelectEvent={vi.fn()} onAddEvent={vi.fn()} onMoveEvent={vi.fn()} onDeleteEvent={vi.fn()} onDeleteEvents={vi.fn()} onMoveCompositorLayer={moveLayer} />);
+    expect(screen.getAllByText("Video 9:16").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "Sposta Pioggia sotto" }));
+    expect(moveLayer).toHaveBeenCalledWith("rain", "down");
+    fireEvent.click(screen.getByRole("button", { name: "Sposta Video 9:16 sopra" }));
+    expect(moveLayer).toHaveBeenCalledWith("centerVideo", "up");
+    expect(screen.getByRole("button", { name: "Sposta Cubo 3D sopra" })).toBeInTheDocument();
+    expect(document.querySelectorAll(".compositor-layer-lane")).toHaveLength(3);
+  });
+  it("allarga e stringe la timeline dalla maniglia superiore", () => {
+    const resize = vi.fn();
+    render(<Timeline peaks={[]} events={[]} beats={[]} timelineHeight={270} onResizeHeight={resize} selectedEventId={null} selectedEventIds={[]} currentTime={0} duration={10} playing={false} looping={false} onPlayPause={vi.fn()} onStop={vi.fn()} onSeek={vi.fn()} onLoop={vi.fn()} onSelectEvent={vi.fn()} onAddEvent={vi.fn()} onMoveEvent={vi.fn()} onDeleteEvent={vi.fn()} onDeleteEvents={vi.fn()} />);
+    const handle = screen.getByRole("separator", { name: "Ridimensiona altezza timeline" });
+    fireEvent.keyDown(handle, { key: "ArrowUp" });
+    expect(resize).toHaveBeenCalledWith(290);
+    fireEvent.keyDown(handle, { key: "ArrowDown" });
+    expect(resize).toHaveBeenCalledWith(250);
+    fireEvent.doubleClick(handle);
+    expect(resize).toHaveBeenCalledWith(270);
+  });
   it("ridimensiona i cue dalle due maniglie rispettando un frame minimo e la durata totale", () => {
     const resize = vi.fn();
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({

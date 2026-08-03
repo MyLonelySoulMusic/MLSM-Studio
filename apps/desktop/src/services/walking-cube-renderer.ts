@@ -49,25 +49,20 @@ function photoCanvas(settings: WalkingCubeSettings): HTMLCanvasElement {
 function loadContainedImage(canvas: HTMLCanvasElement, imageUrl: string): void {
   const image = new Image();
   image.onload = () => {
-    const context = canvas.getContext("2d");
-    if (!context) return;
-    const containedScale = Math.min(1000 / image.naturalWidth, 1000 / image.naturalHeight);
-    const width = image.naturalWidth * containedScale;
-    const height = image.naturalHeight * containedScale;
-    const coverScale = Math.max(1024 / image.naturalWidth, 1024 / image.naturalHeight);
-    const coverWidth = image.naturalWidth * coverScale;
-    const coverHeight = image.naturalHeight * coverScale;
-    context.save();
-    context.filter = "blur(38px) brightness(.48) saturate(1.16)";
-    context.globalAlpha = .82;
-    context.drawImage(image, (1024 - coverWidth) / 2, (1024 - coverHeight) / 2, coverWidth, coverHeight);
-    context.restore();
-    context.fillStyle = "rgba(2,4,10,.12)";
-    context.fillRect(0, 0, 1024, 1024);
-    context.drawImage(image, (1024 - width) / 2, (1024 - height) / 2, width, height);
+    drawContainedImage(canvas, image);
     canvas.dispatchEvent(new Event("walking-cube-image-ready"));
   };
   image.src = imageUrl;
+}
+
+function drawContainedImage(canvas: HTMLCanvasElement, image: HTMLImageElement): void {
+  const context = canvas.getContext("2d");
+  if (!context) return;
+  const sourceWidth = Math.max(1, image.naturalWidth || image.width); const sourceHeight = Math.max(1, image.naturalHeight || image.height);
+  const containedScale = Math.min(1000 / sourceWidth, 1000 / sourceHeight); const width = sourceWidth * containedScale; const height = sourceHeight * containedScale;
+  const coverScale = Math.max(1024 / sourceWidth, 1024 / sourceHeight); const coverWidth = sourceWidth * coverScale; const coverHeight = sourceHeight * coverScale;
+  context.save(); context.filter = "blur(38px) brightness(.48) saturate(1.16)"; context.globalAlpha = .82; context.drawImage(image, (1024 - coverWidth) / 2, (1024 - coverHeight) / 2, coverWidth, coverHeight); context.restore();
+  context.fillStyle = "rgba(2,4,10,.12)"; context.fillRect(0, 0, 1024, 1024); context.drawImage(image, (1024 - width) / 2, (1024 - height) / 2, width, height);
 }
 
 function createFresnelMaterial(settings: WalkingCubeSettings): THREE.ShaderMaterial {
@@ -382,7 +377,7 @@ function createSpectrum(settings: WalkingCubeSettings, portrait: boolean): THREE
   return group;
 }
 
-export function createWalkingCubeScene(settings: WalkingCubeSettings, aspectRatio: string, externalBackdrop = false): THREE.Group {
+export function createWalkingCubeScene(settings: WalkingCubeSettings, aspectRatio: string, externalBackdrop = false, readyImage?: HTMLImageElement | null): THREE.Group {
   const root = new THREE.Group();
   root.name = "walking-cube-scene";
   const portrait = aspectRatio === "9:16";
@@ -454,7 +449,8 @@ export function createWalkingCubeScene(settings: WalkingCubeSettings, aspectRati
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.anisotropy = 12;
   canvas.addEventListener("walking-cube-image-ready", () => { texture.needsUpdate = true; });
-  if (settings.imageUrl) loadContainedImage(canvas, settings.imageUrl);
+  if (readyImage) { drawContainedImage(canvas, readyImage); texture.needsUpdate = true; }
+  else if (settings.imageUrl) loadContainedImage(canvas, settings.imageUrl);
   const rig = new THREE.Group();
   rig.name = "walking-cube-rig";
   rig.position.set(0, portrait ? .16 : .12, 0);

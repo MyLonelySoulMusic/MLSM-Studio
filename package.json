@@ -1,5 +1,5 @@
 {
-  "name": "dynamic-sound-animation-studio",
+  "name": "mlsm-studio",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -14,7 +14,9 @@
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "upscaler:setup": "bash tools/setup_upscaler_env.sh",
+    "upscaler:server": ".venv/bin/python tools/upscaler_server.py"
   },
   "devDependencies": {
     "@eslint/js": "^9.32.0",

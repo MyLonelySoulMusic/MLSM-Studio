@@ -17,6 +17,34 @@ describe("ExportDialog", () => {
     expect(screen.getByLabelText("Qualità codifica")).toHaveValue("maximum"); fireEvent.click(screen.getByText("Scegli destinazione e crea video")); expect(onStart).toHaveBeenCalledWith(expect.objectContaining({ quality: "maximum" }));
   });
 
+  it("descrive l'export Pixels Subtitles come codifica offline senza drop volontari", () => {
+    render(<ExportDialog duration={10} running={false} progress={0} currentFrame={0} totalFrames={0} error={null} offlineFrameExport onClose={vi.fn()} onCancel={vi.fn()} onStart={vi.fn()} />);
+    expect(screen.getByText("MP4 · H.264/AAC offline")).toBeInTheDocument();
+    expect(screen.getByText(/calcola ogni frame offline/i)).toBeInTheDocument();
+  });
+
+  it("offre i preset 16:9 fino a 8K e 120 fps per From 9:16 to 16:9", () => {
+    const onStart = vi.fn();
+    render(<ExportDialog duration={10} running={false} progress={0} currentFrame={0} totalFrames={0} error={null} offlineFrameExport offlineExportProfile={{ title: "Esporta From 9:16 to 16:9", defaultResolution: "3840x2160", defaultFps: 60, recommendation: "4K consigliato" }} onClose={vi.fn()} onCancel={vi.fn()} onStart={onStart} />);
+    expect(screen.getByRole("heading", { name: "Esporta From 9:16 to 16:9" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Risoluzione")).toHaveValue("3840x2160");
+    expect(screen.getByLabelText("Risoluzione")).toHaveTextContent("7680 × 4320 (16:9 · 8K)");
+    expect(screen.getByText("4K consigliato")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Risoluzione"), { target: { value: "2560x1440" } });
+    fireEvent.change(screen.getByLabelText("Frame rate"), { target: { value: "120" } });
+    fireEvent.click(screen.getByRole("button", { name: "Scegli destinazione e crea video" }));
+    expect(onStart).toHaveBeenCalledWith(expect.objectContaining({ width: 2560, height: 1440, fps: 120 }));
+  });
+
+  it("mantiene le proprietà del video sorgente per Static Watermark Remover", () => {
+    render(<ExportDialog duration={37} running={false} progress={.2} currentFrame={200} totalFrames={1000} error={null} sourceVideoExport={{ label: "Static Watermark Remover" }} onClose={vi.fn()} onCancel={vi.fn()} onStart={vi.fn()} />);
+    expect(screen.getByRole("heading", { name: "Esporta Static Watermark Remover" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Risoluzione")).not.toBeInTheDocument();
+    expect(screen.queryByText("Frame rate")).not.toBeInTheDocument();
+    expect(screen.getByText(/ordine, timestamp e durata di ogni frame/)).toBeInTheDocument();
+    expect(screen.getByText("MP4 · H.264 + audio originale · proprietà sorgente")).toBeInTheDocument();
+  });
+
   it("inizializza ProSubtitles con la risoluzione coerente al ratio del progetto", () => {
     const commonProps = {
       duration: 10,

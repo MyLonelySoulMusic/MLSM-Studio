@@ -18,6 +18,7 @@
     "@tauri-apps/api": "^2.7.0",
     "@tauri-apps/plugin-dialog": "^2.3.0",
     "mediabunny": "^1.51.0",
+    "onnxruntime-web": "1.22.0-dev.20250409-89f8206ba4",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "three": "^0.178.0",

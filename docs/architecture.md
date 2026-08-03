@@ -1,4 +1,4 @@
-# Dynamic Sound Animation Studio — Architettura
+# MLSM Studio — Architettura
 
 ## Scopo della Fase 0
 
