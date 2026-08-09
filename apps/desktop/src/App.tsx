@@ -415,6 +415,7 @@ export function App({ onHome }: { onHome?: () => void } = {}) {
       const backgroundFit = walkingCubeMode ? "fill" as const : "cover" as const;
       const result = await exportOfflineSceneVideo({
         ...offlineSettings,
+        aspectRatio: store.project.canvas.aspectRatio === "16:9" ? "16:9" : "9:16",
         projectName: store.project.project.name,
         sourceUrl: imported.url,
         background: exportBackground,

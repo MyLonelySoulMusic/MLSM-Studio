@@ -23,7 +23,7 @@ export interface SharedViewportRenderer {
   canvas: HTMLCanvasElement;
   setExportSize: (width: number, height: number) => void;
   restorePreviewSize: () => void;
-  renderNow: () => void;
+  renderNow: (sampleTimeSeconds?: number) => void;
 }
 
 export type ExportQuality = "high" | "maximum";
@@ -32,6 +32,7 @@ export type ExportMediaFit = "cover" | "contain" | "fill";
 export interface OfflineSceneExportSettings {
   width: number;
   height: number;
+  aspectRatio: "9:16" | "16:9";
   fps: number;
   durationSeconds: number;
   projectName: string;
@@ -108,6 +109,12 @@ export function offlineFrameTiming(frameIndex: number, durationSeconds: number, 
 
 export function assertOfflineFrameIntegrity(expected: number, encoded: number): void {
   if (expected !== encoded) throw new Error(`Controllo anti-drop fallito: attesi ${expected} frame, codificati ${encoded}. Il file incompleto non è stato consegnato.`);
+}
+
+export function assertOfflineAspectRatio(aspectRatio: "9:16" | "16:9", width: number, height: number): void {
+  const validDimensions = Number.isInteger(width) && Number.isInteger(height) && width > 0 && height > 0;
+  const matches = aspectRatio === "9:16" ? width * 16 === height * 9 : width * 9 === height * 16;
+  if (!validDimensions || !matches) throw new Error(`Risoluzione ${width} × ${height} incompatibile con il formato ${aspectRatio} selezionato.`);
 }
 
 function abortError(): DOMException { return new DOMException("Esportazione annullata", "AbortError"); }
@@ -279,6 +286,7 @@ function drawFinalImage(context: CanvasRenderingContext2D, image: HTMLImageEleme
 }
 
 export async function exportOfflineSceneVideo(settings: OfflineSceneExportSettings, renderer: SharedViewportRenderer, setRenderTime: (time: number | null) => void, signal: AbortSignal, onProgress: (progress: ExportProgress) => void): Promise<OfflineSceneExportResult> {
+  assertOfflineAspectRatio(settings.aspectRatio, settings.width, settings.height);
   const fileName = `${safeName(settings.projectName)}-${settings.width}x${settings.height}-${settings.fps}fps-offline.mp4`;
   // Il picker precede ogni await per conservare l'attivazione del gesto utente.
   const handlePromise = directSave(fileName);
@@ -339,7 +347,7 @@ export async function exportOfflineSceneVideo(settings: OfflineSceneExportSettin
         throwIfAborted(signal);
         const timing = offlineFrameTiming(frameIndex, duration, settings.fps);
         setRenderTime(timing.sampleTimeSeconds);
-        renderer.renderNow();
+        renderer.renderNow(timing.sampleTimeSeconds);
         const backgroundTime = backgroundDuration > 0 ? timing.sampleTimeSeconds % backgroundDuration : 0;
         const wrappedBackground = backgroundSink ? await backgroundSink.getCanvas(backgroundTime, { skipLiveWait: true }) : null;
         drawBackground(context, settings.width, settings.height, settings.background, backgroundImage, wrappedBackground?.canvas ?? null, frameIndex, settings.backgroundFit ?? "cover");

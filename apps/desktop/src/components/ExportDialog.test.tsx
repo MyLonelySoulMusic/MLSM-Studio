@@ -8,8 +8,22 @@ describe("ExportDialog", () => {
   it("indica il rapporto in ogni risoluzione disponibile", () => {
     render(<ExportDialog duration={10} running={false} progress={0} currentFrame={0} totalFrames={0} error={null} onClose={vi.fn()} onCancel={vi.fn()} onStart={vi.fn()} />);
     const resolutions = screen.getByLabelText("Risoluzione").querySelectorAll("option");
-    expect(resolutions).toHaveLength(5);
+    expect(resolutions).toHaveLength(3);
     for (const option of resolutions) expect(option.textContent).toMatch(/\((?:9:16|16:9)(?: · .+)?\)$/);
+    expect(screen.getByLabelText("Risoluzione")).not.toHaveTextContent("16:9");
+  });
+
+  it("riallinea risoluzione e preset quando il progetto passa da 16:9 a 9:16", () => {
+    const onStart = vi.fn();
+    const common = { duration: 10, running: false, progress: 0, currentFrame: 0, totalFrames: 0, error: null, onClose: vi.fn(), onCancel: vi.fn(), onStart };
+    const view = render(<ExportDialog {...common} aspectRatio="16:9" />);
+    expect(screen.getByLabelText("Risoluzione")).toHaveValue("1920x1080");
+
+    view.rerender(<ExportDialog {...common} aspectRatio="9:16" />);
+    expect(screen.getByLabelText("Risoluzione")).toHaveValue("1080x1920");
+    expect(screen.getByLabelText("Risoluzione")).not.toHaveTextContent("1920 × 1080");
+    fireEvent.click(screen.getByRole("button", { name: "Scegli destinazione e crea video" }));
+    expect(onStart).toHaveBeenLastCalledWith(expect.objectContaining({ width: 1080, height: 1920 }));
   });
 
   it("usa la qualità massima come impostazione predefinita", () => {

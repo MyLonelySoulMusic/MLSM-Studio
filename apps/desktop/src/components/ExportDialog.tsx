@@ -41,6 +41,23 @@ export interface ExportDialogStartSettings {
 const videoEditorScales = [.5, .75, 1, 1.5, 2] as const;
 /** Frame rate raggiungibili con l’interpolazione: solo valori superiori a quello reso vengono proposti. */
 const interpolationTargets = [48, 50, 60, 90, 100, 120, 144, 240] as const;
+const portraitResolutions = [
+  { value: "540x960", label: "540 × 960 (9:16 · preview)" },
+  { value: "1080x1920", label: "1080 × 1920 (9:16 · Full HD)" },
+  { value: "2160x3840", label: "2160 × 3840 (9:16 · 4K verticale)" }
+] as const;
+const landscapeResolutions = [
+  { value: "1920x1080", label: "1920 × 1080 (16:9 · Full HD)" },
+  { value: "3840x2160", label: "3840 × 2160 (16:9 · 4K orizzontale)" }
+] as const;
+
+function projectResolutionOptions(aspectRatio: "9:16" | "16:9") {
+  return aspectRatio === "9:16" ? portraitResolutions : landscapeResolutions;
+}
+
+function defaultProjectResolution(aspectRatio: "9:16" | "16:9"): string {
+  return aspectRatio === "9:16" ? "1080x1920" : "1920x1080";
+}
 
 function evenDimension(value: number): number {
   return Math.max(64, Math.min(7680, Math.round(value / 2) * 2));
@@ -75,7 +92,7 @@ interface ExportDialogProps {
 
 export function ExportDialog({ duration, running, progress, currentFrame, totalFrames, error, aspectRatio = "9:16", proSubtitles, videoEditor, sourceVideoExport, offlineExportProfile, onClose, onCancel, onStart }: ExportDialogProps) {
   const videoEditorResolutions = videoEditor ? videoEditorResolutionOptions(videoEditor.compositionWidth, videoEditor.compositionHeight) : [];
-  const [resolution, setResolution] = useState(videoEditor ? `${evenDimension(videoEditor.compositionWidth)}x${evenDimension(videoEditor.compositionHeight)}` : offlineExportProfile?.defaultResolution ?? (aspectRatio === "16:9" ? "1920x1080" : "1080x1920"));
+  const [resolution, setResolution] = useState(videoEditor ? `${evenDimension(videoEditor.compositionWidth)}x${evenDimension(videoEditor.compositionHeight)}` : offlineExportProfile?.defaultResolution ?? defaultProjectResolution(aspectRatio));
   const [fps, setFps] = useState(offlineExportProfile?.defaultFps ?? 30);
   const [interpolationEnabled, setInterpolationEnabled] = useState(false);
   const [interpolationTargetFps, setInterpolationTargetFps] = useState(60);
@@ -111,6 +128,14 @@ export function ExportDialog({ duration, running, progress, currentFrame, totalF
     void videoEditorInterpolationHealth().then((health) => { if (active) setInterpolationHealth(health); });
     return () => { active = false; };
   }, [videoEditor]);
+
+  // Se il rapporto del progetto cambia mentre la finestra è aperta, non deve
+  // sopravvivere una risoluzione appartenente al rapporto precedente.
+  useEffect(() => {
+    if (videoEditor || offlineExportProfile || sourceVideoExport) return;
+    const allowed = projectResolutionOptions(aspectRatio).some((option) => option.value === resolution);
+    if (!allowed) setResolution(defaultProjectResolution(aspectRatio));
+  }, [aspectRatio, offlineExportProfile, resolution, sourceVideoExport, videoEditor]);
 
   const start = () => onStart({
     width,
@@ -149,7 +174,7 @@ export function ExportDialog({ duration, running, progress, currentFrame, totalF
       {proResUnavailable ? <p className="export-warning">ProRes 4444 richiede la build desktop con FFmpeg. La versione web non produrrà un MOV finto o privo di alpha: scegli WebM VP9 con alpha.</p> : null}
     </> : <label>Formato<select disabled><option>{sourceVideoExport ? "MP4 · H.264 + audio originale · proprietà sorgente" : "MP4 · H.264/AAC offline verificato"}</option></select></label>}
     {!preservesSourceVideo ? <>
-      <label>Risoluzione<select aria-label="Risoluzione" value={resolution} onChange={(event) => setResolution(event.target.value)} disabled={running}>{videoEditor ? videoEditorResolutions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>) : offlineExportProfile ? <><option value="1920x1080">1920 × 1080 (16:9 · Full HD)</option><option value="2560x1440">2560 × 1440 (16:9 · QHD / 2K)</option><option value="3840x2160">3840 × 2160 (16:9 · 4K consigliato)</option><option value="5120x2880">5120 × 2880 (16:9 · 5K)</option><option value="7680x4320">7680 × 4320 (16:9 · 8K)</option></> : <><option value="540x960">540 × 960 (9:16)</option><option value="1080x1920">1080 × 1920 (9:16)</option><option value="1920x1080">1920 × 1080 (16:9)</option><option value="2160x3840">2160 × 3840 (9:16 · 4K verticale)</option><option value="3840x2160">3840 × 2160 (16:9 · 4K orizzontale)</option></>}</select></label>
+      <label>Risoluzione · formato {videoEditor ? "composizione" : offlineExportProfile ? "16:9" : aspectRatio}<select aria-label="Risoluzione" value={resolution} onChange={(event) => setResolution(event.target.value)} disabled={running}>{videoEditor ? videoEditorResolutions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>) : offlineExportProfile ? <><option value="1920x1080">1920 × 1080 (16:9 · Full HD)</option><option value="2560x1440">2560 × 1440 (16:9 · QHD / 2K)</option><option value="3840x2160">3840 × 2160 (16:9 · 4K consigliato)</option><option value="5120x2880">5120 × 2880 (16:9 · 5K)</option><option value="7680x4320">7680 × 4320 (16:9 · 8K)</option></> : projectResolutionOptions(aspectRatio).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
       <label>Frame rate<select aria-label="Frame rate" value={fps} onChange={(event) => setFps(Number(event.target.value))} disabled={running}>{[24, 25, 30, 50, 60, 120].map((value) => <option key={value}>{value}</option>)}</select></label>
     </> : null}
     {videoEditor ? <fieldset className="export-interpolation">

@@ -15,6 +15,7 @@ import { fallingFragmentPose } from "../services/new-york-swarm";
 import { resolveSceneLightFrame } from "../services/scene-light";
 import { resolveSubtitleAnimation } from "../services/subtitle-animation";
 import { calculateSubtitleLayout } from "../services/subtitle-layout";
+import { sampleExportCamera, type ExportCameraFrameState } from "../services/viewport-export-camera";
 import { resolveTeddyWalkMotion, teddyRoadScrollDirection, teddyWalkHeading } from "../services/teddy-walk-motion";
 import { loadTeddyMocapLibrary, type TeddyMocapJoint, type TeddyMocapLibrary } from "../services/teddy-mocap";
 import type { TeddyLipSyncPose } from "../services/teddy-lipsync";
@@ -1230,7 +1231,28 @@ export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, 
       activeRenderer.render(scene, activeCamera);
     };
     let exportRendering = false;
-    onRendererReady({ canvas: activeRenderer.domElement, setExportSize: (width, height) => { exportRendering = true; activeRenderer.setPixelRatio(1); activeRenderer.setSize(width, height, false); activeCamera.aspect = width / Math.max(1, height); activeCamera.updateProjectionMatrix(); }, restorePreviewSize: () => { exportRendering = false; activeRenderer.setPixelRatio(previewPixelRatio); resize(); }, renderNow: () => renderScene(true) });
+    const exportCameraState: ExportCameraFrameState = { lastSampleTimeSeconds: null };
+    onRendererReady({
+      canvas: activeRenderer.domElement,
+      setExportSize: (width, height) => {
+        exportRendering = true;
+        exportCameraState.lastSampleTimeSeconds = null;
+        activeRenderer.setPixelRatio(1);
+        activeRenderer.setSize(width, height, false);
+        activeCamera.aspect = width / Math.max(1, height);
+        activeCamera.updateProjectionMatrix();
+      },
+      restorePreviewSize: () => {
+        exportRendering = false;
+        exportCameraState.lastSampleTimeSeconds = null;
+        activeRenderer.setPixelRatio(previewPixelRatio);
+        resize();
+      },
+      renderNow: (sampleTimeSeconds = (exportCameraState.lastSampleTimeSeconds ?? 0) + 1 / 60) => {
+        sampleExportCamera(activeCamera, desiredCameraPosition.current, desiredCameraTarget.current, smoothCameraTarget.current, exportCameraState, sampleTimeSeconds, initialAnimationModeId.current === "walkingCube");
+        renderScene(true);
+      }
+    });
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
     const click = (event: PointerEvent) => {
@@ -1256,11 +1278,14 @@ export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, 
     activeRenderer.domElement.addEventListener("pointerdown", click);
     let frame = 0; const renderClock = new THREE.Clock();
     const render = () => {
-      const delta = Math.min(.05, renderClock.getDelta()); const positionDamping = 1 - Math.exp(-5.8 * delta); const targetDamping = 1 - Math.exp(-7.2 * delta);
-      if (initialAnimationModeId.current === "walkingCube") { activeCamera.position.copy(desiredCameraPosition.current); smoothCameraTarget.current.copy(desiredCameraTarget.current); }
-      else { activeCamera.position.lerp(desiredCameraPosition.current, positionDamping); smoothCameraTarget.current.lerp(desiredCameraTarget.current, targetDamping); }
-      activeCamera.lookAt(smoothCameraTarget.current);
-      if (!exportRendering) renderScene();
+      const delta = Math.min(.05, renderClock.getDelta());
+      if (!exportRendering) {
+        const positionDamping = 1 - Math.exp(-5.8 * delta); const targetDamping = 1 - Math.exp(-7.2 * delta);
+        if (initialAnimationModeId.current === "walkingCube") { activeCamera.position.copy(desiredCameraPosition.current); smoothCameraTarget.current.copy(desiredCameraTarget.current); }
+        else { activeCamera.position.lerp(desiredCameraPosition.current, positionDamping); smoothCameraTarget.current.lerp(desiredCameraTarget.current, targetDamping); }
+        activeCamera.lookAt(smoothCameraTarget.current);
+        renderScene();
+      }
       frame = requestAnimationFrame(render);
     };
     render();

@@ -4,6 +4,10 @@
 
 Tutte le modalità esportano offline. La scena usa lo stesso renderer WebGL della preview, ma il tempo non arriva dal player o dall'orologio reale: ogni fotogramma viene valutato con `frameIndex / FPS`, renderizzato alla risoluzione finale e consegnato all'encoder soltanto quando il precedente è stato acquisito. Il canvas 3D viene quindi composto con foto o video di sfondo decodificati al timestamp esatto, effetti e finale cinematografico.
 
+Il rapporto del progetto vincola i preset disponibili: un progetto `9:16` offre soltanto risoluzioni verticali `9:16`, mentre un progetto `16:9` offre soltanto risoluzioni orizzontali `16:9`. Un controllo ripetuto all'ingresso dell'encoder rifiuta dimensioni incompatibili prima di creare il file.
+
+Anche la camera viene valutata con il timestamp del singolo frame. Lo smorzamento usa il tempo del video e, durante l'export, il ciclo `requestAnimationFrame` della preview non può modificarne la posa: cadute, scorrimenti e cambi di direzione rimangono inquadrati indipendentemente dalla velocità della GPU o dell'encoder.
+
 ```text
 frameIndex / FPS → stato React/Three.js → canvas WebGL ┐
                   sfondo/effetti decodificati offline  ├→ CanvasSource H.264 ┐

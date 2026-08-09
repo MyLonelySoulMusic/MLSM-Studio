@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  assertOfflineAspectRatio,
   assertOfflineFrameIntegrity,
   mediaDrawRect,
   offlineFrameCount,
@@ -25,6 +26,13 @@ describe("offline video exporter", () => {
   it("rifiuta un file se manca anche un solo frame", () => {
     expect(() => assertOfflineFrameIntegrity(3_600, 3_599)).toThrow(/anti-drop/);
     expect(() => assertOfflineFrameIntegrity(3_600, 3_600)).not.toThrow();
+  });
+
+  it("impedisce che un progetto 9:16 venga codificato con dimensioni 16:9", () => {
+    expect(() => assertOfflineAspectRatio("9:16", 1080, 1920)).not.toThrow();
+    expect(() => assertOfflineAspectRatio("16:9", 1920, 1080)).not.toThrow();
+    expect(() => assertOfflineAspectRatio("9:16", 1920, 1080)).toThrow(/incompatibile con il formato 9:16/);
+    expect(() => assertOfflineAspectRatio("16:9", 1080, 1920)).toThrow(/incompatibile con il formato 16:9/);
   });
 
   it("dimensiona il bitrate professionale senza superare i limiti operativi", () => {
