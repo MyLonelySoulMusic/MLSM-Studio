@@ -269,7 +269,7 @@ vi.mock("mediabunny", () => {
   };
 });
 
-import type { SharedViewportRenderer } from "./live-video-exporter";
+import type { SharedViewportRenderer } from "./offline-video-exporter";
 import {
   PRO_SUBTITLE_FORMAT_DESCRIPTORS,
   PRO_SUBTITLE_BUFFER_LIMIT_BYTES,

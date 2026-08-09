@@ -6,12 +6,12 @@
 
 ## Requisiti
 
-- Node.js 20.19 o superiore;
+- Node.js 22.12 o superiore (Node 22 LTS consigliato; il progetto è verificato con 22.23.2);
 - npm 10 o superiore;
 - un browser moderno con WebGL 2 e Web Audio API;
 - Chrome o Edge aggiornati sono consigliati per l'export diretto del video finale.
 
-Rust, Tauri, Python e FFmpeg non sono necessari per avviare la versione web.
+Rust, Tauri, Python e FFmpeg non sono necessari per avviare la versione web. Rust stable con Cargo è invece necessario per compilare e testare la build desktop; Python e FFmpeg servono alle pipeline locali descritte nelle relative sezioni.
 
 ## Installazione
 
@@ -39,14 +39,28 @@ L'avvio del server è sempre manuale: nessun passaggio di build o test avvia aut
 
 ## Primo utilizzo
 
-1. Premi **Importa audio** e scegli un file MP3 o WAV.
+L’introduzione resta aperta finché non premi **Entra in MLSM Studio**. Da qui puoi aprire direttamente i canali ufficiali dell’artista. La schermata successiva è la Home delle aree: scegli **Sound Animation**, **Photo & Video Studio**, **Video Editor** oppure **Music**. Nell’editor il pannello sinistro elenca soltanto le modalità dell’area scelta; il pulsante **Home** nella barra superiore riporta alla scelta delle aree.
+
+### Music · AI Quantizer
+
+L’area **Music** apre la modalità **AI Quantizer**, ora inclusa interamente in MLSM Studio. Backend Node, interfaccia, analisi Python e pipeline audio vivono in `tools/ai-quantizer/`: non è richiesto alcun progetto esterno o cartella sorella.
+
+Al primo avvio in sviluppo MLSM crea automaticamente l’ambiente isolato `.venv-ai-quantizer`; la schermata della modalità mostra fase, percentuale e log del bootstrap senza produrre errori proxy ripetuti. Modelli e cache vengono scaricati soltanto al primo utilizzo e conservati localmente. Progetti audio e risultati restano in `.ai-quantizer-data/`. Entrambe le cartelle sono escluse da Git. La pipeline conserva quantizzazione beat-by-beat senza alterazione del pitch, warp map condivisa per master e stem, DAW Grid Alignment, Audio Restoration, loudness/mastering ISP-aware e AI Music Forensics.
+
+Per preparare esplicitamente l’ambiente senza avviare l’app si può usare `npm run ai-quantizer:setup`. Il normale `npm run dev --workspace @rbs/desktop -- --port 1421` esegue comunque la preparazione automatica quando necessaria.
+
+1. In **Sound Animation**, premi **Importa audio** e scegli un file MP3 o WAV.
 2. Premi **Analizza** per rilevare BPM, beat, onset e famiglie strumentali.
-3. In alto a sinistra scegli la modalità **Instrumental Falling** e abilita le famiglie di elementi che devono comporre la base.
+3. Scegli **Instrumental Falling** dall’elenco delle modalità e abilita le famiglie di elementi che devono comporre la base.
 4. Premi **Applica e rigenera base** nel pannello sinistro, oppure **Genera scena** nella barra superiore, per creare un viaggio deterministico prevalentemente orizzontale.
 5. Usa i controlli in basso per riprodurre, cercare e modificare i marker.
 6. Seleziona gli oggetti dalla viewport o dall'elenco nel pannello destro per modificarli singolarmente.
 7. Premi **Salva** per scaricare il progetto `.rbs.json`.
 8. Premi **Esporta**, scegli nome e destinazione e attendi il video finale con audio.
+
+Il pulsante rosa **Supportami / Support me** apre un carousel che monta un solo contenuto per volta: Creator Profile TikTok, playlist Spotify oppure playlist YouTube. Il profilo TikTok viene risolto tramite l’endpoint oEmbed ufficiale, conservato nella cache della sessione e mostrato direttamente nell’app con i video recenti; non è necessario cambiare pagina. I pulsanti Spotify, YouTube e TikTok nella modale cambiano il contenuto interno, mentre Apple Music, Instagram ed email restano collegamenti esterni. Al primo avvio il pulsante richiama discretamente l’attenzione dopo cinque minuti; dopo un’apertura, il promemoria ricompare soltanto dopo otto ore. Gli URL ufficiali sono documentati in [social.md](social.md).
+
+Il pulsante **Memory** è disponibile nella Home e in tutte le aree. Permette di catalogare file o intere cartelle con descrizioni, tag, categorie e vettori semantici locali; la ricerca in linguaggio naturale restituisce risultati ordinati, anteprime e un grafo interattivo delle relazioni. I risultati selezionati possono essere copiati in una nuova cartella senza sovrascrivere i file esistenti. Il catalogo resta sul dispositivo e non duplica né carica online i contenuti originali. Il flusso completo è descritto in [Memory](docs/memory.md).
 
 Durante la preview premi `Spazio` per alternare play e pausa. La scorciatoia non interviene mentre stai scrivendo in un campo o nella casella delle frasi neon.
 
@@ -84,7 +98,7 @@ La scheda **Scena** dell'Inspector contiene sempre:
 
 Per combinare più tipi di collegamento, applica prima uno stile globale, seleziona un oggetto nella viewport e scegli il tipo del tratto verso l'oggetto successivo nella scheda **Selezione**. I collegamenti vengono mostrati solo nei tratti di scorrimento: la biglia rimbalza sullo strumento, si appoggia sulla guida flottante e la lascia prima dello step seguente, cadendo sulla pelle. Le discese verticali non hanno binari e curvano sempre davanti agli strumenti, verso la camera. Anche l'ultimo contatto produce un piccolo rebound.
 
-Le superfici degli strumenti includono usura procedurale stabile per oggetto: scocche metalliche sporche sotto il colore scelto, graffi, patina della ferramenta, una zona centrale scura e consumata sulle pelli, tornitura, martellatura e abrasioni radiali sui piatti. Il video finale registra direttamente lo stesso renderer WebGL della preview, quindi conserva geometrie, materiali PBR, rotazione della sfera, camera e neon senza una ricostruzione semplificata.
+Le superfici degli strumenti includono usura procedurale stabile per oggetto: scocche metalliche sporche sotto il colore scelto, graffi, patina della ferramenta, una zona centrale scura e consumata sulle pelli, tornitura, martellatura e abrasioni radiali sui piatti. Il video finale valuta offline lo stesso renderer WebGL della preview, frame per frame, quindi conserva geometrie, materiali PBR, rotazione della sfera, camera e neon senza una ricostruzione semplificata e senza dipendere dalla fluidità della preview.
 
 La sfera usa una sonda di riflessione dinamica nello spazio 3D. Luci di scena, strumenti e insegne neon vengono catturati attorno alla posizione reale della biglia: anche un neon collocato dietro di essa produce luce colorata, riflessi sul vetro e risposta sul rivestimento interno. La sonda viene aggiornata più frequentemente durante l'export e usa una texture HDR dedicata.
 
@@ -108,7 +122,7 @@ L’analizzatore conserva 48 bande, RMS e differenza spettrale separatamente per
 
 La modalità **Cube Animation** applica l’immagine caricata, senza ritagli, a tutte le sei facce di un unico cubo sospeso al centro. Non genera piani d’appoggio, percorsi, rimbalzi, copie o split: i beat analizzati producono rotazioni tridimensionali su assi combinati X/Y/Z con accelerazione e frenata smussate. La cover usa un livello fotografico non illuminato e non tonemappato per conservarne luminosità e saturazione; il guscio separato aggiunge vetro PBR neutro, trasmissione ottica, bordo Fresnel, clearcoat, ambiente riflesso e tre luci dedicate. È possibile caricare una fotografia di sfondo, adattata in modalità cover e regolabile nell’oscuramento. La palette estratta dalla cover governa spettrogramma, increspature d’acqua propagate sui beat, alone, anelli orbitali, particelle, light sweep e luci; riattivando la palette automatica i colori vengono ricalcolati dall’immagine corrente. In basso compare uno spettrogramma a 48 bande con indicatori di picco e intensità regolabile. Orientamento ed effetti coincidono tra `t=0` e la durata finale, così il video può essere ripetuto senza salto.
 
-In **Pixel Art → Walking Through New York** una fascia fissa sul bordo inferiore mostra sempre un deck audio pixelato: 48 bande separate L/R, picchi, colori della cover e un vectorscope che rappresenta l’ampiezza stereo del brano. Il deck è composto nello stesso canvas della storia, quindi compare identico nella preview e nell’esportazione sia in strada sia dentro il locale.
+In **Pixel Art → Walking Through New York** l’utente può caricare una fotografia frontale: il volto viene ritagliato e trasformato localmente in uno sprite pixel nitido. Il protagonista cammina frontalmente con un rig continuo di braccia, busto, ginocchia e appoggi alternati. Una fascia fissa sul bordo inferiore mostra sempre un deck audio pixelato: 48 bande separate L/R, picchi, colori della cover e un vectorscope che rappresenta l’ampiezza stereo del brano.
 
 **New York Streets** non viene più proposta nel selettore delle modalità. Il relativo formato dati e il renderer restano disponibili soltanto per aprire senza perdita i progetti precedenti.
 
@@ -122,7 +136,7 @@ Il labiale di Teddy Sing è applicato al modello 3D: analizza intensità, attacc
 
 I pulsanti `9:16` e `16:9` cambiano la cornice effettiva della preview e causano il ridimensionamento del renderer WebGL nel formato scelto.
 
-L'esportazione delle scene 3D registra in tempo reale la stessa scena mostrata nella preview e aggiunge l'audio. Il browser sceglie automaticamente MP4 H.264/AAC quando disponibile, altrimenti WebM VP9/Opus. Nel dialogo puoi scegliere **Massima** (predefinita, fino a 160 Mbit/s) oppure **Alta**; la stima della dimensione si aggiorna in base alla scelta. L'audio viene richiesto a 320 kbit/s ma, durante l'export, è instradato soltanto nel registratore e non nelle cuffie o negli altoparlanti. Il compositing conserva la gestione colore AgX della preview, usa vignettatura molto tenue e non applica filtri opachi aggiuntivi. Nei browser compatibili i chunk vengono scritti direttamente nel file finale scelto dall’utente, evitando di duplicare il video nella quota privata del browser. La cartella temporanea viene usata soltanto come fallback, ripulendo eventuali export incompleti.
+Tutte le esportazioni sono offline e deterministiche. Il tempo di ogni fotogramma deriva da `frameIndex / FPS`; il renderer lavora alla risoluzione finale e l'encoder H.264 attende ogni frame prima di accettare il successivo. Il file MP4 viene riaperto prima della consegna e deve contenere esattamente `ceil(durata × FPS)` pacchetti video, altrimenti il parziale viene eliminato. Nel dialogo puoi scegliere **Massima** (predefinita, fino a 160 Mbit/s) oppure **Alta**; l'audio AAC a 320 kbit/s viene letto dal file e non riprodotto nelle cuffie. Una macchina lenta impiega più tempo ma non causa frame saltati. Il compositing conserva la gestione colore AgX della preview, usa vignettatura tenue e non applica filtri opachi aggiuntivi. Nei browser compatibili i dati vengono scritti progressivamente nel file scelto; OPFS è usato soltanto come fallback temporaneo e viene ripulito al termine.
 
 La sezione **Sottotitoli globali** è disponibile nel pannello sinistro in ogni modalità. Incolla il testo ufficiale, scegli una lunghezza indicativa e avvia la generazione: il numero di parole è un obiettivo morbido, mentre pause vocali, punteggiatura, durata massima, due righe e velocità di lettura governano realmente i tagli. Il selettore offre **Whisper Tiny**, **Base** e **Medium** locali; se Whisper restituisce più parole in un singolo chunk, il programma ridistribuisce correttamente i timestamp interni invece di trattarlo come una frase lunghissima. Il testo ufficiale corregge soltanto parole allineabili e non viene mai spalmato proporzionalmente su sezioni non pronunciate.
 
@@ -134,7 +148,7 @@ I pesi quantizzati di Whisper e Qwen non sono inclusi nel repository o nella bui
 
 La corsia **Sottotitoli** resta visibile anche quando è vuota. Puoi inserire un blocco al playhead con **+ Sottotitolo**, con **Inserisci blocco al playhead** nel pannello oppure facendo doppio clic sulla corsia. La sezione **Blocchi manuali e libreria** salva l’intera traccia insieme a timestamp, animazione, font, dimensione e colori in una libreria locale indipendente dal progetto. Una traccia salvata può sostituire quella corrente mantenendo i tempi, adattarsi proporzionalmente alla durata di un altro video oppure essere inserita dal playhead senza eliminare i blocchi presenti. La libreria è disponibile in tutte le modalità e nei nuovi progetti; può inoltre essere esportata e importata come `dynamic-sound-subtitles.json`.
 
-La modalità **Add Subtitles** importa direttamente un video MP4, WebM, MOV o M4V, ne usa l’audio come clock principale e mostra soltanto i controlli pertinenti: video, formato, adattamento `cover/contain`, oscuramento e sottotitoli. Strumenti, sfera, illuminazione di scena e generatori 3D restano nascosti. Preview ed export condividono lo stesso fotogramma video e la stessa animazione dei sottotitoli.
+La modalità **Pro Subtitles** importa direttamente un video MP4, WebM, MOV o M4V, ne usa l’audio come clock principale e gestisce trascrizione, timeline, kinetic typography ed export offline nello stesso flusso.
 
 ### Photo & Video Studio · Static Watermark Remover
 
@@ -148,9 +162,9 @@ L’esportazione non registra la preview. Decodifica ogni frame sorgente in ordi
 
 La modalità **Upscaler** accetta fotografie e video. `Canvas Enhanced` conserva separatamente il miglioramento tradizionale immediato e senza download. I profili neurali disponibili sono `RealESRGAN_x4plus`, `RealESRGAN_x2plus`, `RealESRNet_x4plus`, `RealESRGAN_x4plus_anime_6B`, `realesr-general-x4v3` e `realesr-animevideov3`; ciascuno espone destinazione d’uso, vantaggi, limiti, fattore nativo e costo indicativo. I checkpoint ONNX compatibili vengono scaricati al primo utilizzo mostrando percentuale e MB, poi restano nella Cache Storage locale. RealESRNet e AnimeVideo v3 usano i checkpoint PyTorch ufficiali tramite il servizio locale collegato anche alla web app. Il rilevamento hardware distingue NVIDIA CUDA, Apple Silicon/Metal, WebGPU e CPU; `Automatico` sceglie il percorso migliore, ma il motore resta modificabile.
 
-L’utente imposta tile, TTA, rapporto e risoluzione finale fino a 16384 px. I preset Full HD/QHD/4K/8K ruotano automaticamente per una sorgente verticale e adattano il contenuto entro la risoluzione nominale conservando il rapporto originale, senza stretching o crop. **Genera anteprima upscaling**, disponibile sia nei controlli sia sulla viewport, distingue l’originale dalla preview elaborata; cambiando sorgente, modello, tile o TTA il risultato viene invalidato. In modalità a tutto schermo una plancia resta sotto l’immagine e permette di cambiare modello, confronto, separatore, fusione, contrasto, saturazione e nitidezza e di rigenerare. Originale e migliorato possono poi essere confrontati con split, vista singola o fusione alla stessa dimensione finale. Esposizione, contrasto, luci, ombre, bianchi, neri, saturazione, vividezza, temperatura, tinta, nitidezza e riduzione rumore sono applicati nella stessa pipeline della preview. Le immagini vengono esportate in PNG alla risoluzione scelta; i video vengono elaborati offline preservando timestamp, VFR e pacchetti audio, quindi verificati contro il numero di frame sorgente prima della consegna.
+L’utente imposta tile, TTA, rapporto e risoluzione finale fino a 16384 px. I preset Full HD/QHD/4K/8K ruotano automaticamente per una sorgente verticale e adattano il contenuto entro la risoluzione nominale conservando il rapporto originale, senza stretching o crop. Le azioni principali dei video sono ancorate nella viewport: **Avvia upscaling video completo** crea il job frame-per-frame, mentre **Prova il frame corrente** genera soltanto il controllo rapido. In modalità a tutto schermo una plancia resta sotto l’immagine e permette di cambiare modello, confronto, separatore, fusione, contrasto, saturazione e nitidezza e di rigenerare. Originale e migliorato possono poi essere confrontati con split, vista singola o fusione alla stessa dimensione finale. Esposizione, contrasto, luci, ombre, bianchi, neri, saturazione, vividezza, temperatura, tinta, nitidezza e riduzione rumore sono applicati nella stessa pipeline della preview. Le immagini vengono esportate in PNG alla risoluzione scelta. Per i video il backend estrae prima tutti gli originali in `temp/upscaler/<job>/original-frames`, mostra frame corrente, totale, fase ed ETA, esegue l’upscaling uno per uno e ricompone video e audio preservando i PTS anche nelle sorgenti VFR. Un audit con ffprobe blocca il file se il totale finale differisce anche di un solo frame. Il workspace temporaneo del job viene eliminato dopo la consegna del download, in caso di annullamento/refresh e al successivo avvio del servizio; anche i job terminali non scaricati hanno una scadenza di sicurezza.
 
-La pipeline neurale riprende l’impostazione del precedente progetto `Video Editor`: i modelli fotografici completi pesano circa 67 MB e usano l’architettura RRDB a 23 blocchi. La sorgente non viene più ridotta a 384 px: viene processata interamente a tile con 10 px di sovrapposizione, ricomposta direttamente alla risoluzione finale e, con TTA attivo, mediata con una seconda inferenza specchiata. Durante il lavoro restano visibili download, inizializzazione e percentuale dei tile. La preview permette zoom dal 100 al 400%, scorrimento, split e mix con l’originale; la stessa funzione a tile viene richiamata dall’export video per ciascun frame.
+La pipeline neurale riprende l’impostazione del precedente progetto `Video Editor`: i modelli fotografici completi pesano circa 67 MB e usano l’architettura RRDB a 23 blocchi. La sorgente non viene più ridotta a 384 px: viene processata interamente a tile e ricomposta direttamente alla risoluzione finale; con TTA attivo viene mediata con una seconda inferenza specchiata. Durante il lavoro restano visibili download, inizializzazione e avanzamento. La preview permette zoom dal 100 al 400%, scorrimento, split e mix con l’originale; l’export video esegue la stessa inferenza nel processo Python locale e conserva sia i frame originali sia quelli migliorati nella cartella temporanea del job.
 
 #### Servizio PyTorch locale per la web app
 
@@ -213,6 +227,83 @@ La modalità **From 9:16 to 16:9** crea una composizione orizzontale partendo da
 La preview usa un profilo di lavoro ottimizzato a 30 fps: canvas e texture del cubo sono limitati, mentre densità di particelle, glow, sfocatura e antialiasing vengono alleggeriti. La cornice 16:9 è rimossa dal flusso di dimensionamento della griglia, centrata in posizione assoluta e adattata sia alla larghezza sia all’altezza interne effettivamente disponibili; non può quindi espandere il workspace o finire sotto la timeline. Non vengono semplificati clock audio, movimento, spettro, livelli o composizione. L’export offline ricostruisce invece ogni frame alla risoluzione e agli fps selezionati con texture, effetti e antialiasing alla qualità completa.
 
 L’export è offline: decodifica il video sorgente, ricostruisce ogni frame al timestamp esatto e attende l’encoder prima di continuare. L’audio viene muxato senza riproduzione e il file viene consegnato soltanto se il controllo finale ritrova tutti i frame attesi. Sono disponibili Full HD, QHD/2K, 4K, 5K e 8K fino a 120 fps; con un video centrale 1080 × 1920 il preset suggerito è 4K 3840 × 2160.
+
+## Video Editor
+
+Nel selettore **Area** scegli **Video Editor**: è un montaggio multitraccia professionale, indipendente dalle modalità sincronizzate al brano. La timeline del montaggio ha un proprio trasporto e un proprio clock, quindi non richiede né l’import audio dello studio né l’analisi generale del progetto. Il pool mostra miniature e permette di scegliere esplicitamente il livello di destinazione, inserire il media al playhead, aggiungerlo in coda oppure trascinarlo direttamente sul livello e sul tempo desiderati. Non esiste una distinzione artificiale fra video principale e overlay: tutti i livelli video hanno le stesse trasformazioni, opacità, fusioni ed effetti; l’ordine verticale della timeline determina soltanto quale livello viene composto sopra.
+
+### Pool media
+
+Il pannello sinistro contiene il **Pool media**. Puoi caricare video (MP4, WebM, MOV, M4V, MKV, AVI), immagini (PNG, JPG, WebP, AVIF, GIF, BMP) e audio (MP3, WAV, M4A, AAC, FLAC, OGG, Opus) con il pulsante oppure trascinando i file nella zona di rilascio. I file restano locali e non vengono mai inviati altrove: il pool conserva soltanto il riferimento di sessione, la durata, le dimensioni, la presenza di audio e la forma d’onda. Ogni media mostra tipo, risoluzione, durata, BPM e numero di battute quando disponibili; scegli **Livello di destinazione**, poi usa **Inserisci nel livello al playhead** o **Aggiungi in coda al livello**. **Rimuovi** elimina il media insieme a tutte le clip che lo usano. Un file già presente non viene duplicato e il pool accetta fino a 200 media per progetto.
+
+### Timeline, calamita e taglio
+
+La timeline in basso ospita tracce video e audio riordinabili: la traccia più in alto è quella disegnata sopra le altre. Ogni traccia ha visibilità, muto, blocco, volume e nome modificabili sia dall’etichetta in timeline sia dall’Inspector; **+ Traccia video** e **+ Traccia audio** ne aggiungono altre, rispettivamente in cima e in coda.
+
+- **Sposta** una clip trascinandone il corpo; puoi anche portarla su un’altra traccia dello stesso tipo. Le tracce bloccate rifiutano ogni modifica.
+- **Estendi o accorcia** trascinando i bordi. Un video o un audio non può superare il materiale disponibile nella sorgente; un fermo immagine si allunga liberamente fino a 600 s. Trascinando il bordo iniziale l’attacco nella sorgente segue il gesto, come in un trim professionale.
+- **Taglia** con `S`, con il pulsante `✂ Taglia`, con un doppio clic sulla clip o dal menu contestuale: le due metà restano contigue e la seconda conserva il proprio punto nel materiale originale.
+- **Calamita**: attiva per impostazione predefinita, con raggio regolabile da 5 a 500 ms. Aggancia inizi e fini delle altre clip, il playhead, l’origine e — con **Aggancia alle battute** — le battute analizzate. Due clip accostate combaciano esattamente, senza lasciare un vuoto al centro. Il pulsante `🧲 Calamita` in timeline la disattiva quando serve un posizionamento libero.
+- **Chiudi i vuoti** ricompatta un’intera traccia dall’inizio, conservando l’ordine e la durata di ogni clip.
+- Selezione multipla con `Shift`, `Cmd` su macOS o `Ctrl` su Windows/Linux; `Backspace` o `Delete` eliminano le clip selezionate. `←` e `→` spostano il playhead di un fotogramma, con `Shift` di un secondo.
+
+### Menu contestuale e sincronizzazione audio/video
+
+Il tasto destro su una clip apre il menu delle azioni: sincronizzazione, taglio sul playhead, duplicazione, spostamento sul playhead, chiusura dei vuoti della traccia, attivazione o disattivazione dell’audio, applicazione immediata di fade in e fade out e eliminazione.
+
+Per sincronizzare come in CapCut, seleziona prima le clip da spostare, poi fai clic destro sulla clip di riferimento e scegli **Sincronizza audio e video**. Quando entrambe le clip hanno una griglia ritmica analizzata, il montaggio cerca lo scarto che allinea il maggior numero di battute con tolleranza di 45 ms e, a pari punteggio, preferisce lo spostamento più piccolo; la barra di stato riporta quante battute sono state allineate. Senza analisi ritmica vengono allineati gli attacchi delle clip. Nessuna clip finisce a un tempo negativo.
+
+Per ottenere la griglia, usa **Analizza battute** nel pool su un audio o su un video con audio: l’analisi riusa l’analizzatore dello studio e registra BPM, battute e battere. Le battute diventano anche punti magnetici della calamita e compaiono come badge `♪` sulla clip.
+
+### Effetti, fusione e correzione colore
+
+La libreria è organizzata in cinque categorie — **Transizioni**, **Movimento**, **Colore**, **Distorsione** e **Luce** — e contiene 14 effetti realmente renderizzati: Fade In/Out, Push In, Pull Back, Slide Up/Right, Camera Shake, Film Flicker, Modern Noir, RGB Split, Digital Glitch, Dream Bloom, Light Leak e Cinematic Vignette. Ogni effetto diventa un blocco autonomo nella corsia rosa: può essere spostato, rifilato, disattivato o eliminato e dispone dei propri controlli reali, fra durata, intensità, curva, ampiezza, frequenza e diffusione. Gli effetti temporalmente sovrapposti vengono impilati automaticamente in sottocorsie, quindi ogni istanza resta selezionabile e modificabile. L’anteprima parametrica della libreria risponde agli stessi controlli; timeline, compositor ed export offline usano il resolver temporale deterministico.
+
+Durante Play tutti i video e le immagini attivi vengono presentati nello stesso ordine dei livelli della timeline. I media fuori intervallo o cancellati vengono rimossi immediatamente dallo stack visibile, mentre i decoder del taglio successivo restano pre-caricati in modo invisibile: seek, gap e sovrapposizioni non possono lasciare nel monitor un vecchio fotogramma.
+
+Ogni clip video o immagine dispone di sedici modalità di fusione — normale, moltiplica, scolora, sovrapponi, scurisci, schiarisci, scherma colore, brucia colore, luce intensa, luce soffusa, differenza, esclusione, tonalità, saturazione, colore e luminosità — con **intensità regolabile**: al 100% agisce la sola fusione, al 50% il livello viene miscelato a metà con la composizione normale. Sono inoltre disponibili opacità e adattamento `cover`, `contain` o `fill`.
+
+Le regolazioni immagine seguono l’ordine di una correzione colore professionale: esposizione in stop, contrasto, luci, ombre, bianchi, neri, saturazione, vividezza, temperatura, tinta, tonalità, nitidezza e riduzione rumore. Vengono applicate su una superficie isolata per ogni clip, così la gradazione non contamina i livelli sottostanti; soltanto il livello finito entra nella scena con la modalità di fusione scelta. L’export applica la composizione completa; la preview usa lo stack DOM hardware per restare fluida e mantiene gli stessi livelli, timing e controlli, con una resa ottimizzata delle correzioni più costose.
+
+Per l’audio, ogni clip ha muto e volume da 0 a 200%, indipendenti dal muto e dal volume della traccia; il guadagno risultante è il prodotto dei due, con un tetto di 200%.
+
+### Export del montaggio
+
+L’export del Video Editor è offline: nessuna registrazione della preview. Ogni fotogramma viene calcolato da `frameIndex / fps`, le clip vengono decodificate al timestamp esatto e composte con fusione, correzione colore e dissolvenze della timeline; l’audio è un mixdown Web Audio con volumi e dissolvenze del montaggio. Prima della consegna il contenitore MP4 viene riaperto e verificato: un solo fotogramma mancante annulla il file parziale.
+
+La risoluzione viene proposta come scala della composizione — 50%, 75%, 100% nativa, 150% e 200% — quindi un montaggio verticale resta verticale. Il frame rate di render va da 24 a 120 fps.
+
+**Frame rate avanzato · interpolazione reale.** La casella *Aumenta realmente i fotogrammi dopo la codifica* porta il file fino a 240 fps generando fotogrammi intermedi nuovi, non copie o dissolvenze. Sono disponibili tre metodi:
+
+| Metodo | Motore | Note |
+| --- | --- | --- |
+| Stima del movimento ffmpeg | `minterpolate` con `mi_mode=mci`, `mc_mode=aobmc`, `me_mode=bidir` | Predefinito: sintetizza fotogrammi realmente nuovi. |
+| Fusione | `minterpolate` con `mi_mode=blend` | Più rapido, adatto a montaggi lunghi. |
+| RIFE | runtime neurale locale | Richiede pesi forniti dall’utente. |
+
+L’interpolazione avviene **dopo** la verifica anti-drop del file a frame rate nativo e usa il servizio locale descritto sotto. Se il servizio non risponde, se ffmpeg non è installato o se l’interpolazione non riesce, il montaggio viene comunque consegnato al frame rate reso e la barra di stato ne spiega il motivo: non viene mai salvato un file interpolato a metà. Il file interpolato viene riaperto e deve contenere più fotogrammi dell’originale, altrimenti resta valido l’originale.
+
+#### Requisiti dell’interpolazione
+
+L’interpolazione reale è la sola funzione del Video Editor che esce dal browser. Richiede:
+
+1. il servizio Python locale, lo stesso dell’Upscaler, in ascolto esclusivamente su `127.0.0.1:8765`;
+2. `ffmpeg` risolvibile dal `PATH` del servizio, per i metodi *stima del movimento* e *fusione*.
+
+Il servizio **non viene mai avviato dall’interfaccia**. Durante `npm run dev` viene avviato da Vite insieme alla web app; in tutti gli altri casi si lancia a mano in un secondo terminale:
+
+```bash
+npm run upscaler:setup   # una sola volta
+npm run upscaler:server
+```
+
+`ffmpeg` non è incluso né scaricato dal progetto e va installato separatamente:
+
+```bash
+brew install ffmpeg
+```
+
+Il percorso può essere forzato con la variabile `DSAS_FFMPEG`. Il metodo **RIFE** è facoltativo e richiede pesi forniti dall’utente in `.upscaler-cache/rife` (percorso sovrascrivibile con `DSAS_RIFE_WEIGHTS`) insieme al relativo runtime nell’ambiente Python; senza di essi la finestra di export lo segnala e suggerisce la stima del movimento ffmpeg. La finestra di export interroga `/interpolation/health` all’apertura e mostra sempre in anticipo quali motori sono disponibili e su quale dispositivo, senza impedire l’export quando non lo sono.
 
 In basso a destra è disponibile **Assistente Studio**, una chat di aiuto che usa
 Qwen2.5 0.5B Instruct, scaricato e memorizzato localmente al primo utilizzo. Il bot recupera dalla knowledge base soltanto
@@ -298,12 +389,16 @@ Per ragioni di sicurezza il browser non può riaprire automaticamente un file au
 
 L'analisi avviene in un Web Worker. Con brani lunghi può richiedere tempo, ma l'interfaccia dovrebbe restare utilizzabile. Ricarica la pagina se il file è corrotto o il browser termina il worker per memoria insufficiente.
 
+### L'interpolazione del Video Editor non aumenta gli fps
+
+Verifica nell'ordine: il servizio locale è attivo (`npm run upscaler:server` in un secondo terminale, oppure la riga `[PyTorch]` nel log di `npm run dev`), `ffmpeg` risponde a `ffmpeg -version` nello stesso terminale del servizio e il frame rate di destinazione è superiore a quello di render. La finestra di export mostra sempre lo stato del servizio prima dell'avvio; quando l'interpolazione non è disponibile il montaggio viene consegnato al frame rate reso e il motivo compare nella barra di stato. Per il metodo RIFE servono anche i pesi in `.upscaler-cache/rife`.
+
 ### L'export non parte
 
-Usa Chrome o Edge aggiornato, consenti al browser di salvare il file e verifica che MediaRecorder e l'accelerazione hardware siano disponibili. La registrazione dura quanto il brano; per 4K o 120 fps serve una GPU adeguata. Se MP4 non è supportato dal browser, l'app produce automaticamente WebM.
+Usa Chrome o Edge aggiornato, consenti al browser di salvare il file e verifica che WebCodecs e l'accelerazione hardware siano disponibili. Per 4K o 120 fps servono più memoria e tempo; l'elaborazione può essere più lenta del brano senza perdere frame. Se H.264/AAC non è disponibile alla risoluzione scelta, l'app interrompe l'operazione senza consegnare un file incompleto.
 
 ## Stato della versione
 
-Lo sviluppo è web-first. L'app esporta già un video finale con audio usando le capacità del browser; una futura compilazione desktop con FFmpeg potrà aggiungere codec professionali e rendering offline più veloce, ma verrà valutata solo alla fine.
+Lo sviluppo è web-first. L'app esporta già video finali offline con audio usando WebCodecs; una futura compilazione desktop con FFmpeg potrà aggiungere codec professionali e accelerare ulteriormente il rendering, ma verrà valutata solo alla fine.
 
 Per ulteriori dettagli consulta [lo stato dell'MVP web](docs/web-mvp-status.md) e [la documentazione di sviluppo](docs/development.md).

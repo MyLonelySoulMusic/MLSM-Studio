@@ -43,11 +43,12 @@ describe("App", () => {
   it("organizza le modalità in Sound Animation e persiste lingua e tema", () => {
     render(<App />);
     const navigation = screen.getByRole("region", { name: "Navigazione creativa" });
-    expect(within(navigation).getAllByText("Sound Animation")).toHaveLength(2);
+    expect(within(navigation).queryByRole("combobox", { name: "Area applicazione" })).not.toBeInTheDocument();
     const picker = within(navigation).getByRole("combobox", { name: "Modalità animazione" });
     expect(picker.querySelector('optgroup[label="Visualizer"]')).toBeInTheDocument();
     expect(picker.querySelector('optgroup[label="Storie e personaggi"]')).toBeInTheDocument();
     expect(picker.querySelector('optgroup[label="Testo e sottotitoli"]')).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Supportami" })).toBeInTheDocument();
     fireEvent.change(screen.getByRole("combobox", { name: "Lingua" }), { target: { value: "en" } });
     expect(screen.getByRole("navigation", { name: "Project actions" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "New" })).toBeInTheDocument();
@@ -58,8 +59,8 @@ describe("App", () => {
   });
 
   it("espone Photo & Video Studio con Static Watermark Remover e soli controlli pertinenti", () => {
+    useProjectStore.getState().setAnimationMode("staticWatermark", ["platform"]);
     render(<App />);
-    fireEvent.change(screen.getByRole("combobox", { name: "Area applicazione" }), { target: { value: "photoVideoStudio" } });
     expect(screen.getByRole("combobox", { name: "Modalità animazione" })).toHaveValue("staticWatermark");
     expect(screen.getByText("Static Watermark Remover", { selector: ".animation-mode-heading strong" })).toBeInTheDocument();
     expect(screen.getByLabelText("Carica video con watermark")).toBeInTheDocument();
@@ -73,15 +74,16 @@ describe("App", () => {
   });
 
   it("espone Upscaler per foto e video con modelli, hardware, confronto e risoluzione finale", () => {
+    useProjectStore.getState().setAnimationMode("upscaler", ["platform"]);
     render(<App />);
-    fireEvent.change(screen.getByRole("combobox", { name: "Area applicazione" }), { target: { value: "photoVideoStudio" } });
-    fireEvent.change(screen.getByRole("combobox", { name: "Modalità animazione" }), { target: { value: "upscaler" } });
     expect(screen.getByLabelText("Carica sorgente Upscaler")).toHaveAttribute("accept", expect.stringContaining("video/mp4"));
     expect(screen.getByLabelText("Modello Upscaler")).toHaveTextContent("RealESRGAN x4plus Anime 6B");
     expect(screen.getByLabelText("Acceleratore Upscaler")).toHaveTextContent("NVIDIA CUDA");
     expect(screen.getByLabelText("Larghezza finale Upscaler")).toHaveValue(3840);
     expect(screen.getByLabelText("Modalità confronto Upscaler")).toHaveValue("split");
     expect(screen.getByRole("complementary", { name: "Inspector Upscaler" })).toBeInTheDocument();
+    expect(screen.queryByText("Servizio PyTorch")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Riprova connessione" })).not.toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Timeline musicale" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Importa audio" })).not.toBeInTheDocument();
   });
@@ -93,6 +95,14 @@ describe("App", () => {
     render(<App />);
     const exportButton = screen.getByRole("button", { name: "Esporta" }); expect(exportButton).toBeEnabled(); fireEvent.click(exportButton); expect(requested).toHaveBeenCalledOnce();
     window.removeEventListener("upscaler:export", requested);
+  });
+
+  it("non relega più le azioni Upscaler video in fondo al pannello laterale", () => {
+    useProjectStore.getState().setAnimationMode("upscaler", ["platform"]);
+    useProjectStore.getState().updateUpscaler({ sourceUrl: "blob:source-video", sourceName: "source.mp4", sourceKind: "video", sourceWidth: 1280, sourceHeight: 720, durationSeconds: 12, finalWidth: 2560, finalHeight: 1440 });
+    render(<App />);
+    expect(screen.queryByRole("button", { name: "Video intero · avvia upscaling frame per frame" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Solo prova rapida · elabora il frame corrente" })).not.toBeInTheDocument();
   });
 
   it("apre l’assistente locale con knowledge base e suggerimenti contestuali", () => {
@@ -119,7 +129,7 @@ describe("App", () => {
   });
   it("cambia live l'oggetto del rimbalzo dalla timeline senza rigenerare", () => { const project = useProjectStore.getState(); project.attachAudio({ path: "track.wav", fileName: "track.wav", hash: "d".repeat(64), durationSeconds: 10, sampleRate: 48_000, channels: 2, codec: "pcm", fileSize: 100 }, []); useProjectStore.getState().addEvent(1); render(<App />); const selector = screen.getByLabelText("Oggetto del rimbalzo"); expect(within(selector).getByRole("option", { name: "Pianoforte" })).toBeInTheDocument(); fireEvent.change(selector, { target: { value: "piano" } }); expect(useSceneStore.getState().objects[0]).toMatchObject({ type: "piano", color: "#e94f70" }); expect(useProjectStore.getState().project.events[0]).toMatchObject({ assignedObjectType: "piano", assignedObjectId: "kick-1" }); });
   it("mostra Instrumental Falling e configura gli elementi della base", () => { render(<App />); const modes = screen.getByRole("complementary", { name: "Modalità animazione" }); expect(within(modes).getByRole("combobox", { name: "Modalità animazione" })).toHaveValue("instrumentalFalling"); const piano = within(modes).getByRole("checkbox", { name: /Pianoforte/ }); expect(piano).not.toBeChecked(); fireEvent.click(piano); expect(useProjectStore.getState().project.animation.baseObjectTypes).toContain("piano"); expect(within(modes).getByRole("checkbox", { name: /Chitarra \/ corde/ })).toBeInTheDocument(); expect(within(modes).getByRole("checkbox", { name: /Violino \/ archi/ })).toBeInTheDocument(); });
-  it("isola il flusso Add Subtitles dai controlli 3D non pertinenti", () => { render(<App />); const modes = screen.getByRole("complementary", { name: "Modalità animazione" }); const picker = within(modes).getByRole("combobox", { name: "Modalità animazione" }); expect(within(picker).getByRole("option", { name: "Add Subtitles" })).toBeInTheDocument(); fireEvent.change(picker, { target: { value: "addSubtitles" } }); expect(within(modes).getByText("Video sorgente")).toBeInTheDocument(); expect(within(modes).getByLabelText("Carica video per sottotitoli")).toBeInTheDocument(); expect(screen.getByText("Adattamento video")).toBeInTheDocument(); expect(screen.queryByText("Sfondo e ambiente")).not.toBeInTheDocument(); expect(screen.queryByRole("checkbox", { name: "Inserisci la luce nella scena" })).not.toBeInTheDocument(); expect(screen.queryByRole("button", { name: "Importa audio" })).not.toBeInTheDocument(); expect(screen.getByRole("combobox", { name: "Modello Whisper locale" })).toHaveTextContent("Whisper Medium"); });
+  it("rimuove la modalità duplicata Add Subtitles e conserva Pro Subtitles", () => { render(<App />); const modes = screen.getByRole("complementary", { name: "Modalità animazione" }); const picker = within(modes).getByRole("combobox", { name: "Modalità animazione" }); expect(within(picker).queryByRole("option", { name: "Add Subtitles" })).not.toBeInTheDocument(); expect(within(picker).getByRole("option", { name: "Pro Subtitles" })).toBeInTheDocument(); });
   it("isola ProSubtitles e collega frase, animazione, palette e stile per parola", () => {
     const store = useProjectStore.getState();
     store.setAnimationMode("proSubtitles", ["platform"]);
@@ -151,7 +161,7 @@ describe("App", () => {
   it("mantiene compatibili i controlli dei vecchi progetti New York Streets", () => { useProjectStore.getState().setAnimationMode("newYorkStreets", ["pebble"]); render(<App />); const modes = screen.getByRole("complementary", { name: "Modalità animazione" }); expect(within(modes).getByText("Gara di biglie")).toBeInTheDocument(); const count = within(modes).getByLabelText("Numero di sfere secondarie"); fireEvent.change(count, { target: { value: "13" } }); expect(useProjectStore.getState().project.animation.newYorkStreets.secondaryMarbleCount).toBe(13); fireEvent.change(within(modes).getByLabelText("Colore di tutte le sfere secondarie"), { target: { value: "#123456" } }); expect(useProjectStore.getState().project.animation.newYorkStreets.secondaryColors).toHaveLength(13); expect(within(modes).getByLabelText("Colore sfera secondaria 13")).toHaveValue("#123456"); expect(within(modes).getByLabelText("Carica volantini")).toHaveAttribute("multiple"); });
   it("mostra poster, palette, atmosfera e controlli vocali di Teddy Sing", () => { render(<App />); const modes = screen.getByRole("complementary", { name: "Modalità animazione" }); fireEvent.change(within(modes).getByRole("combobox", { name: "Modalità animazione" }), { target: { value: "teddySing" } }); expect(within(modes).getByText("Lip sync 3D")).toBeInTheDocument(); expect(within(modes).getByText("Importa la traccia vocale isolata.", { exact: false })).toBeInTheDocument(); fireEvent.change(within(modes).getByLabelText("Intensità lip sync Teddy Sing"), { target: { value: "1.4" } }); fireEvent.change(within(modes).getByLabelText("Colore LED Teddy Sing"), { target: { value: "#22aaff" } }); fireEvent.change(within(modes).getByLabelText("Colore particelle Teddy Sing"), { target: { value: "#ffaa33" } }); fireEvent.change(within(modes).getByLabelText("Densità particelle Teddy Sing"), { target: { value: "1.8" } }); expect(useProjectStore.getState().project.animation.teddySing).toMatchObject({ lipSyncIntensity: 1.4, ledColor: "#22aaff", particlesEnabled: true, particleColor: "#ffaa33", particleDensity: 1.8 }); });
   it("espone Stereo Unfold con apertura, pieghe, campo ed effetti stereo configurabili", () => { render(<App />); const modes = screen.getByRole("complementary", { name: "Modalità animazione" }); const picker = within(modes).getByRole("combobox", { name: "Modalità animazione" }); expect(within(picker).getByRole("option", { name: "Stereo Unfold" })).toBeInTheDocument(); fireEvent.change(picker, { target: { value: "stereoUnfold" } }); expect(within(modes).getByText("Cover fisica")).toBeInTheDocument(); expect(within(modes).getByText("Campo spettrale stereo")).toBeInTheDocument(); expect(within(modes).getByText("Effetti stereo in primo piano")).toBeInTheDocument(); expect(within(modes).getByText("Effetti a tutto schermo")).toBeInTheDocument(); fireEvent.change(within(modes).getByLabelText("Durata apertura Stereo Unfold"), { target: { value: "3.2" } }); fireEvent.change(within(modes).getByLabelText("Pieghe residue Stereo Unfold"), { target: { value: ".72" } }); fireEvent.change(within(modes).getByLabelText("Stile spettro Stereo Unfold"), { target: { value: "prisms" } }); fireEvent.click(within(modes).getByLabelText("Particelle stereo")); fireEvent.click(within(modes).getByLabelText("Raggi cromatici")); fireEvent.change(within(modes).getByLabelText("Intensità effetti Stereo Unfold"), { target: { value: "1.6" } }); expect(useProjectStore.getState().project.animation.stereoUnfold).toMatchObject({ unfoldDuration: 3.2, residualCrease: .72, spectrumStyle: "prisms", effectIntensity: 1.6, effects: { particles: false, lightTrails: true, pulseRings: true, fullScreenWaves: true, lightRays: false, chromaDust: true } }); });
-  it("espone Pixel Art con sotto-modalità e nome del locale", () => { render(<App />); const modes = screen.getByRole("complementary", { name: "Modalità animazione" }); const picker = within(modes).getByRole("combobox", { name: "Modalità animazione" }); expect(within(picker).getByRole("option", { name: "Pixel Art" })).toBeInTheDocument(); fireEvent.change(picker, { target: { value: "pixelArt" } }); expect(within(modes).getByRole("option", { name: "Walking Through New York" })).toBeInTheDocument(); expect(within(modes).getByText("Regia legata alla durata")).toBeInTheDocument(); fireEvent.change(within(modes).getByLabelText("Nome locale Pixel Art"), { target: { value: "NIGHT BAR" } }); expect(useProjectStore.getState().project.animation.pixelArt).toMatchObject({ subMode: "walkingThroughNewYork", venueName: "NIGHT BAR" }); });
+  it("espone Pixel Art con foto frontale, sotto-modalità e nome del locale", () => { render(<App />); const modes = screen.getByRole("complementary", { name: "Modalità animazione" }); const picker = within(modes).getByRole("combobox", { name: "Modalità animazione" }); expect(within(picker).getByRole("option", { name: "Pixel Art" })).toBeInTheDocument(); fireEvent.change(picker, { target: { value: "pixelArt" } }); expect(within(modes).getByRole("option", { name: "Walking Through New York" })).toBeInTheDocument(); expect(within(modes).getByLabelText("Carica foto frontale Pixel Art")).toBeInTheDocument(); expect(within(modes).getByText("Regia legata alla durata")).toBeInTheDocument(); fireEvent.change(within(modes).getByLabelText("Nome locale Pixel Art"), { target: { value: "NIGHT BAR" } }); expect(useProjectStore.getState().project.animation.pixelArt).toMatchObject({ subMode: "walkingThroughNewYork", venueName: "NIGHT BAR", characterImageUrl: null }); });
   it("espone Cube Animation con cubo, sfondo, vetro, spettrogramma e increspature", () => { render(<App />); const modes = screen.getByRole("complementary", { name: "Modalità animazione" }); const picker = within(modes).getByRole("combobox", { name: "Modalità animazione" }); expect(within(picker).getByRole("option", { name: "Cube Animation" })).toBeInTheDocument(); fireEvent.change(picker, { target: { value: "walkingCube" } }); expect(within(modes).getByText("Immagine sulle sei facce")).toBeInTheDocument(); expect(within(modes).getByLabelText("Carica immagine Cube Animation")).toBeInTheDocument(); expect(within(modes).getByLabelText("Carica sfondo Cube Animation")).toBeInTheDocument(); expect(within(modes).getByLabelText("Intensità spettrogramma Cube Animation")).toBeInTheDocument(); expect(within(modes).getByLabelText("Intensità increspature Cube Animation")).toBeInTheDocument(); expect(within(modes).getByText("Composizione centrale pulita")).toBeInTheDocument(); });
   it("espone From 9:16 to 16:9 con sorgenti separate, spettro, cubo ed effetti a livelli", () => {
     render(<App />); const modes = screen.getByRole("complementary", { name: "Modalità animazione" }); const picker = within(modes).getByRole("combobox", { name: "Modalità animazione" });
@@ -193,7 +203,8 @@ describe("App", () => {
   });
   it("espone Pixels Subtitles con cover protetta, cornice audio, ombra e pipeline sottotitoli locale", () => {
     render(<App />); const modes = screen.getByRole("complementary", { name: "Modalità animazione" }); const picker = within(modes).getByRole("combobox", { name: "Modalità animazione" });
-    for (const name of ["Add Subtitles", "Pro Subtitles", "Pixels Subtitles"]) expect(within(picker).getByRole("option", { name })).toBeInTheDocument();
+    for (const name of ["Pro Subtitles", "Pixels Subtitles"]) expect(within(picker).getByRole("option", { name })).toBeInTheDocument();
+    expect(within(picker).queryByRole("option", { name: "Add Subtitles" })).not.toBeInTheDocument();
     expect(within(picker).queryByRole("option", { name: "ProSubtitles" })).not.toBeInTheDocument();
     expect(within(picker).queryByRole("option", { name: "PixelsSub" })).not.toBeInTheDocument();
     expect(within(picker).getByRole("option", { name: "Pixels Subtitles" })).toBeInTheDocument(); fireEvent.change(picker, { target: { value: "pixelsSub" } });

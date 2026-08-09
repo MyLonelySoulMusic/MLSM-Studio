@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "workspaces": [
     "apps/desktop",
     "packages/*"
@@ -16,7 +19,9 @@
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "upscaler:setup": "bash tools/setup_upscaler_env.sh",
-    "upscaler:server": ".venv/bin/python tools/upscaler_server.py"
+    "upscaler:server": ".venv/bin/python tools/upscaler_server.py",
+    "ai-quantizer:setup": "bash tools/setup_ai_quantizer_env.sh",
+    "ai-quantizer:server": "AIQ_PYTHON=.venv-ai-quantizer/bin/python AIQ_DATA_ROOT=.ai-quantizer-data/projects node tools/ai-quantizer/server.cjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.32.0",

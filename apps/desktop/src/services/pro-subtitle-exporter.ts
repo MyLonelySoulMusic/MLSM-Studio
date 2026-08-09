@@ -23,7 +23,7 @@ import {
   recordingBitrate,
   type ExportQuality,
   type SharedViewportRenderer
-} from "./live-video-exporter";
+} from "./offline-video-exporter";
 import {
   renderProSubtitleCompositionFrame,
   type ProSubtitleCue,

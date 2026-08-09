@@ -221,3 +221,252 @@ describe("project event history", () => {
     expect(useProjectStore.getState().project.animation.teddySing.phonemesGenerated).toBe(true);
   });
 });
+
+describe("Video Editor · montaggio nello store", () => {
+  beforeEach(() => useProjectStore.getState().newProject());
+
+  const videoAsset = { id: "media-video", name: "ripresa.mp4", kind: "video" as const, url: "blob:video", durationSeconds: 12, width: 1920, height: 1080, hasAudio: true, bpm: null, beats: [] as number[], downbeats: [] as number[], waveform: [] as number[] };
+  const imageAsset = { ...videoAsset, id: "media-image", name: "foto.png", kind: "image" as const, url: "blob:image", durationSeconds: 0, hasAudio: false };
+  const audioAsset = { ...videoAsset, id: "media-audio", name: "musica.wav", kind: "audio" as const, url: "blob:audio", durationSeconds: 30 };
+  const editor = () => useProjectStore.getState().project.animation.videoEditor;
+
+  it("aggiunge i media al pool una sola volta e li rimuove con le clip collegate", () => {
+    const store = useProjectStore.getState();
+    store.addVideoEditorAssets([videoAsset, imageAsset]);
+    useProjectStore.getState().addVideoEditorAssets([videoAsset]);
+    expect(editor().assets.map((asset) => asset.id)).toEqual(["media-video", "media-image"]);
+    const clipId = useProjectStore.getState().addVideoEditorClip("media-video");
+    expect(clipId).toBeTruthy();
+    expect(editor().selectedClipIds).toEqual([clipId]);
+    useProjectStore.getState().removeVideoEditorAsset("media-video");
+    expect(editor().assets.map((asset) => asset.id)).toEqual(["media-image"]);
+    // Nessuna clip può sopravvivere al proprio media, nemmeno nella selezione.
+    expect(editor().clips).toHaveLength(0);
+    expect(editor().selectedClipIds).toEqual([]);
+  });
+
+  it("mette in coda ogni nuova clip e rifiuta un media assente dal pool", () => {
+    const store = useProjectStore.getState();
+    store.addVideoEditorAssets([videoAsset]);
+    useProjectStore.getState().addVideoEditorClip("media-video");
+    useProjectStore.getState().addVideoEditorClip("media-video");
+    const clips = editor().clips;
+    expect(clips).toHaveLength(2);
+    expect(clips[0]?.startSeconds).toBe(0);
+    expect(clips[0]?.durationSeconds).toBe(12);
+    // La seconda clip attacca dove finisce la prima: nessun vuoto, nessuna sovrapposizione.
+    expect(clips[1]?.startSeconds).toBe(12);
+    expect(useProjectStore.getState().addVideoEditorClip("assente")).toBeNull();
+  });
+
+  it("imposta il formato dal primo clip visivo, anche se il pool conteneva già media", () => {
+    const portrait = { ...videoAsset, id: "portrait", width: 1080, height: 1920 };
+    const landscape = { ...videoAsset, id: "landscape", width: 1920, height: 1080 };
+    useProjectStore.getState().addVideoEditorAssets([landscape, portrait]);
+    useProjectStore.getState().addVideoEditorClip("portrait");
+    expect(editor()).toMatchObject({ outputWidth: 1080, outputHeight: 1920 });
+    useProjectStore.getState().addVideoEditorClip("landscape");
+    expect(editor()).toMatchObject({ outputWidth: 1080, outputHeight: 1920 });
+  });
+
+  it("manda l’audio sulla traccia audio e nega lo spostamento su una traccia del tipo sbagliato", () => {
+    const store = useProjectStore.getState();
+    store.addVideoEditorAssets([audioAsset]);
+    const clipId = useProjectStore.getState().addVideoEditorClip("media-audio")!;
+    expect(editor().clips[0]?.trackId).toBe("video-editor-track-audio");
+    useProjectStore.getState().moveVideoEditorClipToTrack(clipId, "video-editor-track-main");
+    expect(editor().clips[0]?.trackId).toBe("video-editor-track-audio");
+  });
+
+  it("estende un fermo immagine e limita un video al materiale disponibile", () => {
+    const store = useProjectStore.getState();
+    store.addVideoEditorAssets([videoAsset, imageAsset]);
+    useProjectStore.getState().updateVideoEditor({ snapEnabled: false });
+    const imageClip = useProjectStore.getState().addVideoEditorClip("media-image")!;
+    expect(editor().clips.find((clip) => clip.id === imageClip)?.durationSeconds).toBe(4);
+    useProjectStore.getState().trimVideoEditorClip(imageClip, "end", 45);
+    expect(editor().clips.find((clip) => clip.id === imageClip)?.durationSeconds).toBe(45);
+
+    const videoClip = useProjectStore.getState().addVideoEditorClip("media-video")!;
+    const start = editor().clips.find((clip) => clip.id === videoClip)!.startSeconds;
+    useProjectStore.getState().trimVideoEditorClip(videoClip, "end", start + 90);
+    // Il video non può crescere oltre i 12 s di materiale, nemmeno trascinando lontano.
+    expect(editor().clips.find((clip) => clip.id === videoClip)?.durationSeconds).toBe(12);
+  });
+
+  it("taglia una clip in due metà contigue e seleziona la seconda", () => {
+    const store = useProjectStore.getState();
+    store.addVideoEditorAssets([videoAsset]);
+    const clipId = useProjectStore.getState().addVideoEditorClip("media-video")!;
+    useProjectStore.getState().splitVideoEditorClip(clipId, 5);
+    const clips = editor().clips;
+    expect(clips).toHaveLength(2);
+    expect(clips[0]).toMatchObject({ id: clipId, startSeconds: 0, durationSeconds: 5, sourceInSeconds: 0 });
+    expect(clips[1]).toMatchObject({ startSeconds: 5, durationSeconds: 7, sourceInSeconds: 5 });
+    expect(editor().selectedClipIds).toEqual([clips[1]?.id]);
+    // Un taglio sul bordo non produce una clip di durata nulla.
+    useProjectStore.getState().splitVideoEditorClip(clipId, 0);
+    expect(editor().clips).toHaveLength(2);
+  });
+
+  it("duplica la clip subito dopo l’originale e cancella una selezione multipla", () => {
+    const store = useProjectStore.getState();
+    store.addVideoEditorAssets([videoAsset]);
+    const clipId = useProjectStore.getState().addVideoEditorClip("media-video")!;
+    useProjectStore.getState().duplicateVideoEditorClip(clipId);
+    expect(editor().clips[1]?.startSeconds).toBe(12);
+    const ids = editor().clips.map((clip) => clip.id);
+    useProjectStore.getState().selectVideoEditorClips(ids);
+    useProjectStore.getState().deleteVideoEditorClips(ids);
+    expect(editor().clips).toHaveLength(0);
+    expect(editor().selectedClipIds).toEqual([]);
+  });
+
+  it("gestisce la selezione additiva della timeline", () => {
+    const store = useProjectStore.getState();
+    store.addVideoEditorAssets([videoAsset]);
+    const first = useProjectStore.getState().addVideoEditorClip("media-video")!;
+    const second = useProjectStore.getState().addVideoEditorClip("media-video")!;
+    useProjectStore.getState().selectVideoEditorClip(first);
+    useProjectStore.getState().selectVideoEditorClip(second, true);
+    expect(editor().selectedClipIds).toEqual([first, second]);
+    // Un secondo clic additivo toglie la clip dalla selezione.
+    useProjectStore.getState().selectVideoEditorClip(second, true);
+    expect(editor().selectedClipIds).toEqual([first]);
+    useProjectStore.getState().selectVideoEditorClip(null);
+    expect(editor().selectedClipIds).toEqual([]);
+  });
+
+  it("gestisce Fade In/Out come elementi autonomi e li mantiene legati alla clip", () => {
+    useProjectStore.getState().addVideoEditorAssets([videoAsset]);
+    const clipId = useProjectStore.getState().addVideoEditorClip("media-video")!;
+    const fadeInId = useProjectStore.getState().addVideoEditorEffectClip("fade-in", { targetClipId: clipId })!;
+    const fadeOutId = useProjectStore.getState().addVideoEditorEffectClip("fade-out", { targetClipId: clipId })!;
+    expect(editor().effectClips).toHaveLength(2);
+    expect(editor().selectedClipIds).toEqual([]);
+    expect(editor().selectedEffectClipIds).toEqual([fadeOutId]);
+    useProjectStore.getState().moveVideoEditorEffectClip(fadeInId, 3);
+    expect(editor().effectClips.find((effect) => effect.id === fadeInId)?.startSeconds).toBe(3);
+    useProjectStore.getState().trimVideoEditorEffectClip(fadeInId, "end", 5);
+    expect(editor().effectClips.find((effect) => effect.id === fadeInId)?.durationSeconds).toBe(2);
+    useProjectStore.getState().moveVideoEditorClip(clipId, 4);
+    expect(editor().effectClips.find((effect) => effect.id === fadeInId)?.startSeconds).toBe(7);
+    expect(editor().effectClips.find((effect) => effect.id === fadeOutId)?.startSeconds).toBeCloseTo(15.35, 10);
+    useProjectStore.getState().deleteVideoEditorClips([clipId]);
+    expect(editor().effectClips).toEqual([]);
+    expect(editor().selectedEffectClipIds).toEqual([]);
+  });
+
+  it("consente più istanze indipendenti dello stesso effetto sulla stessa clip", () => {
+    useProjectStore.getState().addVideoEditorAssets([videoAsset]);
+    const clipId = useProjectStore.getState().addVideoEditorClip("media-video")!;
+    const first = useProjectStore.getState().addVideoEditorEffectClip("fade-in", { targetClipId: clipId });
+    const second = useProjectStore.getState().addVideoEditorEffectClip("fade-in", { targetClipId: clipId, startSeconds: 3 });
+    expect(first).not.toBeNull();
+    expect(second).not.toBe(first);
+    expect(editor().effectClips).toHaveLength(2);
+    expect(editor().effectClips.map((effect) => effect.startSeconds)).toEqual([0, 3]);
+    expect(editor().selectedEffectClipIds).toEqual([second]);
+  });
+
+  it("accosta le clip con la calamita e chiude i vuoti residui", () => {
+    const store = useProjectStore.getState();
+    store.addVideoEditorAssets([videoAsset]);
+    const first = useProjectStore.getState().addVideoEditorClip("media-video")!;
+    const second = useProjectStore.getState().addVideoEditorClip("media-video")!;
+    useProjectStore.getState().moveVideoEditorClip(second, 12.05);
+    // La calamita azzera il vuoto invece di lasciare cinquanta millisecondi di nero.
+    expect(editor().clips.find((clip) => clip.id === second)?.startSeconds).toBe(12);
+    useProjectStore.getState().updateVideoEditor({ snapEnabled: false });
+    useProjectStore.getState().moveVideoEditorClip(second, 20);
+    expect(editor().clips.find((clip) => clip.id === second)?.startSeconds).toBe(20);
+    useProjectStore.getState().closeVideoEditorGaps("video-editor-track-main");
+    expect(editor().clips.find((clip) => clip.id === second)?.startSeconds).toBe(12);
+    expect(editor().clips.find((clip) => clip.id === first)?.startSeconds).toBe(0);
+  });
+
+  it("registra l’analisi ritmica e la usa per sincronizzare audio e video", () => {
+    const store = useProjectStore.getState();
+    store.addVideoEditorAssets([videoAsset, audioAsset]);
+    useProjectStore.getState().setVideoEditorAssetAnalysis("media-audio", { bpm: 120, beats: [1, 2, 3, 4], downbeats: [1] });
+    useProjectStore.getState().setVideoEditorAssetAnalysis("media-video", { bpm: 120, beats: [.5, 1.5, 2.5, 3.5], downbeats: [.5] });
+    expect(editor().assets.find((asset) => asset.id === "media-audio")).toMatchObject({ bpm: 120, beats: [1, 2, 3, 4] });
+    const reference = useProjectStore.getState().addVideoEditorClip("media-audio")!;
+    const target = useProjectStore.getState().addVideoEditorClip("media-video")!;
+    useProjectStore.getState().moveVideoEditorClip(target, 0);
+    useProjectStore.getState().syncVideoEditorClips(reference, [target]);
+    expect(editor().clips.find((clip) => clip.id === target)?.startSeconds).toBeCloseTo(.5, 6);
+    expect(useProjectStore.getState().status).toMatch(/Sincronizzazione ritmica/);
+  });
+
+  it("limita le dissolvenze alla durata della clip", () => {
+    const store = useProjectStore.getState();
+    store.addVideoEditorAssets([videoAsset]);
+    const clipId = useProjectStore.getState().addVideoEditorClip("media-video")!;
+    useProjectStore.getState().updateVideoEditorClip(clipId, { fadeInSeconds: 20, fadeOutSeconds: 20, audioFadeInSeconds: 8, audioFadeOutSeconds: 8 });
+    const clip = editor().clips[0]!;
+    expect(clip.fadeInSeconds).toBe(12);
+    expect(clip.fadeOutSeconds).toBe(0);
+    expect(clip.audioFadeInSeconds).toBe(8);
+    expect(clip.audioFadeOutSeconds).toBe(4);
+    // Insieme non superano mai la clip: lo schema rifiuterebbe il progetto.
+    expect(clip.fadeInSeconds + clip.fadeOutSeconds).toBeLessThanOrEqual(clip.durationSeconds);
+    expect(clip.audioFadeInSeconds + clip.audioFadeOutSeconds).toBeLessThanOrEqual(clip.durationSeconds);
+  });
+
+  it("regola fusione, volume e correzione colore per clip", () => {
+    const store = useProjectStore.getState();
+    store.addVideoEditorAssets([videoAsset]);
+    const clipId = useProjectStore.getState().addVideoEditorClip("media-video")!;
+    useProjectStore.getState().updateVideoEditorClip(clipId, { blendMode: "soft-light", blendIntensity: .4, volume: 1.6, muted: false, fit: "contain" });
+    useProjectStore.getState().updateVideoEditorClipAdjustments(clipId, { exposure: .6, contrast: 22, temperature: -18 });
+    expect(editor().clips[0]).toMatchObject({ blendMode: "soft-light", blendIntensity: .4, volume: 1.6, fit: "contain" });
+    expect(editor().clips[0]?.adjustments).toMatchObject({ exposure: .6, contrast: 22, temperature: -18, saturation: 0 });
+  });
+
+  it("aggiunge tracce nella posizione attesa e non svuota mai il montaggio", () => {
+    const store = useProjectStore.getState();
+    store.addVideoEditorTrack("video");
+    expect(editor().tracks[0]?.name).toBe("Livello video 3");
+    useProjectStore.getState().addVideoEditorTrack("audio");
+    expect(editor().tracks.at(-1)?.name).toBe("Audio 2");
+    useProjectStore.getState().updateVideoEditorTrack("video-editor-track-main", { muted: true, hidden: true, locked: true, volume: .4 });
+    expect(editor().tracks.find((track) => track.id === "video-editor-track-main")).toMatchObject({ muted: true, hidden: true, locked: true, volume: .4 });
+    for (const track of [...editor().tracks]) useProjectStore.getState().removeVideoEditorTrack(track.id);
+    // L’ultima traccia resta: uno schema senza tracce non è valido.
+    expect(editor().tracks).toHaveLength(1);
+  });
+
+  it("riordina liberamente i livelli video senza cambiare proprietà o clip", () => {
+    useProjectStore.getState().addVideoEditorAssets([videoAsset]);
+    const clipId = useProjectStore.getState().addVideoEditorClip("media-video", { trackId: "video-editor-track-main" })!;
+    useProjectStore.getState().updateVideoEditorClip(clipId, { blendMode: "screen", transform: { x: .2, y: -.1, scale: .7, rotation: 12 } });
+    useProjectStore.getState().updateVideoEditorClipAdjustments(clipId, { opacity: .55 });
+    useProjectStore.getState().reorderVideoEditorTrack("video-editor-track-main", 0);
+    expect(editor().tracks[0]?.id).toBe("video-editor-track-main");
+    expect(editor().clips.find((clip) => clip.id === clipId)).toMatchObject({
+      trackId: "video-editor-track-main", blendMode: "screen",
+      transform: { x: .2, y: -.1, scale: .7, rotation: 12 }, adjustments: { opacity: .55 }
+    });
+    useProjectStore.getState().updateVideoEditorTrack("video-editor-track-main", { locked: true });
+    useProjectStore.getState().reorderVideoEditorTrack("video-editor-track-main", 2);
+    expect(editor().tracks[0]?.id).toBe("video-editor-track-main");
+  });
+
+  it("elimina una traccia insieme alle sue clip", () => {
+    const store = useProjectStore.getState();
+    store.addVideoEditorAssets([videoAsset]);
+    const clipId = useProjectStore.getState().addVideoEditorClip("media-video", { trackId: "video-editor-track-main" })!;
+    useProjectStore.getState().selectVideoEditorClip(clipId);
+    useProjectStore.getState().removeVideoEditorTrack("video-editor-track-main");
+    expect(editor().tracks.some((track) => track.id === "video-editor-track-main")).toBe(false);
+    expect(editor().clips).toHaveLength(0);
+    expect(editor().selectedClipIds).toEqual([]);
+  });
+
+  it("conserva la composizione e i parametri di interpolazione scelti", () => {
+    useProjectStore.getState().updateVideoEditor({ outputWidth: 3840, outputHeight: 2160, snapThresholdSeconds: .12, snapToBeats: false, backgroundColor: "#101820", interpolationEnabled: true, interpolationTargetFps: 120, interpolationMethod: "rife" });
+    expect(editor()).toMatchObject({ outputWidth: 3840, outputHeight: 2160, snapThresholdSeconds: .12, snapToBeats: false, backgroundColor: "#101820", interpolationEnabled: true, interpolationTargetFps: 120, interpolationMethod: "rife" });
+    expect(useProjectStore.getState().dirty).toBe(true);
+  });
+});

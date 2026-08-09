@@ -1,8 +1,14 @@
 # Sviluppo
 
+## Servizio AI Quantizer
+
+La modalità `Music → AI Quantizer` è autonoma e usa esclusivamente il runtime versionato in `tools/ai-quantizer/`. Il plugin Vite `vite-ai-quantizer-service.ts` prepara al primo utilizzo `.venv-ai-quantizer`, espone fase/percentuale/log del bootstrap alla UI, avvia il backend Node interno sulla porta 4173, lo arresta insieme al dev server e pubblica UI/API nello stesso origin sotto `/music/ai-quantizer/`. Finché il backend non è pronto, le API restituiscono uno stato strutturato `202/503` e non vengono inoltrate al proxy, evitando raffiche di `ECONNREFUSED`.
+
+I modelli vengono scaricati in `tools/ai-quantizer/models/` soltanto quando servono; progetti e audio elaborati vengono salvati in `.ai-quantizer-data/`. Ambiente, modelli e dati sono ignorati da Git. Non esistono dipendenze dalla precedente cartella sorella. Nessun processo AI Quantizer viene avviato durante test, typecheck o build.
+
 ## Prerequisiti
 
-- Node.js LTS e npm
+- Node.js 22.12 o superiore (22.23.2 consigliato) e npm 10 o superiore
 - Rust stable con Cargo
 - prerequisiti di sistema Tauri 2 per la piattaforma
 
@@ -14,6 +20,7 @@ npm run dev
 npm run typecheck
 npm run lint
 npm test
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
 npm run tauri --workspace @rbs/desktop dev
 ```
 
@@ -37,7 +44,7 @@ Completata il 22 luglio 2026. Supporta selezione MP3/WAV, capability detection, 
 
 ## Modalità web-first
 
-Il comando ordinario è `npm run dev`. Nel browser import, waveform e analisi usano File API, Web Audio API e Web Worker senza Rust o FFmpeg. Salvataggio e caricamento usano download/file picker JSON. L'export registra lo stesso renderer WebGL della preview con MediaRecorder, salva progressivamente i chunk in OPFS e consegna un MP4 o WebM con audio. Tauri, codec FFmpeg professionali e packaging saranno valutati solo dopo la conclusione dell'MVP web.
+Il comando ordinario è `npm run dev`. Nel browser import, waveform e analisi usano File API, Web Audio API e Web Worker senza Rust o FFmpeg. Salvataggio e caricamento usano download/file picker JSON. Tutti gli export valutano offline il renderer al tempo `frameIndex / FPS`, codificano H.264/AAC con WebCodecs tramite Mediabunny, applicano backpressure e verificano il numero dei pacchetti prima della consegna. OPFS è soltanto un fallback temporaneo progressivo. Tauri, codec FFmpeg professionali e packaging saranno valutati solo dopo la conclusione dell'MVP web.
 
 ## Audit qualità
 

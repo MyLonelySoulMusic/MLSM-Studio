@@ -14,8 +14,8 @@ import {
   type InputAudioTrack,
   type StreamTargetChunk
 } from "mediabunny";
-import type { ExportQuality } from "./live-video-exporter";
-import { recordingBitrate } from "./live-video-exporter";
+import type { ExportQuality } from "./offline-video-exporter";
+import { recordingBitrate } from "./offline-video-exporter";
 import { createStaticWatermarkCompositor } from "./static-watermark-renderer";
 
 type WatermarkSettings = RhythmBallProject["animation"]["staticWatermark"];

@@ -19,7 +19,7 @@ import {
   type Quality,
   type StreamTargetChunk
 } from "mediabunny";
-import type { ExportQuality } from "./live-video-exporter";
+import type { ExportQuality } from "./offline-video-exporter";
 import { resolveCoverSpectrum } from "./cover-spectrum";
 import { renderPortraitLandscapeFrame } from "./portrait-landscape-renderer";
 import { subtitleFontWeight } from "./subtitle-fonts";
@@ -226,7 +226,7 @@ export async function exportPortraitLandscapeOfflineVideo(settings: PortraitLand
       const audioPromise = conversion?.execute() ?? Promise.resolve(); let encodedFrames = 0; let frameIndex = 0;
       for await (const decoded of sink.canvasesAtTimestamps(timings.map((timing) => timing.sampleTimeSeconds), { skipLiveWait: true })) {
         throwIfAborted(signal); const timing = timings[frameIndex]!; const spectrum = resolveCoverSpectrum(settings.energyFrames, timing.sampleTimeSeconds); const rhythmPulse = resolvePortraitLandscapeRhythmPulse(timing.sampleTimeSeconds, settings.rhythmEvents, spectrum.pulse);
-        renderPortraitLandscapeFrame(canvas, { timeSeconds: timing.sampleTimeSeconds, durationSeconds: duration, bpm: settings.bpm, quality: "export", analysisReady: settings.energyFrames.length > 0, audioPulse: spectrum.pulse, rhythmPulse, spectrumBands: spectrum.bands, stereoLeftBands: spectrum.leftBands, stereoRightBands: spectrum.rightBands, videoFrame: decoded?.canvas ?? null, sideImage, coverImage, settings: settings.portraitLandscapeSettings, subtitlesEnabled: settings.subtitlesEnabled, subtitleCues: settings.subtitleCues, subtitleSettings: settings.subtitleSettings });
+        renderPortraitLandscapeFrame(canvas, { timeSeconds: timing.sampleTimeSeconds, durationSeconds: duration, bpm: settings.bpm, quality: "export", analysisReady: settings.energyFrames.length > 0, audioPulse: spectrum.pulse, rhythmPulse, spectrumBands: spectrum.bands, stereoLeftBands: spectrum.leftBands, stereoRightBands: spectrum.rightBands, videoFrame: decoded?.canvas ?? null, sideImage, coverImage, settings: settings.portraitLandscapeSettings, ...(settings.subtitlesEnabled === undefined ? {} : { subtitlesEnabled: settings.subtitlesEnabled }), ...(settings.subtitleCues === undefined ? {} : { subtitleCues: settings.subtitleCues }), ...(settings.subtitleSettings === undefined ? {} : { subtitleSettings: settings.subtitleSettings }) });
         await waitWithTimeout(videoSource.add(timing.timestampSeconds, timing.durationSeconds), 120_000, `L’encoder è fermo sul frame ${frameIndex + 1}; l’export è stato annullato senza consegnare un file incompleto.`, signal);
         frameIndex += 1; encodedFrames += 1; const elapsedMs = performance.now() - startedAt;
         onProgress({ currentFrame: encodedFrames, totalFrames, progress: encodedFrames / totalFrames, elapsedMs, estimatedRemainingMs: encodedFrames === totalFrames ? 0 : elapsedMs / encodedFrames * (totalFrames - encodedFrames) });

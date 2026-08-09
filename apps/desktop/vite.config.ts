@@ -2,10 +2,11 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { persistentModelCache } from "./vite-model-cache";
 import { localPyTorchService } from "./vite-pytorch-service";
+import { localAiQuantizerService } from "./vite-ai-quantizer-service";
 
 export default defineConfig({
-  plugins: [localPyTorchService(), persistentModelCache(), react()], clearScreen: false,
+  plugins: [localPyTorchService(), localAiQuantizerService(), persistentModelCache(), react()], clearScreen: false,
   build: { rollupOptions: { output: { manualChunks: { three: ["three"] } } }, chunkSizeWarningLimit: 700 },
-  server: { port: 1420, strictPort: true },
+  server: { port: 1420, strictPort: true, proxy: { "/music/ai-quantizer/api": { target: "http://127.0.0.1:4173", changeOrigin: true, rewrite: (path) => path.replace(/^\/music\/ai-quantizer/, "") } } },
   envPrefix: ["VITE_", "TAURI_ENV_"]
 });

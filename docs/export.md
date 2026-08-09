@@ -1,20 +1,20 @@
-# Export video web
+# Export video web offline
 
 ## Pipeline scene 3D
 
-L'export registra direttamente lo stesso canvas WebGL usato dalla preview. A ogni aggiornamento vengono applicati il tempo della traiettoria, la rotazione della biglia, la camera e la visibilità degli elementi; il canvas 3D viene poi composto con foto o video di sfondo, effetti e finale cinematografico.
+Tutte le modalità esportano offline. La scena usa lo stesso renderer WebGL della preview, ma il tempo non arriva dal player o dall'orologio reale: ogni fotogramma viene valutato con `frameIndex / FPS`, renderizzato alla risoluzione finale e consegnato all'encoder soltanto quando il precedente è stato acquisito. Il canvas 3D viene quindi composto con foto o video di sfondo decodificati al timestamp esatto, effetti e finale cinematografico.
 
 ```text
-tempo export → stato React/Three.js → canvas WebGL preview ┐
-                sfondo ed effetti → canvas composito       ├→ MediaRecorder → MP4/WebM finale
-                     audio HTML → MediaStream audio ────────┘
+frameIndex / FPS → stato React/Three.js → canvas WebGL ┐
+                  sfondo/effetti decodificati offline  ├→ CanvasSource H.264 ┐
+                  file audio → conversione AAC offline ──────────────────────┴→ MP4 verificato
 ```
 
-Non esiste un secondo renderer semplificato. Geometrie, PBR, usura, neon, fisica, rotazione e camera sono quindi condivisi tra preview e file finale.
+Non esiste un secondo renderer 3D semplificato. Geometrie, PBR, usura, neon, fisica, rotazione e camera sono condivisi tra preview e file finale; non vengono invece usati `MediaRecorder`, `captureStream()`, `requestAnimationFrame` o playback audio durante l'export. Se la macchina è lenta aumenta il tempo di elaborazione, non vengono saltati fotogrammi.
 
 ## Pixels Subtitles: export offline deterministico
 
-**Pixels Subtitles** non usa `MediaRecorder`, `captureStream()`, il playhead della preview o `requestAnimationFrame`. Un canvas di export indipendente viene creato direttamente alla risoluzione scelta e la funzione di rendering della modalità riceve un tempo calcolato esclusivamente da indice e FPS.
+**Pixels Subtitles**, come tutte le altre modalità, non usa il playhead della preview. Un canvas di export indipendente viene creato direttamente alla risoluzione scelta e la funzione di rendering della modalità riceve un tempo calcolato esclusivamente da indice e FPS.
 
 ```text
 frameIndex / FPS ─→ cover + campo pixel + sottotitoli ─→ CanvasSource H.264 ┐
@@ -81,6 +81,23 @@ audio originale ─→ copia pacchetti compressi ──────────�
 
 Non viene imposto un FPS di destinazione: ordine, timestamp e durata di ciascun frame provengono dal sorgente. Il compositore conta i frame ricevuti e, dopo la finalizzazione, riapre l’MP4 e conta i pacchetti video codificati. Una differenza annulla il file parziale. Se il video contiene audio, i pacchetti compressi vengono copiati senza passare da `AudioEncoder` e il loro conteggio viene verificato dopo il mux. Il player viene messo in pausa prima dell’elaborazione, quindi l’audio non viene inviato alle cuffie. Per H.264 viene usata la selezione WebCodecs `no-preference`, che consente al browser di scegliere il backend hardware o software più stabile.
 
+## Video Editor: montaggio offline e interpolazione reale
+
+Il **Video Editor** esporta il montaggio senza registrare la preview e senza dipendere dal suo playhead. Il tempo di ogni fotogramma è calcolato esclusivamente da indice e FPS; le clip visibili a quell’istante vengono decodificate al proprio tempo sorgente, gradate su una superficie isolata e composte dal basso verso l’alto secondo l’ordine delle tracce.
+
+```text
+frameIndex / FPS ─→ livelli visibili ─→ correzione colore isolata ─→ fusione + dissolvenze ─→ H.264 ┐
+clip audio ─→ mixdown OfflineAudioContext con volumi e fade ─→ AAC ───────────────────────────────┴→ MP4 verificato
+                                                                                                    │
+                                                                          servizio locale ffmpeg/RIFE ┘→ MP4 interpolato
+```
+
+Ogni attesa dell’encoder ha un timeout e l’annullamento è propagato a decoder, encoder e mux. L’ultimo fotogramma riceve una durata ridotta quando la durata del montaggio non è un multiplo esatto del frame interval, quindi i timestamp restano contigui e coprono esattamente la durata. Dopo la finalizzazione il contenitore viene riaperto: i pacchetti video devono essere `ceil(durata × FPS)` e, se il montaggio contiene audio, la traccia audio deve contenere pacchetti. Una differenza annulla il file parziale invece di consegnarlo.
+
+La risoluzione è offerta come scala della composizione del progetto (50%, 75%, 100% nativa, 150%, 200%), così la proporzione scelta nel pannello non viene sostituita da un rapporto imposto. Il frame rate di render copre 24, 25, 30, 50, 60 e 120 fps.
+
+L’aumento reale del frame rate è un passaggio **successivo** alla verifica. Il file già verificato viene inviato al servizio Python locale su `127.0.0.1:8765`, che risponde su `/interpolate` con `minterpolate` di ffmpeg (`mi_mode=mci:mc_mode=aobmc:me_mode=bidir` per la stima del movimento, `mi_mode=blend` per la fusione) oppure con il runtime RIFE quando l’utente ha fornito i pesi. Il risultato viene riaperto e deve contenere più fotogrammi dell’originale; l’audio del montaggio viene copiato senza ricodifica. Servizio spento, ffmpeg assente, pesi RIFE mancanti, timeout o errore del filtro non annullano l’export: viene consegnato il montaggio al frame rate reso, con il motivo riportato nell’interfaccia. Il servizio non viene mai avviato dall’applicazione web; `/interpolation/health` viene interrogato all’apertura della finestra di export soltanto per informare l’utente.
+
 ## File temporanei e destinazione
 
 Quando la File System Access API è disponibile, il selettore di destinazione viene aperto nello stesso gesto del pulsante Export e i chunk vengono scritti progressivamente nel file scelto. Se il browser non espone quel flusso, l’export usa un temporaneo privato OPFS in `dynamic-sound-animation-studio-temp`, lo scarica soltanto dopo la finalizzazione e rimuove esclusivamente il file creato dalla sessione corrente. Annullamenti ed errori abortiscono il parziale; se un’operazione WebCodecs non è interrompibile, il cleanup viene differito finché termina, evitando corse con l’encoder.
@@ -89,20 +106,20 @@ Se né File System Access né OPFS sono disponibili, resta un ultimo fallback in
 
 ## Codec e qualità
 
-La selezione segue le capacità dichiarate da `MediaRecorder`: MP4 H.264/AAC ha precedenza, seguito da WebM VP9/Opus e WebM VP8/Opus. Sono disponibili i profili `Alta` e `Massima`, con `Massima` predefinito. Il bitrate cresce con risoluzione e frame rate usando rispettivamente 0,14 e 0,24 bit per pixel/frame; i limiti sono 8–100 Mbit/s e 12–160 Mbit/s. L'audio è richiesto a 320 kbit/s e il canvas composito abilita image smoothing di qualità alta.
+L'export completo usa WebCodecs tramite Mediabunny e produce MP4 H.264/AAC offline. Sono disponibili i profili `Alta` e `Massima`, con `Massima` predefinito. Il bitrate cresce con risoluzione e frame rate usando rispettivamente 0,14 e 0,24 bit per pixel/frame; i limiti sono 8–100 Mbit/s e 12–160 Mbit/s. L'audio è richiesto a 320 kbit/s e il canvas composito abilita image smoothing di qualità alta. I layer Pro Subtitles trasparenti restano l'eccezione di formato e usano WebM VP9 alpha quando supportato.
 
 Il bitrate richiesto è un obiettivo: l'encoder hardware del browser può applicare un limite proprio. Per minimizzare artefatti su vetro, neon, graffi e movimenti veloci è consigliato `Massima`; `Alta` è destinato a bozze o condivisioni più leggere.
 
-La registrazione avviene in tempo reale. Preset 4K o 120 fps richiedono una GPU e un encoder browser sufficientemente veloci. I formati professionali non esposti da MediaRecorder, come ProRes, restano candidati per un eventuale adapter desktop FFmpeg da valutare alla fine dello sviluppo web.
+Preset 4K o 120 fps richiedono più memoria e più tempo, ma l'encoder applica backpressure e non riduce volontariamente risoluzione, FPS o numero dei frame. Formati professionali non esposti da WebCodecs, come ProRes, restano candidati per un adapter desktop FFmpeg.
 
 ## Audio e durata
 
-L'audio parte da zero insieme al recorder ed è collegato tramite `captureStream()` o, come fallback, un nodo Web Audio. Se il finale mantiene l'immagine dopo la musica, il video continua per la durata configurata mentre la traccia audio è terminata.
+L'audio viene letto dal file importato, demuxato e convertito in AAC senza avviare il player e senza uscire da cuffie o altoparlanti. Se il finale mantiene l'immagine dopo la musica, il video continua per la durata configurata mentre la traccia audio termina alla propria durata reale.
 
 ## Progress e cancellazione
 
-La UI mostra frame logico corrente, totale e avanzamento. Cancel ferma l'animazione e il recorder, chiude o annulla lo stream temporaneo, elimina il file parziale, ripristina dimensioni e tempo della preview e riporta il player alla posizione precedente.
+La UI mostra frame codificato corrente, totale e avanzamento. Cancel interrompe decoder, encoder e muxer, elimina il file parziale e ripristina dimensioni e tempo della preview.
 
 ## Verifica
 
-I test coprono scelta del codec, fallback e limiti del bitrate. Typecheck, lint e build verificano l'integrazione fra renderer condiviso, schema progetto e File System Access API. La parità visuale completa deve essere verificata in browser con una breve esportazione di confronto, perché jsdom non implementa WebGL né MediaRecorder.
+I test coprono conteggio, timestamp contigui, controllo anti-drop, adattamento delle sorgenti e limiti del bitrate. Dopo la finalizzazione ogni MP4 viene riaperto: il numero di pacchetti video deve coincidere con `ceil(durata × FPS)` e, quando prevista, la traccia audio deve contenere pacchetti. Typecheck, lint e build verificano l'integrazione fra renderer condiviso, schema progetto e File System Access API.

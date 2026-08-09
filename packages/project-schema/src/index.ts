@@ -106,12 +106,15 @@ const portraitLandscapeSchema = z.object({
 }).strict();
 const pixelArtSchema = z.object({
   subMode: z.enum(["walkingThroughNewYork"]).default("walkingThroughNewYork"),
-  coverImageUrl: z.string().nullable().default(null), venueName: z.string().trim().min(1).max(24).default("BAR"),
+  coverImageUrl: z.string().nullable().default(null),
+  characterImageUrl: z.string().nullable().default(null),
+  characterImageName: z.string().max(500).default(""),
+  venueName: z.string().trim().min(1).max(24).default("BAR"),
   palettePrimary: z.string().default("#e94290"), paletteSecondary: z.string().default("#32d7ff"),
   hoodieColor: z.string().default("#08090e"), pantsColor: z.string().default("#4252c8"),
   neonPrimary: z.string().default("#e94290"), neonSecondary: z.string().default("#32d7ff")
 }).strict();
-const defaultPixelArt = { subMode: "walkingThroughNewYork" as const, coverImageUrl: null, venueName: "BAR", palettePrimary: "#e94290", paletteSecondary: "#32d7ff", hoodieColor: "#08090e", pantsColor: "#4252c8", neonPrimary: "#e94290", neonSecondary: "#32d7ff" };
+const defaultPixelArt = { subMode: "walkingThroughNewYork" as const, coverImageUrl: null, characterImageUrl: null, characterImageName: "", venueName: "BAR", palettePrimary: "#e94290", paletteSecondary: "#32d7ff", hoodieColor: "#08090e", pantsColor: "#4252c8", neonPrimary: "#e94290", neonSecondary: "#32d7ff" };
 const teddyWalkSchema = z.object({
   coverImageUrl: z.string().nullable(), furColor: z.string(), patchColor: z.string(), accentColor: z.string(), roadColor: z.string(),
   walkIntensity: z.number().min(.1).max(3), pulseIntensity: z.number().min(0).max(2), danceEnabled: z.boolean().default(false)
@@ -128,13 +131,6 @@ const teddySingSchema = z.object({
   phonemesGenerated: z.boolean().default(false), phonemeCues: z.array(teddyPhonemeCueSchema).default([])
 }).strict();
 const defaultTeddySing = { posterImageUrl: null, furColor: "#ef8fa8", patchColor: "#c8988e", accentColor: "#17141a", roomColor: "#20242c", ledColor: "#7b5cff", lipSyncIntensity: 1, vocalSensitivity: 1, headMotion: .55, particlesEnabled: true, particleColor: "#b9a7ff", particleDensity: 1, phonemesGenerated: false, phonemeCues: [] };
-const defaultAddSubtitles = { videoUrl: null, videoName: "", fit: "cover" as const, dimming: 0 };
-const addSubtitlesSchema = z.object({
-  videoUrl: z.string().nullable().default(defaultAddSubtitles.videoUrl),
-  videoName: z.string().max(500).default(defaultAddSubtitles.videoName),
-  fit: z.enum(["cover", "contain"]).default(defaultAddSubtitles.fit),
-  dimming: z.number().min(0).max(.8).default(defaultAddSubtitles.dimming)
-}).strict();
 const proSubtitleAnimationSchema = z.enum([
   "wordRush", "letterOrbit", "perspectiveFlip", "kineticStack",
   "maskReveal", "elasticScale", "trackingSweep", "cinematicDrift",
@@ -285,6 +281,85 @@ const upscalerSchema = z.object({
     temperature: z.number().min(-100).max(100), tint: z.number().min(-100).max(100), sharpness: z.number().min(0).max(100), denoise: z.number().min(0).max(100)
   }).strict().default(defaultUpscaler.adjustments)
 }).strict();
+// Le modalità di fusione corrispondono uno a uno a `globalCompositeOperation`.
+// L’export offline le compone esattamente; la preview DOM conserva la stessa
+// semantica e privilegia la fluidità dei decoder hardware durante il montaggio.
+export const videoEditorBlendModes = ["normal", "multiply", "screen", "overlay", "darken", "lighten", "color-dodge", "color-burn", "hard-light", "soft-light", "difference", "exclusion", "hue", "saturation", "color", "luminosity"] as const;
+const videoEditorBlendModeSchema = z.enum(videoEditorBlendModes);
+const videoEditorFadeCurveSchema = z.enum(["linear", "smooth", "exponential"]);
+const videoEditorEffectTargetSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("clip"), clipId: z.string().min(1) }).strict(),
+  z.object({ kind: z.literal("composition") }).strict()
+]);
+const videoEditorEffectParameterSchema = z.union([z.number().finite(), z.string().max(500), z.boolean()]);
+const videoEditorEffectClipSchema = z.object({
+  id: z.string().min(1), effectId: z.string().min(1).max(120), target: videoEditorEffectTargetSchema,
+  startSeconds: z.number().nonnegative(), durationSeconds: z.number().positive().max(3_600),
+  enabled: z.boolean().default(true), mix: z.number().min(0).max(1).default(1),
+  parameters: z.record(z.string().min(1).max(80), videoEditorEffectParameterSchema).default({})
+}).strict();
+const defaultVideoEditorAdjustments = { exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, saturation: 0, vibrance: 0, temperature: 0, tint: 0, hue: 0, sharpness: 0, denoise: 0, opacity: 1 };
+const videoEditorAdjustmentsSchema = z.object({
+  exposure: z.number().min(-2).max(2), contrast: z.number().min(-100).max(100), highlights: z.number().min(-100).max(100), shadows: z.number().min(-100).max(100),
+  whites: z.number().min(-100).max(100), blacks: z.number().min(-100).max(100), saturation: z.number().min(-100).max(100), vibrance: z.number().min(-100).max(100),
+  temperature: z.number().min(-100).max(100), tint: z.number().min(-100).max(100), hue: z.number().min(-180).max(180), sharpness: z.number().min(0).max(100),
+  denoise: z.number().min(0).max(100), opacity: z.number().min(0).max(1)
+}).strict();
+const videoEditorAssetSchema = z.object({
+  id: z.string().min(1), name: z.string().min(1).max(500), kind: z.enum(["video", "image", "audio"]),
+  url: z.string().min(1), durationSeconds: z.number().nonnegative(), width: z.number().int().nonnegative(), height: z.number().int().nonnegative(),
+  thumbnailUrl: z.string().nullable().optional(),
+  hasAudio: z.boolean().default(false), bpm: z.number().positive().nullable().default(null),
+  beats: z.array(z.number().nonnegative()).max(4_000).default([]), downbeats: z.array(z.number().nonnegative()).max(1_000).default([]),
+  waveform: z.array(z.number().min(-1).max(1)).max(4_096).default([])
+}).strict();
+const videoEditorTrackSchema = z.object({
+  id: z.string().min(1), name: z.string().min(1).max(120), kind: z.enum(["video", "audio"]),
+  hidden: z.boolean().default(false), muted: z.boolean().default(false), locked: z.boolean().default(false),
+  volume: z.number().min(0).max(2).default(1)
+}).strict();
+const videoEditorClipSchema = z.object({
+  id: z.string().min(1), assetId: z.string().min(1), trackId: z.string().min(1),
+  startSeconds: z.number().nonnegative(), durationSeconds: z.number().positive(), sourceInSeconds: z.number().nonnegative().default(0),
+  fadeInSeconds: z.number().nonnegative().max(60).default(0), fadeOutSeconds: z.number().nonnegative().max(60).default(0),
+  fadeCurve: videoEditorFadeCurveSchema.default("smooth"), audioFadeInSeconds: z.number().nonnegative().max(60).default(0), audioFadeOutSeconds: z.number().nonnegative().max(60).default(0),
+  blendMode: videoEditorBlendModeSchema.default("normal"), blendIntensity: z.number().min(0).max(1).default(1),
+  adjustments: videoEditorAdjustmentsSchema.default(defaultVideoEditorAdjustments),
+  transform: z.object({ x: z.number().min(-2).max(2), y: z.number().min(-2).max(2), scale: z.number().min(.05).max(6), rotation: z.number().min(-360).max(360) }).strict().optional(),
+  fit: z.enum(["cover", "contain", "fill"]).default("cover"),
+  muted: z.boolean().default(false), volume: z.number().min(0).max(2).default(1)
+}).strict();
+const defaultVideoEditor = {
+  assets: [] as [], tracks: [
+    // Gli ID storici restano stabili per aprire i progetti esistenti; nomi e
+    // comportamento sono neutrali: ogni livello video ha le stesse capacità.
+    { id: "video-editor-track-overlay", name: "Livello video 2", kind: "video" as const, hidden: false, muted: false, locked: false, volume: 1 },
+    { id: "video-editor-track-main", name: "Livello video 1", kind: "video" as const, hidden: false, muted: false, locked: false, volume: 1 },
+    { id: "video-editor-track-audio", name: "Audio 1", kind: "audio" as const, hidden: false, muted: false, locked: false, volume: 1 }
+  ], clips: [] as [], selectedClipIds: [] as [], effectClips: [] as [], selectedEffectClipIds: [] as [],
+  snapEnabled: true, snapThresholdSeconds: .08, snapToBeats: true,
+  backgroundColor: "#000000", outputWidth: 1920, outputHeight: 1080,
+  interpolationEnabled: false, interpolationTargetFps: 60, interpolationMethod: "motion" as const
+};
+const videoEditorSchema = z.object({
+  assets: z.array(videoEditorAssetSchema).max(200).default(defaultVideoEditor.assets),
+  // L’ordine è quello mostrato in timeline (dall’alto verso il basso); il
+  // compositor disegna in senso inverso, così la traccia in cima resta sopra.
+  tracks: z.array(videoEditorTrackSchema).min(1).max(24).default(defaultVideoEditor.tracks),
+  clips: z.array(videoEditorClipSchema).max(600).default(defaultVideoEditor.clips),
+  selectedClipIds: z.array(z.string().min(1)).max(600).default(defaultVideoEditor.selectedClipIds),
+  effectClips: z.array(videoEditorEffectClipSchema).max(1_200).default(defaultVideoEditor.effectClips),
+  selectedEffectClipIds: z.array(z.string().min(1)).max(1_200).default(defaultVideoEditor.selectedEffectClipIds),
+  snapEnabled: z.boolean().default(defaultVideoEditor.snapEnabled),
+  snapThresholdSeconds: z.number().min(.005).max(.5).default(defaultVideoEditor.snapThresholdSeconds),
+  snapToBeats: z.boolean().default(defaultVideoEditor.snapToBeats),
+  backgroundColor: z.string().default(defaultVideoEditor.backgroundColor),
+  outputWidth: z.number().int().min(64).max(7680).default(defaultVideoEditor.outputWidth),
+  outputHeight: z.number().int().min(64).max(7680).default(defaultVideoEditor.outputHeight),
+  interpolationEnabled: z.boolean().default(defaultVideoEditor.interpolationEnabled),
+  interpolationTargetFps: z.number().int().min(24).max(240).default(defaultVideoEditor.interpolationTargetFps),
+  interpolationMethod: z.enum(["blend", "motion", "rife"]).default(defaultVideoEditor.interpolationMethod)
+}).strict();
 const defaultSceneLighting = {
   enabled: false, origin: { x: 4, y: 6, z: 6 }, target: { x: 0, y: 1, z: 0 }, color: "#fff0cf",
   intensity: 32, distance: 28, angleDegrees: 34, penumbra: .42, decay: 2, castShadow: true,
@@ -365,7 +440,7 @@ export const projectSchema = z.object({
   canvas: z.object({ aspectRatio: z.enum(["9:16", "16:9", "1:1", "4:5", "custom"]), previewWidth: z.number().int().positive(), previewHeight: z.number().int().positive(), previewFps: fpsSchema, exportWidth: z.number().int().positive(), exportHeight: z.number().int().positive(), exportFps: fpsSchema }).strict(),
   analysis: z.object({ analyzerVersion: z.string(), cacheKey: z.string(), globalBpm: z.number().positive().nullable(), latencyCompensationMs: z.number(), waveform: z.array(z.number().min(-1).max(1)), localTempo: z.array(z.unknown()).default([]), segments: z.array(z.unknown()).default([]) }).strict(),
   events: z.array(musicEventSchema),
-  animation: z.object({ modeId: z.string().min(1), baseObjectTypes: z.array(z.enum(["drum", "kick", "snare", "cymbal", "piano", "guitar", "strings", "peg", "platform", "block", "spring", "pebble"])).min(1), newYorkStreets: newYorkStreetsSchema.default(defaultNewYorkStreets), coverSphere: coverSphereSchema.default(defaultCoverSphere), stereoUnfold: stereoUnfoldSchema.default(defaultStereoUnfold), walkingCube: walkingCubeSchema.default(defaultWalkingCube), portraitLandscape: portraitLandscapeSchema.default(defaultPortraitLandscape), pixelArt: pixelArtSchema.default(defaultPixelArt), teddyWalk: teddyWalkSchema.default(defaultTeddyWalk), teddySing: teddySingSchema.default(defaultTeddySing), addSubtitles: addSubtitlesSchema.default(defaultAddSubtitles), proSubtitles: proSubtitlesSchema.default(defaultProSubtitles), pixelsSub: pixelsSubSchema.default(defaultPixelsSub), staticWatermark: staticWatermarkSchema.default(defaultStaticWatermark), upscaler: upscalerSchema.default(defaultUpscaler) }).default({ modeId: "instrumentalFalling", baseObjectTypes: ["kick", "snare", "drum", "cymbal"], newYorkStreets: defaultNewYorkStreets, coverSphere: defaultCoverSphere, stereoUnfold: defaultStereoUnfold, walkingCube: defaultWalkingCube, portraitLandscape: defaultPortraitLandscape, pixelArt: defaultPixelArt, teddyWalk: defaultTeddyWalk, teddySing: defaultTeddySing, addSubtitles: defaultAddSubtitles, proSubtitles: defaultProSubtitles, pixelsSub: defaultPixelsSub, staticWatermark: defaultStaticWatermark, upscaler: defaultUpscaler }),
+  animation: z.object({ modeId: z.string().min(1), baseObjectTypes: z.array(z.enum(["drum", "kick", "snare", "cymbal", "piano", "guitar", "strings", "peg", "platform", "block", "spring", "pebble"])).min(1), newYorkStreets: newYorkStreetsSchema.default(defaultNewYorkStreets), coverSphere: coverSphereSchema.default(defaultCoverSphere), stereoUnfold: stereoUnfoldSchema.default(defaultStereoUnfold), walkingCube: walkingCubeSchema.default(defaultWalkingCube), portraitLandscape: portraitLandscapeSchema.default(defaultPortraitLandscape), pixelArt: pixelArtSchema.default(defaultPixelArt), teddyWalk: teddyWalkSchema.default(defaultTeddyWalk), teddySing: teddySingSchema.default(defaultTeddySing), proSubtitles: proSubtitlesSchema.default(defaultProSubtitles), pixelsSub: pixelsSubSchema.default(defaultPixelsSub), staticWatermark: staticWatermarkSchema.default(defaultStaticWatermark), upscaler: upscalerSchema.default(defaultUpscaler), videoEditor: videoEditorSchema.default(defaultVideoEditor) }).default({ modeId: "instrumentalFalling", baseObjectTypes: ["kick", "snare", "drum", "cymbal"], newYorkStreets: defaultNewYorkStreets, coverSphere: defaultCoverSphere, stereoUnfold: defaultStereoUnfold, walkingCube: defaultWalkingCube, portraitLandscape: defaultPortraitLandscape, pixelArt: defaultPixelArt, teddyWalk: defaultTeddyWalk, teddySing: defaultTeddySing, proSubtitles: defaultProSubtitles, pixelsSub: defaultPixelsSub, staticWatermark: defaultStaticWatermark, upscaler: defaultUpscaler, videoEditor: defaultVideoEditor }),
   ball: z.object({ radius: z.number().positive(), visualMass: z.number().positive(), material: materialSchema, spinRate: z.number(), impactDeformation: z.number().min(0).max(1), trailEnabled: z.boolean(), innerColor: z.string().default("#63f0d1"), innerShape: z.enum(["orb", "icosahedron", "torusKnot"]).default("icosahedron"), innerImageUrl: z.string().nullable().default(null), endRevealEnabled: z.boolean().default(false), revealMode: z.enum(["end", "time"]).default("end"), revealTimeSeconds: z.number().nonnegative().default(0), revealHoldSeconds: z.number().min(0).max(30).default(2) }).strict(),
   objects: z.array(sceneObjectSchema), trajectorySegments: z.array(trajectorySegmentSchema),
   camera: z.object({ mode: z.enum(["fixed", "verticalTracking", "fullTracking", "smoothFollow", "cinematic", "keyframed", "autoFraming", "spline"]), position: vector3Schema, target: vector3Schema, fieldOfView: z.number().positive().max(179), damping: z.number().min(0).max(1), lookAhead: z.number().nonnegative() }).strict(),
@@ -387,6 +462,47 @@ export const projectSchema = z.object({
   project.animation.teddySing.phonemeCues.forEach((cue, index) => { if (cue.endSeconds <= cue.startSeconds) context.addIssue({ code: "custom", path: ["animation", "teddySing", "phonemeCues", index, "endSeconds"], message: "Il fonema deve avere durata positiva" }); });
   project.subtitles.cues.forEach((cue, index) => { if (cue.endSeconds <= cue.startSeconds) context.addIssue({ code: "custom", path: ["subtitles", "cues", index, "endSeconds"], message: "Il sottotitolo deve avere durata positiva" }); });
   if (project.lighting.activeUntilSeconds !== null && project.lighting.activeUntilSeconds < project.lighting.activeFromSeconds) context.addIssue({ code: "custom", path: ["lighting", "activeUntilSeconds"], message: "La fine della luce deve seguire il suo inizio" });
+  const trackIds = new Set<string>();
+  project.animation.videoEditor.tracks.forEach((track, index) => { if (trackIds.has(track.id)) context.addIssue({ code: "custom", path: ["animation", "videoEditor", "tracks", index, "id"], message: "ID traccia duplicato" }); trackIds.add(track.id); });
+  const assetIds = new Set<string>();
+  project.animation.videoEditor.assets.forEach((asset, index) => { if (assetIds.has(asset.id)) context.addIssue({ code: "custom", path: ["animation", "videoEditor", "assets", index, "id"], message: "ID media duplicato" }); assetIds.add(asset.id); });
+  const clipIds = new Set<string>();
+  project.animation.videoEditor.clips.forEach((clip, index) => {
+    const path = ["animation", "videoEditor", "clips", index] as const;
+    if (clipIds.has(clip.id)) context.addIssue({ code: "custom", path: [...path, "id"], message: "ID clip duplicato" });
+    clipIds.add(clip.id);
+    if (!assetIds.has(clip.assetId)) context.addIssue({ code: "custom", path: [...path, "assetId"], message: "La clip riferisce un media assente dal pool" });
+    if (!trackIds.has(clip.trackId)) context.addIssue({ code: "custom", path: [...path, "trackId"], message: "La clip riferisce una traccia inesistente" });
+    const asset = project.animation.videoEditor.assets.find((item) => item.id === clip.assetId);
+    const track = project.animation.videoEditor.tracks.find((item) => item.id === clip.trackId);
+    const requiredTrackKind = asset?.kind === "audio" ? "audio" : "video";
+    if (asset && track && track.kind !== requiredTrackKind) {
+      context.addIssue({ code: "custom", path: [...path, "trackId"], message: `Il media ${asset.kind} richiede una traccia ${requiredTrackKind}` });
+    }
+    if (clip.fadeInSeconds + clip.fadeOutSeconds > clip.durationSeconds) context.addIssue({ code: "custom", path: [...path, "fadeOutSeconds"], message: "Le dissolvenze non possono superare la durata della clip" });
+    if (clip.audioFadeInSeconds + clip.audioFadeOutSeconds > clip.durationSeconds) context.addIssue({ code: "custom", path: [...path, "audioFadeOutSeconds"], message: "Le dissolvenze audio non possono superare la durata della clip" });
+  });
+  const effectIds = new Set<string>();
+  project.animation.videoEditor.effectClips.forEach((effect, index) => {
+    const path = ["animation", "videoEditor", "effectClips", index] as const;
+    if (effectIds.has(effect.id)) context.addIssue({ code: "custom", path: [...path, "id"], message: "ID effetto duplicato" });
+    effectIds.add(effect.id);
+    if (Object.keys(effect.parameters).length > 32) context.addIssue({ code: "custom", path: [...path, "parameters"], message: "Un effetto può avere al massimo 32 parametri" });
+    if ((effect.effectId === "fade-in" || effect.effectId === "fade-out") && effect.parameters.curve !== undefined && !["linear", "smooth", "exponential"].includes(String(effect.parameters.curve))) {
+      context.addIssue({ code: "custom", path: [...path, "parameters", "curve"], message: "Curva dissolvenza non supportata" });
+    }
+    if (effect.target.kind === "clip") {
+      const targetClipId = effect.target.clipId;
+      const clip = project.animation.videoEditor.clips.find((item) => item.id === targetClipId);
+      if (!clip) context.addIssue({ code: "custom", path: [...path, "target", "clipId"], message: "L’effetto riferisce una clip assente" });
+      else {
+        const asset = project.animation.videoEditor.assets.find((item) => item.id === clip.assetId);
+        if (asset?.kind === "audio") context.addIssue({ code: "custom", path: [...path, "target", "clipId"], message: "Un effetto video richiede una clip visiva" });
+        if (effect.startSeconds < clip.startSeconds || effect.startSeconds + effect.durationSeconds > clip.startSeconds + clip.durationSeconds + 1e-6) context.addIssue({ code: "custom", path: [...path, "durationSeconds"], message: "L’effetto deve restare nei bordi della clip" });
+      }
+    }
+  });
+  project.animation.videoEditor.selectedEffectClipIds.forEach((id, index) => { if (!effectIds.has(id)) context.addIssue({ code: "custom", path: ["animation", "videoEditor", "selectedEffectClipIds", index], message: "Effetto selezionato inesistente" }); });
 });
 
 export type RhythmBallProject = z.infer<typeof projectSchema>;
@@ -398,7 +514,8 @@ export function parseProject(input: unknown): RhythmBallProject {
   const legacyAnimation = animation as Record<string, unknown>; const legacyTeddy = legacyAnimation.teddyWheel;
   const legacyPixelArt = legacyAnimation.pixelArt;
   const legacyProSubtitles = legacyAnimation.proSubtitles;
-  const migratedPixelArt = legacyPixelArt && typeof legacyPixelArt === "object" && !Array.isArray(legacyPixelArt) ? { ...legacyPixelArt as Record<string, unknown>, hoodieColor: "#08090e" } : defaultPixelArt;
+  const legacyAddSubtitles = legacyAnimation.addSubtitles;
+  const migratedPixelArt = legacyPixelArt && typeof legacyPixelArt === "object" && !Array.isArray(legacyPixelArt) ? { characterImageUrl: null, characterImageName: "", ...legacyPixelArt as Record<string, unknown>, hoodieColor: "#08090e" } : defaultPixelArt;
   const migratedProSubtitles = legacyProSubtitles && typeof legacyProSubtitles === "object" && !Array.isArray(legacyProSubtitles)
     ? (() => {
       const settings = legacyProSubtitles as Record<string, unknown>;
@@ -448,7 +565,44 @@ export function parseProject(input: unknown): RhythmBallProject {
       colorMatchStrength: (legacyStaticWatermark as Record<string, unknown>).colorMatchStrength === .72 ? .05 : (legacyStaticWatermark as Record<string, unknown>).colorMatchStrength
     }
     : defaultStaticWatermark;
-  return projectSchema.parse({ ...candidate, animation: { ...legacyAnimation, modeId: legacyAnimation.modeId === "teddyWheel" ? "teddyWalk" : legacyAnimation.modeId, pixelArt: migratedPixelArt, teddyWalk: migratedTeddy, proSubtitles: migratedProSubtitles, pixelsSub: legacyAnimation.pixelsSub ?? defaultPixelsSub, staticWatermark: migratedStaticWatermark } });
+  const legacyVideoEditor = legacyAnimation.videoEditor;
+  const migratedVideoEditor = legacyVideoEditor && typeof legacyVideoEditor === "object" && !Array.isArray(legacyVideoEditor)
+    ? (() => {
+      const source = legacyVideoEditor as Record<string, unknown>;
+      const tracks = Array.isArray(source.tracks) ? source.tracks.map((candidate) => {
+        if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return candidate;
+        const track = candidate as Record<string, unknown>;
+        // Migra solo le etichette predefinite: i nomi personalizzati restano intatti.
+        const name = track.name === "Overlay" ? "Livello video 2"
+          : track.name === "Video principale" ? "Livello video 1"
+          : track.name === "Audio" ? "Audio 1"
+          : track.name;
+        return { ...track, name };
+      }) : source.tracks;
+      if (Array.isArray(source.effectClips)) return { ...source, tracks };
+      const legacyClips = Array.isArray(source.clips) ? source.clips : [];
+      const effectClips: Record<string, unknown>[] = [];
+      const clips = legacyClips.map((candidate) => {
+        if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return candidate;
+        const clip = candidate as Record<string, unknown>;
+        const id = typeof clip.id === "string" ? clip.id : "legacy";
+        const start = typeof clip.startSeconds === "number" ? clip.startSeconds : 0;
+        const duration = typeof clip.durationSeconds === "number" ? clip.durationSeconds : 0;
+        const fadeIn = typeof clip.fadeInSeconds === "number" ? Math.min(duration, clip.fadeInSeconds) : 0;
+        const fadeOut = typeof clip.fadeOutSeconds === "number" ? Math.min(Math.max(0, duration - fadeIn), clip.fadeOutSeconds) : 0;
+        if (fadeIn > 0) effectClips.push({ id: `legacy-fade-in-${id}`, effectId: "fade-in", target: { kind: "clip", clipId: id }, startSeconds: start, durationSeconds: fadeIn, enabled: true, mix: 1, parameters: { curve: typeof clip.fadeCurve === "string" ? clip.fadeCurve : "smooth" } });
+        if (fadeOut > 0) effectClips.push({ id: `legacy-fade-out-${id}`, effectId: "fade-out", target: { kind: "clip", clipId: id }, startSeconds: start + duration - fadeOut, durationSeconds: fadeOut, enabled: true, mix: 1, parameters: { curve: typeof clip.fadeCurve === "string" ? clip.fadeCurve : "smooth" } });
+        return { ...clip, fadeInSeconds: 0, fadeOutSeconds: 0 };
+      });
+      return { ...source, tracks, clips, effectClips, selectedEffectClipIds: [] };
+    })()
+    : defaultVideoEditor;
+  const migratedModeId = legacyAnimation.modeId === "teddyWheel" ? "teddyWalk" : legacyAnimation.modeId === "addSubtitles" ? "proSubtitles" : legacyAnimation.modeId;
+  const migratedLegacySubtitleSource = legacyAnimation.modeId === "addSubtitles" && legacyAddSubtitles && typeof legacyAddSubtitles === "object" && !Array.isArray(legacyAddSubtitles)
+    ? { ...migratedProSubtitles, ...legacyAddSubtitles as Record<string, unknown> }
+    : migratedProSubtitles;
+  const currentAnimation = { ...legacyAnimation }; delete currentAnimation.addSubtitles;
+  return projectSchema.parse({ ...candidate, animation: { ...currentAnimation, modeId: migratedModeId, pixelArt: migratedPixelArt, teddyWalk: migratedTeddy, proSubtitles: migratedLegacySubtitleSource, pixelsSub: legacyAnimation.pixelsSub ?? defaultPixelsSub, staticWatermark: migratedStaticWatermark, videoEditor: migratedVideoEditor } });
 }
 
 export function createProject(name = "Progetto senza titolo", now = new Date()): RhythmBallProject {
@@ -460,7 +614,7 @@ export function createProject(name = "Progetto senza titolo", now = new Date()):
     canvas: { aspectRatio: "9:16", previewWidth: 540, previewHeight: 960, previewFps: { numerator: 30, denominator: 1 }, exportWidth: 1080, exportHeight: 1920, exportFps: { numerator: 60, denominator: 1 } },
     analysis: { analyzerVersion: "", cacheKey: "", globalBpm: null, latencyCompensationMs: 0, waveform: [], localTempo: [], segments: [] },
     events: [],
-    animation: { modeId: "instrumentalFalling", baseObjectTypes: ["kick", "snare", "drum", "cymbal"], newYorkStreets: defaultNewYorkStreets, coverSphere: defaultCoverSphere, stereoUnfold: defaultStereoUnfold, walkingCube: defaultWalkingCube, portraitLandscape: defaultPortraitLandscape, pixelArt: defaultPixelArt, teddyWalk: defaultTeddyWalk, teddySing: defaultTeddySing, addSubtitles: defaultAddSubtitles, proSubtitles: defaultProSubtitles, pixelsSub: defaultPixelsSub, staticWatermark: defaultStaticWatermark, upscaler: defaultUpscaler },
+    animation: { modeId: "instrumentalFalling", baseObjectTypes: ["kick", "snare", "drum", "cymbal"], newYorkStreets: defaultNewYorkStreets, coverSphere: defaultCoverSphere, stereoUnfold: defaultStereoUnfold, walkingCube: defaultWalkingCube, portraitLandscape: defaultPortraitLandscape, pixelArt: defaultPixelArt, teddyWalk: defaultTeddyWalk, teddySing: defaultTeddySing, proSubtitles: defaultProSubtitles, pixelsSub: defaultPixelsSub, staticWatermark: defaultStaticWatermark, upscaler: defaultUpscaler, videoEditor: defaultVideoEditor },
     ball: { radius: 0.45, visualMass: 1, material: { color: "#dffeff", palette: ["#63f0d1", "#7857ff"], roughness: 0.05, metalness: 0, emission: 0.2, opacity: .32, textureAssetId: null }, spinRate: 1, impactDeformation: 0.2, trailEnabled: true, innerColor: "#63f0d1", innerShape: "icosahedron", innerImageUrl: null, endRevealEnabled: false, revealMode: "end", revealTimeSeconds: 0, revealHoldSeconds: 2 },
     objects: [], trajectorySegments: [],
     camera: { mode: "smoothFollow", position: { x: 0, y: 2, z: 10 }, target: { x: 0, y: 2, z: 0 }, fieldOfView: 45, damping: 0.12, lookAhead: 1.5 },

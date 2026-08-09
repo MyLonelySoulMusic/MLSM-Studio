@@ -18,7 +18,7 @@ import {
   type Quality,
   type StreamTargetChunk
 } from "mediabunny";
-import type { ExportQuality } from "./live-video-exporter";
+import type { ExportQuality } from "./offline-video-exporter";
 import { resolveCoverSpectrum } from "./cover-spectrum";
 import { pixelsSubFontWeight, renderPixelsSubFrame, type PixelsSubRhythmHit } from "./pixels-sub-renderer";
 

@@ -7,12 +7,24 @@ import type { Plugin } from "vite";
 const healthUrl = "http://127.0.0.1:8765/health";
 const projectRoot = fileURLToPath(new URL("../..", import.meta.url));
 
-async function serviceIsRunning(): Promise<boolean> {
+interface ServiceProbe {
+  running: boolean;
+  compatible: boolean;
+  apiVersion?: number;
+}
+
+async function probeService(): Promise<ServiceProbe> {
   try {
     const response = await fetch(healthUrl, { signal: AbortSignal.timeout(1_500) });
-    return response.ok;
+    if (!response.ok) return { running: true, compatible: false };
+    const health = await response.json() as { apiVersion?: number; capabilities?: { videoJobs?: boolean } };
+    return {
+      running: true,
+      compatible: (health.apiVersion ?? 0) >= 2 && health.capabilities?.videoJobs === true,
+      ...(health.apiVersion === undefined ? {} : { apiVersion: health.apiVersion })
+    };
   } catch {
-    return false;
+    return { running: false, compatible: false };
   }
 }
 
@@ -22,8 +34,13 @@ export function localPyTorchService(): Plugin {
     name: "dynamic-sound-local-pytorch",
     apply: "serve",
     async configureServer(server) {
-      if (await serviceIsRunning()) {
-        server.config.logger.info("[PyTorch] servizio già attivo · http://127.0.0.1:8765");
+      const service = await probeService();
+      if (service.compatible) {
+        server.config.logger.info(`[PyTorch] servizio video frame-per-frame già attivo · API ${service.apiVersion ?? "compatibile"} · http://127.0.0.1:8765`);
+        return;
+      }
+      if (service.running) {
+        server.config.logger.error(`[PyTorch] la porta 8765 è occupata da un backend precedente${service.apiVersion ? ` (API ${service.apiVersion})` : ""}. Chiudilo e riavvia questo comando: non verrà usato per elaborare video.`);
         return;
       }
       const python = resolve(projectRoot, process.platform === "win32" ? ".venv/Scripts/python.exe" : ".venv/bin/python");

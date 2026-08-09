@@ -6,6 +6,28 @@ import {
   directProSubtitleAnimation,
   resolveProSubtitlePaletteColor
 } from "../services/pro-subtitles";
+import {
+  videoEditorAppendPlacement,
+  videoEditorAsset as findVideoEditorAsset,
+  videoEditorAssetIsStill,
+  videoEditorClip as findVideoEditorClip,
+  videoEditorClipEnd,
+  videoEditorClipMaximumDuration,
+  videoEditorCloseGaps,
+  videoEditorCompositionForAsset,
+  videoEditorDefaultImageSeconds,
+  videoEditorMinimumClipSeconds,
+  videoEditorMoveClip,
+  videoEditorReorderTracks,
+  videoEditorSplitClip,
+  videoEditorSyncClips,
+  videoEditorTrimClip,
+  type VideoEditorAsset,
+  type VideoEditorClip,
+  type VideoEditorEffectClip,
+  type VideoEditorTrack
+} from "../services/video-editor";
+import { videoEditorClampEffect, videoEditorMoveEffect, videoEditorPlaceEffect, videoEditorTrimEffect } from "../services/video-editor-effects";
 
 interface AttachAudioOptions {
   preserveSubtitleTrack?: boolean;
@@ -50,13 +72,40 @@ interface ProjectState {
   updateTeddyWalk: (patch: Partial<RhythmBallProject["animation"]["teddyWalk"]>) => void;
   setTeddyWalkPalette: (colors: readonly string[]) => void;
   updateTeddySing: (patch: Partial<RhythmBallProject["animation"]["teddySing"]>) => void;
-  updateAddSubtitles: (patch: Partial<RhythmBallProject["animation"]["addSubtitles"]>) => void;
   updateProSubtitles: (patch: Partial<RhythmBallProject["animation"]["proSubtitles"]>) => void;
   setProSubtitlesPalette: (colors: readonly string[]) => void;
   updatePixelsSub: (patch: Partial<RhythmBallProject["animation"]["pixelsSub"]>) => void;
   setPixelsSubPalette: (colors: readonly string[]) => void;
   updateStaticWatermark: (patch: Partial<RhythmBallProject["animation"]["staticWatermark"]>) => void;
   updateUpscaler: (patch: Partial<RhythmBallProject["animation"]["upscaler"]>) => void;
+  updateVideoEditor: (patch: Partial<Omit<RhythmBallProject["animation"]["videoEditor"], "assets" | "tracks" | "clips" | "selectedClipIds" | "effectClips" | "selectedEffectClipIds">>) => void;
+  addVideoEditorAssets: (assets: readonly VideoEditorAsset[]) => void;
+  removeVideoEditorAsset: (assetId: string) => void;
+  updateVideoEditorAsset: (assetId: string, patch: Partial<VideoEditorAsset>) => void;
+  addVideoEditorClip: (assetId: string, options?: { trackId?: string; startSeconds?: number }) => string | null;
+  updateVideoEditorClip: (clipId: string, patch: Partial<Omit<VideoEditorClip, "id" | "assetId">>) => void;
+  updateVideoEditorClipAdjustments: (clipId: string, patch: Partial<VideoEditorClip["adjustments"]>) => void;
+  moveVideoEditorClip: (clipId: string, startSeconds: number, playheadSeconds?: number) => void;
+  moveVideoEditorClipToTrack: (clipId: string, trackId: string) => void;
+  trimVideoEditorClip: (clipId: string, edge: "start" | "end", timeSeconds: number, playheadSeconds?: number) => void;
+  splitVideoEditorClip: (clipId: string, timeSeconds: number) => void;
+  duplicateVideoEditorClip: (clipId: string) => void;
+  deleteVideoEditorClips: (clipIds: readonly string[]) => void;
+  selectVideoEditorClip: (clipId: string | null, additive?: boolean) => void;
+  selectVideoEditorClips: (clipIds: readonly string[]) => void;
+  syncVideoEditorClips: (referenceClipId: string, targetClipIds: readonly string[]) => void;
+  closeVideoEditorGaps: (trackId: string) => void;
+  updateVideoEditorTrack: (trackId: string, patch: Partial<Omit<VideoEditorTrack, "id" | "kind">>) => void;
+  addVideoEditorTrack: (kind: VideoEditorTrack["kind"]) => void;
+  reorderVideoEditorTrack: (trackId: string, destinationIndex: number) => void;
+  removeVideoEditorTrack: (trackId: string) => void;
+  setVideoEditorAssetAnalysis: (assetId: string, analysis: { bpm: number | null; beats: readonly number[]; downbeats: readonly number[] }) => void;
+  addVideoEditorEffectClip: (effectId: string, options?: { targetClipId?: string; startSeconds?: number; durationSeconds?: number }) => string | null;
+  updateVideoEditorEffectClip: (effectId: string, patch: Partial<Omit<VideoEditorEffectClip, "id">>) => void;
+  moveVideoEditorEffectClip: (effectId: string, startSeconds: number) => void;
+  trimVideoEditorEffectClip: (effectId: string, edge: "start" | "end", timeSeconds: number) => void;
+  deleteVideoEditorEffectClips: (effectIds: readonly string[]) => void;
+  selectVideoEditorEffectClip: (effectId: string | null, additive?: boolean) => void;
   updateProSubtitleCueStyle: (cueId: string, patch: Partial<Omit<RhythmBallProject["animation"]["proSubtitles"]["cueStyles"][number], "cueId" | "wordStyles">>) => void;
   updateProSubtitleWordStyle: (cueId: string, wordIndex: number, patch: Partial<Omit<RhythmBallProject["animation"]["proSubtitles"]["cueStyles"][number]["wordStyles"][number], "index">>) => void;
   setTeddySingPalette: (colors: readonly string[]) => void;
@@ -159,6 +208,78 @@ function completeProSubtitlePalette(colors: readonly string[], fallback: readonl
   return [primary, secondary, accent];
 }
 
+type VideoEditorSettings = RhythmBallProject["animation"]["videoEditor"];
+/** Ogni mutazione del Video Editor passa da qui: un solo punto in cui il progetto resta coerente. */
+function videoEditorState(state: ProjectState, videoEditor: VideoEditorSettings, status?: string): Partial<ProjectState> {
+  return {
+    project: { ...state.project, animation: { ...state.project.animation, videoEditor } },
+    dirty: true,
+    ...(status ? { status } : {})
+  };
+}
+function videoEditorTrackIsLocked(settings: VideoEditorSettings, trackId: string): boolean {
+  return settings.tracks.find((track) => track.id === trackId)?.locked === true;
+}
+function videoEditorClipIsLocked(settings: VideoEditorSettings, clipId: string): boolean {
+  const clip = findVideoEditorClip(settings, clipId);
+  return clip ? videoEditorTrackIsLocked(settings, clip.trackId) : false;
+}
+function videoEditorEffectIsLocked(settings: VideoEditorSettings, effect: VideoEditorEffectClip): boolean {
+  return effect.target.kind === "clip" && videoEditorClipIsLocked(settings, effect.target.clipId);
+}
+function defaultVideoEditorClip(id: string, asset: VideoEditorAsset, placement: { trackId: string; startSeconds: number; durationSeconds: number }): VideoEditorClip {
+  return {
+    id, assetId: asset.id, trackId: placement.trackId,
+    startSeconds: placement.startSeconds, durationSeconds: placement.durationSeconds, sourceInSeconds: 0,
+    fadeInSeconds: 0, fadeOutSeconds: 0, fadeCurve: "smooth",
+    audioFadeInSeconds: 0, audioFadeOutSeconds: 0,
+    blendMode: "normal", blendIntensity: 1,
+    adjustments: { exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, saturation: 0, vibrance: 0, temperature: 0, tint: 0, hue: 0, sharpness: 0, denoise: 0, opacity: 1 },
+    transform: { x: 0, y: 0, scale: 1, rotation: 0 },
+    fit: "cover", muted: false, volume: 1
+  };
+}
+/** Riporta la clip dentro i limiti dello schema: durata utile, sorgente disponibile, dissolvenze compatibili. */
+function clampVideoEditorClip(clip: VideoEditorClip, asset: VideoEditorAsset | null): VideoEditorClip {
+  const still = videoEditorAssetIsStill(asset);
+  const sourceInSeconds = still ? 0 : Math.max(0, Math.min(asset!.durationSeconds - videoEditorMinimumClipSeconds, clip.sourceInSeconds));
+  const maximum = videoEditorClipMaximumDuration({ ...clip, sourceInSeconds }, asset);
+  const durationSeconds = Math.max(videoEditorMinimumClipSeconds, Math.min(maximum, clip.durationSeconds || videoEditorDefaultImageSeconds));
+  const limitFades = (inSeconds: number, outSeconds: number): [number, number] => {
+    const fadeIn = Math.max(0, Math.min(durationSeconds, inSeconds));
+    // La coda non può invadere la testa: insieme devono stare nella clip.
+    const fadeOut = Math.max(0, Math.min(durationSeconds - fadeIn, outSeconds));
+    return [fadeIn, fadeOut];
+  };
+  const [fadeInSeconds, fadeOutSeconds] = limitFades(clip.fadeInSeconds, clip.fadeOutSeconds);
+  const [audioFadeInSeconds, audioFadeOutSeconds] = limitFades(clip.audioFadeInSeconds, clip.audioFadeOutSeconds);
+  return {
+    ...clip,
+    startSeconds: Math.max(0, clip.startSeconds),
+    durationSeconds, sourceInSeconds,
+    fadeInSeconds, fadeOutSeconds, audioFadeInSeconds, audioFadeOutSeconds,
+    blendIntensity: Math.max(0, Math.min(1, clip.blendIntensity)),
+    volume: Math.max(0, Math.min(2, clip.volume))
+  };
+}
+
+function reconcileVideoEditorEffects(settings: VideoEditorSettings, effects: readonly VideoEditorEffectClip[]): VideoEditorEffectClip[] {
+  const candidate = { ...settings, effectClips: [...effects] };
+  return effects.map((effect) => videoEditorClampEffect(candidate, effect)).filter((effect): effect is VideoEditorEffectClip => effect !== null);
+}
+
+function moveTargetEffects(settings: VideoEditorSettings, clips: readonly VideoEditorClip[]): VideoEditorEffectClip[] {
+  const starts = new Map(clips.map((clip) => [clip.id, clip.startSeconds]));
+  const shifted = settings.effectClips.map((effect) => {
+    if (effect.target.kind !== "clip") return effect;
+    const targetClipId = effect.target.clipId;
+    const before = settings.clips.find((clip) => clip.id === targetClipId);
+    const after = starts.get(targetClipId);
+    return before && typeof after === "number" ? { ...effect, startSeconds: effect.startSeconds + after - before.startSeconds } : effect;
+  });
+  return reconcileVideoEditorEffects({ ...settings, clips: [...clips] }, shifted);
+}
+
 export const useProjectStore = create<ProjectState>((set) => ({
   project: createProject(), filePath: null, dirty: false, status: "Pronto", eventHistory: [], eventFuture: [], selectedEventId: null, selectedEventIds: [],
   newProject: () => set({ project: createProject(), filePath: null, dirty: false, status: "Nuovo progetto creato", eventHistory: [], eventFuture: [], selectedEventId: null, selectedEventIds: [] }),
@@ -230,7 +351,6 @@ export const useProjectStore = create<ProjectState>((set) => ({
   updateTeddyWalk: (patch) => set((state) => ({ project: { ...state.project, animation: { ...state.project.animation, teddyWalk: { ...state.project.animation.teddyWalk, ...patch } } }, dirty: true })),
   setTeddyWalkPalette: (colors) => set((state) => { const settings = state.project.animation.teddyWalk; return { project: { ...state.project, animation: { ...state.project.animation, teddyWalk: { ...settings, furColor: colors[0] ?? settings.furColor, patchColor: colors[1] ?? colors[0] ?? settings.patchColor, roadColor: colors[2] ?? colors[1] ?? settings.roadColor } } }, dirty: true }; }),
   updateTeddySing: (patch) => set((state) => ({ project: { ...state.project, animation: { ...state.project.animation, teddySing: { ...state.project.animation.teddySing, ...patch } } }, dirty: true })),
-  updateAddSubtitles: (patch) => set((state) => ({ project: { ...state.project, animation: { ...state.project.animation, addSubtitles: { ...state.project.animation.addSubtitles, ...patch } } }, dirty: true })),
   updateProSubtitles: (patch) => set((state) => {
     const settings = state.project.animation.proSubtitles;
     const nextSettings = { ...settings, ...patch };
@@ -303,6 +423,297 @@ export const useProjectStore = create<ProjectState>((set) => ({
     project: { ...state.project, animation: { ...state.project.animation, upscaler: { ...state.project.animation.upscaler, ...patch } } },
     dirty: true
   })),
+  updateVideoEditor: (patch) => set((state) => videoEditorState(state, { ...state.project.animation.videoEditor, ...patch })),
+  addVideoEditorAssets: (assets) => set((state) => {
+    const settings = state.project.animation.videoEditor;
+    const known = new Set(settings.assets.map((asset) => asset.id));
+    const added = assets.filter((asset) => !known.has(asset.id));
+    if (!added.length) return state;
+    return videoEditorState(state, { ...settings, assets: [...settings.assets, ...added].slice(0, 200) }, `${added.length === 1 ? added[0]!.name : `${added.length} file`} nel pool media`);
+  }),
+  removeVideoEditorAsset: (assetId) => set((state) => {
+    const settings = state.project.animation.videoEditor;
+    // Un media non può essere rimosso aggirando il lucchetto: se alimenta anche
+    // una sola clip protetta, resta nel pool insieme a tutte le sue istanze.
+    if (settings.clips.some((clip) => clip.assetId === assetId && videoEditorTrackIsLocked(settings, clip.trackId))) return state;
+    // Rimuovere un media dal pool elimina anche le clip che lo usano: il progetto
+    // non deve mai contenere una clip senza sorgente.
+    const clips = settings.clips.filter((clip) => clip.assetId !== assetId);
+    const clipIds = new Set(clips.map((clip) => clip.id));
+    const effectClips = settings.effectClips.filter((effect) => effect.target.kind !== "clip" || clipIds.has(effect.target.clipId));
+    return videoEditorState(state, {
+      ...settings,
+      assets: settings.assets.filter((asset) => asset.id !== assetId),
+      clips,
+      effectClips,
+      selectedClipIds: settings.selectedClipIds.filter((id) => clipIds.has(id)),
+      selectedEffectClipIds: settings.selectedEffectClipIds.filter((id) => effectClips.some((effect) => effect.id === id))
+    }, "Media rimosso dal pool con le clip collegate");
+  }),
+  updateVideoEditorAsset: (assetId, patch) => set((state) => {
+    const settings = state.project.animation.videoEditor;
+    return videoEditorState(state, { ...settings, assets: settings.assets.map((asset) => asset.id === assetId ? { ...asset, ...patch } : asset) });
+  }),
+  addVideoEditorClip: (assetId, options = {}) => {
+    const id = `video-editor-clip-${crypto.randomUUID()}`;
+    let created = false;
+    set((state) => {
+      const settings = state.project.animation.videoEditor;
+      const asset = findVideoEditorAsset(settings, assetId);
+      if (!asset) return state;
+      if (options.trackId && videoEditorTrackIsLocked(settings, options.trackId)) return state;
+      const placement = videoEditorAppendPlacement(settings, asset, options.trackId);
+      if (!placement) return state;
+      created = true;
+      const clip = defaultVideoEditorClip(id, asset, {
+        ...placement,
+        ...(typeof options.startSeconds === "number" ? { startSeconds: Math.max(0, options.startSeconds) } : {})
+      });
+      const firstVisualClip = asset.kind !== "audio" && !settings.clips.some((item) => findVideoEditorAsset(settings, item.assetId)?.kind !== "audio");
+      const composition = firstVisualClip ? videoEditorCompositionForAsset(asset) : null;
+      return videoEditorState(state, {
+        ...settings,
+        ...(composition ? { outputWidth: composition.width, outputHeight: composition.height } : {}),
+        clips: [...settings.clips, clip], selectedClipIds: [id], selectedEffectClipIds: []
+      }, `${asset.name} inserito a ${clip.startSeconds.toFixed(2)} s${composition ? ` · formato ${composition.label}` : ""}`);
+    });
+    return created ? id : null;
+  },
+  updateVideoEditorClip: (clipId, patch) => set((state) => {
+    const settings = state.project.animation.videoEditor;
+    const clip = findVideoEditorClip(settings, clipId);
+    if (!clip || videoEditorTrackIsLocked(settings, clip.trackId)) return state;
+    // Il cambio di livello passa esclusivamente da moveVideoEditorClipToTrack,
+    // che valida tipo e lucchetti di entrambe le tracce. In questo modo una patch
+    // generica non può aggirare la protezione del livello di destinazione.
+    if (patch.trackId !== undefined && patch.trackId !== clip.trackId) return state;
+    const asset = findVideoEditorAsset(settings, clip.assetId);
+    const next = clampVideoEditorClip({ ...clip, ...patch }, asset);
+    const clips = settings.clips.map((item) => item.id === clipId ? next : item);
+    const delta = next.startSeconds - clip.startSeconds;
+    const shifted = settings.effectClips.map((effect) => effect.target.kind === "clip" && effect.target.clipId === clipId ? { ...effect, startSeconds: effect.startSeconds + delta } : effect);
+    return videoEditorState(state, { ...settings, clips, effectClips: reconcileVideoEditorEffects({ ...settings, clips }, shifted) });
+  }),
+  updateVideoEditorClipAdjustments: (clipId, patch) => set((state) => {
+    const settings = state.project.animation.videoEditor;
+    if (videoEditorClipIsLocked(settings, clipId)) return state;
+    return videoEditorState(state, { ...settings, clips: settings.clips.map((clip) => clip.id === clipId ? { ...clip, adjustments: { ...clip.adjustments, ...patch } } : clip) });
+  }),
+  moveVideoEditorClip: (clipId, startSeconds, playheadSeconds) => set((state) => {
+    const settings = state.project.animation.videoEditor;
+    if (videoEditorClipIsLocked(settings, clipId)) return state;
+    const moved = videoEditorMoveClip(settings, clipId, startSeconds, playheadSeconds);
+    if (!moved) return state;
+    const clips = settings.clips.map((clip) => clip.id === clipId ? moved : clip);
+    return videoEditorState(state, { ...settings, clips, effectClips: moveTargetEffects(settings, clips) });
+  }),
+  moveVideoEditorClipToTrack: (clipId, trackId) => set((state) => {
+    const settings = state.project.animation.videoEditor;
+    const clip = findVideoEditorClip(settings, clipId);
+    const track = settings.tracks.find((item) => item.id === trackId);
+    if (!clip || !track || track.locked || videoEditorTrackIsLocked(settings, clip.trackId)) return state;
+    const asset = findVideoEditorAsset(settings, clip.assetId);
+    // Una traccia audio accetta solo suono e una traccia video solo immagini in
+    // movimento: mescolarle produrrebbe clip invisibili o mute senza spiegazione.
+    const clipKind = asset?.kind === "audio" ? "audio" : "video";
+    if (track.kind !== clipKind) return state;
+    return videoEditorState(state, { ...settings, clips: settings.clips.map((item) => item.id === clipId ? { ...item, trackId } : item) }, `Clip spostata su ${track.name}`);
+  }),
+  trimVideoEditorClip: (clipId, edge, timeSeconds, playheadSeconds) => set((state) => {
+    const settings = state.project.animation.videoEditor;
+    if (videoEditorClipIsLocked(settings, clipId)) return state;
+    const trimmed = videoEditorTrimClip(settings, clipId, edge, timeSeconds, playheadSeconds);
+    if (!trimmed) return state;
+    const asset = findVideoEditorAsset(settings, trimmed.assetId);
+    const next = clampVideoEditorClip(trimmed, asset);
+    const clips = settings.clips.map((clip) => clip.id === clipId ? next : clip);
+    const oldEnd = videoEditorClipEnd(findVideoEditorClip(settings, clipId)!);
+    const newEnd = videoEditorClipEnd(next);
+    const shifted = settings.effectClips.map((effect) => {
+      if (effect.target.kind !== "clip" || effect.target.clipId !== clipId) return effect;
+      if (effect.effectId === "fade-in" && Math.abs(effect.startSeconds - findVideoEditorClip(settings, clipId)!.startSeconds) < 1e-4) return { ...effect, startSeconds: next.startSeconds };
+      if (effect.effectId === "fade-out" && Math.abs(effect.startSeconds + effect.durationSeconds - oldEnd) < 1e-4) return { ...effect, startSeconds: newEnd - effect.durationSeconds };
+      return effect;
+    });
+    return videoEditorState(state, { ...settings, clips, effectClips: reconcileVideoEditorEffects({ ...settings, clips }, shifted) });
+  }),
+  splitVideoEditorClip: (clipId, timeSeconds) => set((state) => {
+    const settings = state.project.animation.videoEditor;
+    const clip = findVideoEditorClip(settings, clipId);
+    if (!clip || videoEditorTrackIsLocked(settings, clip.trackId)) return state;
+    const halves = videoEditorSplitClip(clip, timeSeconds, `video-editor-clip-${crypto.randomUUID()}`);
+    if (!halves) return state;
+    const clips = settings.clips.flatMap((item) => item.id === clipId ? [halves[0], halves[1]] : [item]);
+    const retargeted = settings.effectClips.map((effect) => {
+      if (effect.target.kind !== "clip" || effect.target.clipId !== clipId) return effect;
+      const targetId = effect.startSeconds + effect.durationSeconds / 2 < timeSeconds ? halves[0].id : halves[1].id;
+      return { ...effect, target: { kind: "clip" as const, clipId: targetId } };
+    });
+    return videoEditorState(state, { ...settings, clips, effectClips: reconcileVideoEditorEffects({ ...settings, clips }, retargeted), selectedClipIds: [halves[1].id], selectedEffectClipIds: [] }, `Clip tagliata a ${timeSeconds.toFixed(3)} s`);
+  }),
+  duplicateVideoEditorClip: (clipId) => set((state) => {
+    const settings = state.project.animation.videoEditor;
+    const clip = findVideoEditorClip(settings, clipId);
+    if (!clip || videoEditorTrackIsLocked(settings, clip.trackId)) return state;
+    const id = `video-editor-clip-${crypto.randomUUID()}`;
+    // Il duplicato nasce subito dopo l’originale: nessun vuoto, nessuna sovrapposizione.
+    const copy: VideoEditorClip = { ...clip, id, startSeconds: videoEditorClipEnd(clip) };
+    const delta = copy.startSeconds - clip.startSeconds;
+    const duplicatedEffects = settings.effectClips.filter((effect) => effect.target.kind === "clip" && effect.target.clipId === clipId).map((effect) => ({ ...effect, id: `video-editor-effect-${crypto.randomUUID()}`, target: { kind: "clip" as const, clipId: id }, startSeconds: effect.startSeconds + delta }));
+    return videoEditorState(state, { ...settings, clips: [...settings.clips, copy], effectClips: [...settings.effectClips, ...duplicatedEffects], selectedClipIds: [id], selectedEffectClipIds: [] }, "Clip duplicata in coda all’originale");
+  }),
+  deleteVideoEditorClips: (clipIds) => set((state) => {
+    const settings = state.project.animation.videoEditor;
+    const targets = new Set(clipIds.filter((clipId) => !videoEditorClipIsLocked(settings, clipId)));
+    if (!targets.size) return state;
+    const effectClips = settings.effectClips.filter((effect) => effect.target.kind !== "clip" || !targets.has(effect.target.clipId));
+    return videoEditorState(state, {
+      ...settings,
+      clips: settings.clips.filter((clip) => !targets.has(clip.id)),
+      effectClips,
+      selectedClipIds: settings.selectedClipIds.filter((id) => !targets.has(id)),
+      selectedEffectClipIds: settings.selectedEffectClipIds.filter((id) => effectClips.some((effect) => effect.id === id))
+    }, `${targets.size} clip rimosse dalla timeline`);
+  }),
+  selectVideoEditorClip: (clipId, additive = false) => set((state) => {
+    const settings = state.project.animation.videoEditor;
+    if (!clipId) return videoEditorState(state, { ...settings, selectedClipIds: [] });
+    const selectedClipIds = additive
+      ? settings.selectedClipIds.includes(clipId) ? settings.selectedClipIds.filter((id) => id !== clipId) : [...settings.selectedClipIds, clipId]
+      : [clipId];
+    return videoEditorState(state, { ...settings, selectedClipIds, selectedEffectClipIds: [] });
+  }),
+  selectVideoEditorClips: (clipIds) => set((state) => videoEditorState(state, { ...state.project.animation.videoEditor, selectedClipIds: [...clipIds], selectedEffectClipIds: [] })),
+  syncVideoEditorClips: (referenceClipId, targetClipIds) => set((state) => {
+    const settings = state.project.animation.videoEditor;
+    // La clip bloccata può essere usata come riferimento (sola lettura), ma non
+    // può mai figurare fra i target che vengono riposizionati.
+    const editableTargets = targetClipIds.filter((clipId) => !videoEditorClipIsLocked(settings, clipId));
+    const result = videoEditorSyncClips(settings, referenceClipId, editableTargets);
+    if (!result) return state;
+    const status = result.strategy === "beatGrid"
+      ? `Sincronizzazione ritmica · ${result.matchedBeats} battute allineate`
+      : `Attacchi allineati · scarto ${result.offsetSeconds >= 0 ? "+" : ""}${result.offsetSeconds.toFixed(3)} s`;
+    return videoEditorState(state, { ...settings, clips: result.clips, effectClips: moveTargetEffects(settings, result.clips) }, status);
+  }),
+  closeVideoEditorGaps: (trackId) => set((state) => {
+    const settings = state.project.animation.videoEditor;
+    if (videoEditorTrackIsLocked(settings, trackId)) return state;
+    const clips = videoEditorCloseGaps(settings.clips, trackId);
+    return videoEditorState(state, { ...settings, clips, effectClips: moveTargetEffects(settings, clips) }, "Vuoti chiusi: le clip sono a contatto");
+  }),
+  updateVideoEditorTrack: (trackId, patch) => set((state) => {
+    const settings = state.project.animation.videoEditor;
+    const current = settings.tracks.find((track) => track.id === trackId);
+    if (!current) return state;
+    // Nome e controlli di monitoraggio (visibilità, mute e volume) restano
+    // operativi anche a traccia bloccata, come nei NLE professionali. Il lock
+    // protegge clip, effetti e struttura, non il mixer o il monitor di traccia.
+    return videoEditorState(state, { ...settings, tracks: settings.tracks.map((track) => track.id === trackId ? { ...track, ...patch } : track) });
+  }),
+  addVideoEditorTrack: (kind) => set((state) => {
+    const settings = state.project.animation.videoEditor;
+    if (settings.tracks.length >= 24) return state;
+    const count = settings.tracks.filter((track) => track.kind === kind).length + 1;
+    const track: VideoEditorTrack = { id: `video-editor-track-${crypto.randomUUID()}`, name: `${kind === "audio" ? "Audio" : "Livello video"} ${count}`, kind, hidden: false, muted: false, locked: false, volume: 1 };
+    // I nuovi livelli video nascono sopra gli altri, ma restano completamente
+    // riordinabili: non esistono ruoli impliciti di principale o overlay.
+    const tracks = kind === "audio" ? [...settings.tracks, track] : [track, ...settings.tracks];
+    return videoEditorState(state, { ...settings, tracks }, `Traccia ${track.name} aggiunta`);
+  }),
+  reorderVideoEditorTrack: (trackId, destinationIndex) => set((state) => {
+    const settings = state.project.animation.videoEditor;
+    const track = settings.tracks.find((item) => item.id === trackId);
+    const destination = settings.tracks[Math.max(0, Math.min(settings.tracks.length - 1, destinationIndex))];
+    if (!track || track.locked || destination?.locked) return state;
+    const tracks = videoEditorReorderTracks(settings.tracks, trackId, destinationIndex);
+    if (tracks.every((track, index) => track.id === settings.tracks[index]?.id)) return state;
+    return videoEditorState(state, { ...settings, tracks }, "Ordine livelli aggiornato");
+  }),
+  removeVideoEditorTrack: (trackId) => set((state) => {
+    const settings = state.project.animation.videoEditor;
+    if (settings.tracks.length <= 1 || videoEditorTrackIsLocked(settings, trackId)) return state;
+    const clips = settings.clips.filter((clip) => clip.trackId !== trackId);
+    const clipIds = new Set(clips.map((clip) => clip.id));
+    const effectClips = settings.effectClips.filter((effect) => effect.target.kind !== "clip" || clipIds.has(effect.target.clipId));
+    return videoEditorState(state, {
+      ...settings,
+      tracks: settings.tracks.filter((track) => track.id !== trackId),
+      clips,
+      effectClips,
+      selectedClipIds: settings.selectedClipIds.filter((id) => clipIds.has(id)),
+      selectedEffectClipIds: settings.selectedEffectClipIds.filter((id) => effectClips.some((effect) => effect.id === id))
+    }, "Traccia eliminata con le sue clip");
+  }),
+  addVideoEditorEffectClip: (effectId, options = {}) => {
+    let result: string | null = null;
+    set((state) => {
+      const settings = state.project.animation.videoEditor;
+      const targetClipId = options.targetClipId ?? settings.selectedClipIds.at(-1);
+      if (!targetClipId || videoEditorClipIsLocked(settings, targetClipId)) return state;
+      const placement = videoEditorPlaceEffect(settings, effectId, targetClipId, options.startSeconds);
+      if (!placement) return state;
+      const id = `video-editor-effect-${crypto.randomUUID()}`;
+      const effect: VideoEditorEffectClip = {
+        id, effectId, target: { kind: "clip", clipId: targetClipId }, startSeconds: placement.startSeconds,
+        durationSeconds: typeof options.durationSeconds === "number" ? options.durationSeconds : placement.durationSeconds,
+        enabled: true, mix: 1, parameters: { ...placement.definition.defaultParameters }
+      };
+      const clamped = videoEditorClampEffect(settings, effect);
+      if (!clamped) return state;
+      result = id;
+      return videoEditorState(state, { ...settings, effectClips: [...settings.effectClips, clamped], selectedClipIds: [], selectedEffectClipIds: [id] }, `${placement.definition.label} aggiunto alla timeline`);
+    });
+    return result;
+  },
+  updateVideoEditorEffectClip: (effectId, patch) => set((state) => {
+    const settings = state.project.animation.videoEditor;
+    const current = settings.effectClips.find((effect) => effect.id === effectId);
+    if (!current || videoEditorEffectIsLocked(settings, current)) return state;
+    if (patch.target?.kind === "clip" && videoEditorClipIsLocked(settings, patch.target.clipId)) return state;
+    const next = videoEditorClampEffect(settings, { ...current, ...patch });
+    return next ? videoEditorState(state, { ...settings, effectClips: settings.effectClips.map((effect) => effect.id === effectId ? next : effect) }) : state;
+  }),
+  moveVideoEditorEffectClip: (effectId, startSeconds) => set((state) => {
+    const settings = state.project.animation.videoEditor;
+    const current = settings.effectClips.find((effect) => effect.id === effectId);
+    if (!current || videoEditorEffectIsLocked(settings, current)) return state;
+    const moved = videoEditorMoveEffect(settings, effectId, startSeconds);
+    return moved ? videoEditorState(state, { ...settings, effectClips: settings.effectClips.map((effect) => effect.id === effectId ? moved : effect) }) : state;
+  }),
+  trimVideoEditorEffectClip: (effectId, edge, timeSeconds) => set((state) => {
+    const settings = state.project.animation.videoEditor;
+    const current = settings.effectClips.find((effect) => effect.id === effectId);
+    if (!current || videoEditorEffectIsLocked(settings, current)) return state;
+    const trimmed = videoEditorTrimEffect(settings, effectId, edge, timeSeconds);
+    return trimmed ? videoEditorState(state, { ...settings, effectClips: settings.effectClips.map((effect) => effect.id === effectId ? trimmed : effect) }) : state;
+  }),
+  deleteVideoEditorEffectClips: (effectIds) => set((state) => {
+    const settings = state.project.animation.videoEditor;
+    const targets = new Set(effectIds.filter((effectId) => {
+      const effect = settings.effectClips.find((item) => item.id === effectId);
+      return effect ? !videoEditorEffectIsLocked(settings, effect) : false;
+    }));
+    if (!targets.size) return state;
+    return videoEditorState(state, { ...settings, effectClips: settings.effectClips.filter((effect) => !targets.has(effect.id)), selectedEffectClipIds: settings.selectedEffectClipIds.filter((id) => !targets.has(id)) }, `${targets.size} effetti rimossi`);
+  }),
+  selectVideoEditorEffectClip: (effectId, additive = false) => set((state) => {
+    const settings = state.project.animation.videoEditor;
+    if (!effectId) return videoEditorState(state, { ...settings, selectedEffectClipIds: [] });
+    const selectedEffectClipIds = additive
+      ? settings.selectedEffectClipIds.includes(effectId) ? settings.selectedEffectClipIds.filter((id) => id !== effectId) : [...settings.selectedEffectClipIds, effectId]
+      : [effectId];
+    return videoEditorState(state, { ...settings, selectedClipIds: [], selectedEffectClipIds });
+  }),
+  setVideoEditorAssetAnalysis: (assetId, analysis) => set((state) => {
+    const settings = state.project.animation.videoEditor;
+    const asset = findVideoEditorAsset(settings, assetId);
+    if (!asset) return state;
+    const assets = settings.assets.map((item) => item.id === assetId
+      ? { ...item, bpm: analysis.bpm, beats: [...analysis.beats].slice(0, 4_000), downbeats: [...analysis.downbeats].slice(0, 1_000) }
+      : item);
+    return videoEditorState(state, { ...settings, assets }, `${asset.name} · ${analysis.beats.length} battute${analysis.bpm ? ` · ${analysis.bpm.toFixed(1)} BPM` : ""}`);
+  }),
   updateProSubtitleCueStyle: (cueId, patch) => set((state) => {
     const settings = state.project.animation.proSubtitles;
     const cueIndex = Math.max(0, state.project.subtitles.cues.findIndex((cue) => cue.id === cueId));

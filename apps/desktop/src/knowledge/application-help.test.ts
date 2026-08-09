@@ -36,9 +36,24 @@ describe("application assistant knowledge base", () => {
     expect(applicationHelpContext("Come azzero la memoria del bot?", "walkingCube")).toContain("Azzera memoria");
   });
 
+  it("spiega il catalogo Memory senza confonderlo con la memoria della chat", () => {
+    expect(retrieveApplicationHelp("Come catalogo una cartella e ritrovo i file con il grafo?", "walkingCube")[0]).toMatchObject({ id: "intelligent-memory" });
+    expect(applicationHelpContext("Come copio i risultati trovati da Memory?", "walkingCube")).toContain("Copia selezionati");
+  });
+
   it("spiega il workflow alpha e lo stile per parola di ProSubtitles", () => {
     expect(retrieveApplicationHelp("Come esporto un overlay trasparente per CapCut?", "proSubtitles")[0]).toMatchObject({ id: "pro-subtitles" });
     expect(applicationHelpContext("palette ombra e stile di ogni parola", "proSubtitles")).toContain("Stile per parola");
+  });
+
+  it("spiega calamita, sincronizzazione e interpolazione del Video Editor", () => {
+    expect(retrieveApplicationHelp("Come uso la calamita per non lasciare un vuoto tra due clip?", "videoEditor")[0]).toMatchObject({ id: "video-editor" });
+    expect(retrieveApplicationHelp("Come sincronizzo le clip come su CapCut?", "videoEditor")[0]).toMatchObject({ id: "video-editor" });
+    // "audio" e "video" sono sinonimi dell'esportazione: la guida del montaggio resta
+    // fra i risultati anche quando la domanda usa entrambi i termini generici.
+    expect(retrieveApplicationHelp("Come sincronizzo audio e video come su CapCut?", "videoEditor")).toContainEqual(expect.objectContaining({ id: "video-editor" }));
+    // Il servizio dell’interpolazione va avviato a mano: la guida deve dirlo sempre.
+    expect(applicationHelpContext("Come aumento davvero gli fps con l’interpolazione?", "videoEditor")).toContain("npm run upscaler:server");
   });
 
   it("fornisce sempre una risposta locale anche senza corrispondenze", () => {

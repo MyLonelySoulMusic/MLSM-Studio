@@ -14,7 +14,7 @@ describe("project schema invariants", () => {
   it("migra Cube Animation con sfondo, vetro, spettrogramma ed effetti configurabili", () => { const project = createProject(); const animation: Record<string, unknown> = { ...project.animation }; delete animation.walkingCube; expect(parseProject({ ...project, animation }).animation.walkingCube).toMatchObject({ imageUrl: null, backgroundImageUrl: null, autoPalette: true, palettePrimary: "#63f0d1", rotationIntensity: 1, spectrumIntensity: 1.25, rippleIntensity: 1.15, glassOpacity: .28, effects: { halo: true, orbitRings: true, particles: true, lightSweeps: true, waterRipples: true } }); });
   it("migra le impostazioni dei modelli locali per i sottotitoli", () => { const project = createProject(); const subtitles: Record<string, unknown> = { ...project.subtitles }; delete subtitles.whisperModel; delete subtitles.llmModel; delete subtitles.llmEnabled; delete subtitles.llmPasses; delete subtitles.autoPalette; delete subtitles.maxCueDuration; delete subtitles.maxCharsPerLine; delete subtitles.maxReadingSpeed; expect(parseProject({ ...project, subtitles }).subtitles).toMatchObject({ whisperModel: "whisper-base_timestamped", llmModel: "qwen2.5-0.5b-instruct", llmEnabled: true, llmPasses: 5, autoPalette: true, maxCueDuration: 4.2, maxCharsPerLine: 34, maxReadingSpeed: 19 }); });
   it("sostituisce SmolLM2 nei progetti esistenti con Qwen", () => { const project = createProject(); expect(parseProject({ ...project, subtitles: { ...project.subtitles, llmModel: "smollm2-135m-instruct" } }).subtitles.llmModel).toBe("qwen2.5-0.5b-instruct"); });
-  it("conserva Whisper Medium, dieci revisioni e le impostazioni Add Subtitles", () => { const project = createProject(); const parsed = parseProject({ ...project, animation: { ...project.animation, modeId: "addSubtitles", addSubtitles: { videoUrl: "blob:video", videoName: "clip.mp4", fit: "contain", dimming: .25 } }, subtitles: { ...project.subtitles, whisperModel: "whisper-medium_timestamped", llmPasses: 10, animation: "karaokeGlow" } }); expect(parsed.animation.addSubtitles).toEqual({ videoUrl: "blob:video", videoName: "clip.mp4", fit: "contain", dimming: .25 }); expect(parsed.subtitles).toMatchObject({ whisperModel: "whisper-medium_timestamped", llmPasses: 10, animation: "karaokeGlow" }); });
+  it("migra i vecchi progetti Add Subtitles nella modalità Pro Subtitles", () => { const project = createProject(); const parsed = parseProject({ ...project, animation: { ...project.animation, modeId: "addSubtitles", addSubtitles: { videoUrl: "blob:video", videoName: "clip.mp4", fit: "contain", dimming: .25 } }, subtitles: { ...project.subtitles, whisperModel: "whisper-medium_timestamped", llmPasses: 10, animation: "karaokeGlow" } }); expect(parsed.animation.modeId).toBe("proSubtitles"); expect(parsed.animation.proSubtitles).toMatchObject({ videoUrl: "blob:video", videoName: "clip.mp4", fit: "contain", dimming: .25 }); expect(parsed.subtitles).toMatchObject({ whisperModel: "whisper-medium_timestamped", llmPasses: 10, animation: "karaokeGlow" }); });
   it("migra e conserva ProSubtitles con palette, alpha e stili per parola", () => {
     const project = createProject(); const legacyAnimation: Record<string, unknown> = { ...project.animation }; delete legacyAnimation.proSubtitles;
     expect(parseProject({ ...project, animation: legacyAnimation }).animation.proSubtitles).toMatchObject({ videoUrl: null, palette: ["#000000", "#ffffff", "#ed75a7"], positionX: 50, positionY: 50, opacity: 1, backgroundMode: "transparent", exportFormat: "webmVp9Alpha", cueStyles: [] });
@@ -144,4 +144,110 @@ describe("project schema invariants", () => {
   it("migra i progetti Teddy Wheel nella modalità Teddy Walk", () => { const project = createProject(); const animation: Record<string, unknown> = { ...project.animation, modeId: "teddyWheel", teddyWheel: { coverImageUrl: "data:image/png;base64,AAAA", furColor: "#112233", patchColor: "#445566", accentColor: "#778899", wheelColor: "#abcdef", textColor: "#ffffff", wheelText: "OLD", walkIntensity: .8, jumpIntensity: 1, wheelSpeed: 1 } }; delete animation.teddyWalk; const parsed = parseProject({ ...project, animation }); expect(parsed.animation.modeId).toBe("teddyWalk"); expect(parsed.animation.teddyWalk).toMatchObject({ coverImageUrl: "data:image/png;base64,AAAA", furColor: "#112233", roadColor: "#abcdef", walkIntensity: .8 }); });
   it("rifiuta hash audio e tempi incoerenti", () => { const project = createProject(); expect(() => parseProject({ ...project, audio: { ...project.audio, hash: "bad" } })).toThrow(); const event = { id: "e", timeSeconds: 1, timeSamples: 1, eventType: "manual", confidence: 1, strength: 1, frequencyBand: "full", assignedObjectType: null, assignedObjectId: null, enabled: true, accent: false, manualOverride: true, action: "collision", expectedBallPosition: { x: 0, y: 0, z: 0 }, expectedBallVelocity: { x: 0, y: 0, z: 0 }, expectedImpactNormal: { x: 0, y: 1, z: 0 } }; expect(() => parseProject({ ...project, events: [event] })).toThrow(); });
   it("rifiuta id oggetto duplicati", () => { const project = createProject(); const object = { id: "same", name: "Pad", type: "platform", transform: { position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }, material: { color: "#fff", palette: [], roughness: .5, metalness: .1, emission: 0, opacity: 1, textureAssetId: null }, restitution: .5, friction: .5, visible: true, locked: false, castShadow: true, receiveShadow: true, assetId: null }; expect(() => parseProject({ ...project, objects: [object, object] })).toThrow(); });
+
+  it("applica Video Editor ai progetti precedenti con tracce, calamita e composizione predefinite", () => {
+    const project = createProject();
+    const animation: Record<string, unknown> = { ...project.animation };
+    delete animation.videoEditor;
+    const settings = parseProject({ ...project, animation }).animation.videoEditor;
+    expect(settings).toMatchObject({ assets: [], clips: [], selectedClipIds: [], effectClips: [], selectedEffectClipIds: [], snapEnabled: true, snapThresholdSeconds: .08, snapToBeats: true, backgroundColor: "#000000", outputWidth: 1920, outputHeight: 1080, interpolationEnabled: false, interpolationTargetFps: 60, interpolationMethod: "motion" });
+    // Il montaggio nasce con due tracce video sovrapponibili e una audio, in quest'ordine.
+    expect(settings.tracks.map((track) => track.kind)).toEqual(["video", "video", "audio"]);
+    expect(settings.tracks.map((track) => track.id)).toEqual(["video-editor-track-overlay", "video-editor-track-main", "video-editor-track-audio"]);
+    expect(settings.tracks.map((track) => track.name)).toEqual(["Livello video 2", "Livello video 1", "Audio 1"]);
+  });
+
+  it("migra soltanto i vecchi nomi principale e overlay conservando ID e nomi personalizzati", () => {
+    const project = createProject();
+    const tracks = project.animation.videoEditor.tracks.map((track, index) => ({
+      ...track,
+      name: index === 0 ? "Overlay" : index === 1 ? "Video principale" : "Audio personalizzato"
+    }));
+    const parsed = parseProject({ ...project, animation: { ...project.animation, videoEditor: { ...project.animation.videoEditor, tracks } } }).animation.videoEditor;
+    expect(parsed.tracks.map((track) => track.id)).toEqual(tracks.map((track) => track.id));
+    expect(parsed.tracks.map((track) => track.name)).toEqual(["Livello video 2", "Livello video 1", "Audio personalizzato"]);
+  });
+
+  it("conserva pool, clip, fusione e correzione colore del montaggio", () => {
+    const project = createProject();
+    const videoEditor = {
+      ...project.animation.videoEditor,
+      assets: [{ id: "media-1", name: "ripresa.mp4", kind: "video", url: "blob:media-1", durationSeconds: 12.5, width: 3840, height: 2160, hasAudio: true, bpm: 128, beats: [.5, 1, 1.5], downbeats: [.5], waveform: [-1, 0, .5, 1] }],
+      clips: [{ id: "clip-1", assetId: "media-1", trackId: "video-editor-track-main", startSeconds: 2, durationSeconds: 6, sourceInSeconds: 1.25, fadeInSeconds: .8, fadeOutSeconds: 1.2, fadeCurve: "exponential", audioFadeInSeconds: .5, audioFadeOutSeconds: .5, blendMode: "soft-light", blendIntensity: .65, adjustments: { exposure: .8, contrast: 24, highlights: -12, shadows: 18, whites: 6, blacks: -4, saturation: 15, vibrance: 22, temperature: -30, tint: 8, hue: -45, sharpness: 35, denoise: 10, opacity: .9 }, fit: "contain", muted: false, volume: 1.4 }],
+      selectedClipIds: ["clip-1"],
+      outputWidth: 3840, outputHeight: 2160, interpolationEnabled: true, interpolationTargetFps: 120, interpolationMethod: "rife"
+    };
+    const parsed = parseProject({ ...project, animation: { ...project.animation, modeId: "videoEditor", videoEditor } }).animation.videoEditor;
+    expect(parsed.assets[0]).toMatchObject({ id: "media-1", kind: "video", hasAudio: true, bpm: 128, beats: [.5, 1, 1.5], waveform: [-1, 0, .5, 1] });
+    expect(parsed.clips[0]).toMatchObject({ blendMode: "soft-light", blendIntensity: .65, fadeCurve: "exponential", fit: "contain", volume: 1.4, sourceInSeconds: 1.25 });
+    expect(parsed.clips[0]?.adjustments).toMatchObject({ exposure: .8, contrast: 24, temperature: -30, hue: -45, sharpness: 35, opacity: .9 });
+    expect(parsed).toMatchObject({ outputWidth: 3840, outputHeight: 2160, interpolationEnabled: true, interpolationTargetFps: 120, interpolationMethod: "rife" });
+  });
+
+  it("applica i valori predefiniti alle clip e ai media scritti in forma minima", () => {
+    const project = createProject();
+    const videoEditor = {
+      ...project.animation.videoEditor,
+      assets: [{ id: "m", name: "foto.png", kind: "image", url: "blob:m", durationSeconds: 0, width: 1080, height: 1080 }],
+      clips: [{ id: "c", assetId: "m", trackId: "video-editor-track-main", startSeconds: 0, durationSeconds: 4 }]
+    };
+    const parsed = parseProject({ ...project, animation: { ...project.animation, videoEditor } }).animation.videoEditor;
+    expect(parsed.assets[0]).toMatchObject({ hasAudio: false, bpm: null, beats: [], downbeats: [], waveform: [] });
+    expect(parsed.clips[0]).toMatchObject({ sourceInSeconds: 0, fadeInSeconds: 0, fadeOutSeconds: 0, fadeCurve: "smooth", blendMode: "normal", blendIntensity: 1, fit: "cover", muted: false, volume: 1 });
+    expect(parsed.clips[0]?.adjustments).toMatchObject({ exposure: 0, contrast: 0, opacity: 1 });
+  });
+
+  it("conserva clip effetto autonome e ne valida identità, target e intervallo", () => {
+    const project = createProject();
+    const base = project.animation.videoEditor;
+    const asset = { id: "m", name: "clip.mp4", kind: "video" as const, url: "blob:m", durationSeconds: 10, width: 1080, height: 1920, hasAudio: true, bpm: null, beats: [], downbeats: [], waveform: [] };
+    const clip = { id: "c", assetId: "m", trackId: "video-editor-track-main", startSeconds: 2, durationSeconds: 4, sourceInSeconds: 0, fadeInSeconds: 0, fadeOutSeconds: 0, fadeCurve: "smooth" as const, audioFadeInSeconds: 0, audioFadeOutSeconds: 0, blendMode: "normal" as const, blendIntensity: 1, adjustments: { exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, saturation: 0, vibrance: 0, temperature: 0, tint: 0, hue: 0, sharpness: 0, denoise: 0, opacity: 1 }, fit: "cover" as const, muted: false, volume: 1 };
+    const fade = { id: "fx", effectId: "fade-in", target: { kind: "clip" as const, clipId: "c" }, startSeconds: 2, durationSeconds: .75, enabled: true, mix: 1, parameters: { curve: "smooth" } };
+    const parse = (patch: Record<string, unknown>) => parseProject({ ...project, animation: { ...project.animation, videoEditor: { ...base, assets: [asset], clips: [clip], ...patch } } });
+    expect(parse({ effectClips: [fade], selectedEffectClipIds: [fade.id] }).animation.videoEditor.effectClips[0]).toEqual(fade);
+    expect(() => parse({ effectClips: [fade, fade] })).toThrow(/ID effetto duplicato/);
+    expect(() => parse({ effectClips: [{ ...fade, target: { kind: "clip", clipId: "assente" } }] })).toThrow(/clip assente/);
+    expect(() => parse({ effectClips: [{ ...fade, startSeconds: 5.8, durationSeconds: 1 }] })).toThrow(/bordi della clip/);
+    expect(() => parse({ effectClips: [{ ...fade, parameters: { curve: "zig-zag" } }] })).toThrow(/Curva dissolvenza/);
+    expect(() => parse({ effectClips: [fade], selectedEffectClipIds: ["assente"] })).toThrow(/Effetto selezionato inesistente/);
+  });
+
+  it("migra le vecchie dissolvenze video in blocchi effetto senza applicarle due volte", () => {
+    const project = createProject();
+    const legacyEditor = structuredClone(project.animation.videoEditor) as Record<string, unknown>;
+    delete legacyEditor.effectClips;
+    delete legacyEditor.selectedEffectClipIds;
+    legacyEditor.assets = [{ id: "m", name: "legacy.mp4", kind: "video", url: "blob:m", durationSeconds: 10, width: 1920, height: 1080, hasAudio: true, bpm: null, beats: [], downbeats: [], waveform: [] }];
+    legacyEditor.clips = [{ id: "c", assetId: "m", trackId: "video-editor-track-main", startSeconds: 1, durationSeconds: 5, sourceInSeconds: 0, fadeInSeconds: .5, fadeOutSeconds: .8, fadeCurve: "exponential", audioFadeInSeconds: .25, audioFadeOutSeconds: .4, blendMode: "normal", blendIntensity: 1, adjustments: { exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, saturation: 0, vibrance: 0, temperature: 0, tint: 0, hue: 0, sharpness: 0, denoise: 0, opacity: 1 }, fit: "cover", muted: false, volume: 1 }];
+    const migrated = parseProject({ ...project, animation: { ...project.animation, videoEditor: legacyEditor } }).animation.videoEditor;
+    expect(migrated.clips[0]).toMatchObject({ fadeInSeconds: 0, fadeOutSeconds: 0, audioFadeInSeconds: .25, audioFadeOutSeconds: .4 });
+    expect(migrated.effectClips).toEqual([
+      expect.objectContaining({ id: "legacy-fade-in-c", effectId: "fade-in", startSeconds: 1, durationSeconds: .5, parameters: { curve: "exponential" } }),
+      expect.objectContaining({ id: "legacy-fade-out-c", effectId: "fade-out", startSeconds: 5.2, durationSeconds: .8, parameters: { curve: "exponential" } })
+    ]);
+  });
+
+  it("rifiuta un montaggio incoerente: riferimenti assenti, id duplicati e dissolvenze più lunghe della clip", () => {
+    const project = createProject();
+    const base = project.animation.videoEditor;
+    const asset = { id: "m", name: "clip.mp4", kind: "video", url: "blob:m", durationSeconds: 10, width: 1920, height: 1080, hasAudio: true, bpm: null, beats: [], downbeats: [], waveform: [] };
+    const clip = { id: "c", assetId: "m", trackId: "video-editor-track-main", startSeconds: 0, durationSeconds: 4, sourceInSeconds: 0, fadeInSeconds: 0, fadeOutSeconds: 0, fadeCurve: "smooth", audioFadeInSeconds: 0, audioFadeOutSeconds: 0, blendMode: "normal", blendIntensity: 1, adjustments: { exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, saturation: 0, vibrance: 0, temperature: 0, tint: 0, hue: 0, sharpness: 0, denoise: 0, opacity: 1 }, fit: "cover", muted: false, volume: 1 };
+    const build = (videoEditor: Record<string, unknown>) => parseProject({ ...project, animation: { ...project.animation, videoEditor: { ...base, ...videoEditor } } });
+    expect(() => build({ assets: [asset], clips: [clip] })).not.toThrow();
+    expect(() => build({ assets: [asset], clips: [clip, clip] })).toThrow(/ID clip duplicato/);
+    expect(() => build({ assets: [asset, asset], clips: [] })).toThrow(/ID media duplicato/);
+    expect(() => build({ assets: [asset], clips: [{ ...clip, assetId: "assente" }] })).toThrow(/media assente dal pool/);
+    expect(() => build({ assets: [asset], clips: [{ ...clip, trackId: "assente" }] })).toThrow(/traccia inesistente/);
+    expect(() => build({ assets: [asset], clips: [{ ...clip, trackId: "video-editor-track-audio" }] })).toThrow(/richiede una traccia video/);
+    const audioAsset = { ...asset, id: "audio", name: "voce.wav", kind: "audio" as const, width: 0, height: 0 };
+    expect(() => build({ assets: [audioAsset], clips: [{ ...clip, assetId: audioAsset.id, trackId: "video-editor-track-main" }] })).toThrow(/richiede una traccia audio/);
+    expect(() => build({ assets: [asset], clips: [{ ...clip, fadeInSeconds: 3, fadeOutSeconds: 3 }] })).toThrow(/dissolvenze non possono superare/);
+    expect(() => build({ assets: [asset], clips: [{ ...clip, audioFadeInSeconds: 3, audioFadeOutSeconds: 3 }] })).toThrow(/dissolvenze audio non possono superare/);
+    expect(() => build({ tracks: [...base.tracks, base.tracks[0]!] })).toThrow(/ID traccia duplicato/);
+    // Una clip senza durata non è montabile, e il volume non può superare il doppio.
+    expect(() => build({ assets: [asset], clips: [{ ...clip, durationSeconds: 0 }] })).toThrow();
+    expect(() => build({ assets: [asset], clips: [{ ...clip, volume: 3 }] })).toThrow();
+    expect(() => build({ assets: [asset], clips: [{ ...clip, blendMode: "plus-lighter" }] })).toThrow();
+    expect(() => build({ tracks: [] })).toThrow();
+  });
 });

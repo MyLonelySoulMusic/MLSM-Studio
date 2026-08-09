@@ -268,6 +268,51 @@ function drawCharacter(context: CanvasRenderingContext2D, x: number, baseline: n
   if (style.hood) { pixelRect(context, "#646977", shoulder.x + facing * 1.2 * scale, shoulder.y + 3 * scale, .8 * scale, 12 * scale); pixelRect(context, style.accent, shoulder.x + facing * 1.1 * scale, shoulder.y + 14.5 * scale, 1.3 * scale, 1.3 * scale); }
 }
 
+function drawFrontHead(context: CanvasRenderingContext2D, center: Point, style: CharacterStyle, scale: number, tilt: number): void {
+  const bobX = Math.sin(tilt) * scale;
+  const hoodCenter = { x: center.x + bobX, y: center.y };
+  pixelRect(context, "#030409", hoodCenter.x - 10 * scale, hoodCenter.y - 11 * scale, 20 * scale, 22 * scale);
+  pixelRect(context, "#10131b", hoodCenter.x - 8.7 * scale, hoodCenter.y - 9.8 * scale, 17.4 * scale, 19.6 * scale);
+  if (style.faceSprite?.complete && style.faceSprite.naturalWidth > 0) {
+    context.save(); context.imageSmoothingEnabled = false;
+    context.drawImage(style.faceSprite, Math.round(hoodCenter.x - 7.4 * scale), Math.round(hoodCenter.y - 7.5 * scale), Math.round(14.8 * scale), Math.round(15 * scale)); context.restore();
+  } else {
+    pixelRect(context, style.skin, hoodCenter.x - 6.4 * scale, hoodCenter.y - 6.5 * scale, 12.8 * scale, 13.2 * scale);
+    pixelRect(context, style.hair, hoodCenter.x - 6.4 * scale, hoodCenter.y - 6.5 * scale, 12.8 * scale, 4.2 * scale);
+    pixelRect(context, "#17131a", hoodCenter.x - 3.8 * scale, hoodCenter.y - .8 * scale, 1.4 * scale, 1.4 * scale);
+    pixelRect(context, "#17131a", hoodCenter.x + 2.4 * scale, hoodCenter.y - .8 * scale, 1.4 * scale, 1.4 * scale);
+    pixelRect(context, "#7b3f48", hoodCenter.x - 2 * scale, hoodCenter.y + 4 * scale, 4 * scale, scale);
+  }
+  context.save(); context.strokeStyle = "#05060a"; context.lineWidth = Math.max(2, 2.2 * scale); context.beginPath(); context.arc(hoodCenter.x, hoodCenter.y - scale, 8.6 * scale, Math.PI * 1.05, Math.PI * 1.95); context.stroke(); context.restore();
+  pixelRect(context, "#090a0f", hoodCenter.x - 10.6 * scale, hoodCenter.y - 3.5 * scale, 3.3 * scale, 7 * scale);
+  pixelRect(context, "#090a0f", hoodCenter.x + 7.3 * scale, hoodCenter.y - 3.5 * scale, 3.3 * scale, 7 * scale);
+  pixelRect(context, style.accent, hoodCenter.x - 9.7 * scale, hoodCenter.y - 2.6 * scale, 1.5 * scale, 5.2 * scale);
+  pixelRect(context, style.accent, hoodCenter.x + 8.2 * scale, hoodCenter.y - 2.6 * scale, 1.5 * scale, 5.2 * scale);
+}
+
+/** Front-view rig: contralateral arms, alternating leg depth and stable head. */
+function drawFrontCharacter(context: CanvasRenderingContext2D, x: number, baseline: number, scale: number, style: CharacterStyle, pose: RigPose): void {
+  const phase = Math.atan2(pose.frontFootOffset ?? 0, 5.8); const stride = Math.sin(phase);
+  const bob = pose.bob * scale; const hipY = baseline - 29 * scale - bob; const shoulderY = hipY - 21 * scale;
+  const leftForward = stride >= 0; const leftLift = (leftForward ? pose.frontFootLift : pose.backFootLift) ?? 0; const rightLift = (leftForward ? pose.backFootLift : pose.frontFootLift) ?? 0;
+  const drawLeg = (side: -1 | 1, lift: number, forward: boolean) => {
+    const hip = { x: x + side * 3.3 * scale, y: hipY }; const knee = { x: x + side * (3.8 + Math.abs(stride) * 1.2) * scale, y: hipY + (14.2 - lift * .18) * scale }; const foot = { x: x + side * (4.6 + Math.abs(stride) * 1.4) * scale, y: baseline - lift * scale };
+    const tone = forward ? 1.06 : .68; const segment = (a: Point, b: Point, width: number, color: string) => { const angle = Math.atan2(b.x - a.x, b.y - a.y); limb(context, a, Math.hypot(b.x - a.x, b.y - a.y), width * scale, angle, 1, color); };
+    segment(hip, knee, 6.6, shade(style.bottom, tone)); segment(knee, foot, 5.8, shade(style.bottom, tone * .86));
+    pixelRect(context, "#08090e", foot.x - 4.4 * scale, foot.y - 2.8 * scale, 8.8 * scale, 4.4 * scale); pixelRect(context, style.shoes, foot.x - 3.6 * scale, foot.y - 2 * scale, 7.2 * scale, 2.7 * scale);
+  };
+  if (leftForward) drawLeg(1, rightLift, false); else drawLeg(-1, leftLift, false);
+  const armSwing = stride * 2.8 * scale;
+  const drawArm = (side: -1 | 1, forward: boolean) => { const shoulder = { x: x + side * 7 * scale, y: shoulderY + 3 * scale }; const elbow = { x: x + side * 9 * scale - armSwing * side, y: shoulderY + 14 * scale }; const hand = { x: x + side * 7.5 * scale - armSwing * side * 1.3, y: shoulderY + 25 * scale }; const tone = forward ? .98 : .6; const angleA = Math.atan2(elbow.x - shoulder.x, elbow.y - shoulder.y); const angleB = Math.atan2(hand.x - elbow.x, hand.y - elbow.y); limb(context, shoulder, Math.hypot(elbow.x - shoulder.x, elbow.y - shoulder.y), 5.6 * scale, angleA, 1, shade(style.top, tone)); limb(context, elbow, Math.hypot(hand.x - elbow.x, hand.y - elbow.y), 4.8 * scale, angleB, 1, shade(style.top, tone * .88)); };
+  drawArm(leftForward ? 1 : -1, false);
+  polygon(context, "#05060a", [{ x: x - 8 * scale, y: shoulderY - scale }, { x: x + 8 * scale, y: shoulderY - scale }, { x: x + 6.8 * scale, y: hipY + 2 * scale }, { x: x - 6.8 * scale, y: hipY + 2 * scale }]);
+  polygon(context, style.top, [{ x: x - 7 * scale, y: shoulderY }, { x: x + 7 * scale, y: shoulderY }, { x: x + 5.8 * scale, y: hipY }, { x: x - 5.8 * scale, y: hipY }]);
+  pixelRect(context, "#242936", x - .7 * scale, shoulderY + 3 * scale, 1.4 * scale, 17 * scale);
+  drawArm(leftForward ? -1 : 1, true);
+  if (leftForward) drawLeg(-1, leftLift, true); else drawLeg(1, rightLift, true);
+  drawFrontHead(context, { x, y: shoulderY - 9.5 * scale }, style, scale, pose.headTilt);
+}
+
 function drawBuilding(context: CanvasRenderingContext2D, x: number, ground: number, width: number, height: number, color: string, seed: number, neon: string): void {
   const top = ground - height; pixelRect(context, shade(color, .72), x, top, width, height); pixelRect(context, shade(color, 1.12), x + 2, top, 2, height); pixelRect(context, "#090b17", x + width - 3, top, 3, height);
   for (let row = 0; row < Math.floor(height / 15); row += 1) for (let column = 0; column < Math.floor(width / 13); column += 1) {
@@ -445,7 +490,7 @@ function drawStreetCharacters(context: CanvasRenderingContext2D, ground: number,
 function drawWalkingCloseUp(context: CanvasRenderingContext2D, width: number, height: number, settings: PixelArtSettings, frame: PixelArtNewYorkFrame, walkingElapsedSeconds: number, walking: boolean, faceSprite: HTMLImageElement | null): void {
   const portrait = width < 220; const phase = walkingElapsedSeconds / pixelArtWalkCycleSeconds * Math.PI * 2; const scale = portrait ? 1.82 : 1.54; const x = width * (portrait ? .46 : .38) + Math.sin(phase) * .6; const baseline = height + (portrait ? 5 : 4); const pose = walkingPose(walkingElapsedSeconds, walking);
   context.save(); context.globalCompositeOperation = "lighter"; context.globalAlpha = .08 + frame.audioPulse * .05; const rim = context.createRadialGradient(x + scale * 5, baseline - scale * 57, 2, x + scale * 5, baseline - scale * 57, scale * 34); rim.addColorStop(0, alphaColor(settings.neonSecondary, .34)); rim.addColorStop(1, alphaColor(settings.neonSecondary, 0)); context.fillStyle = rim; context.fillRect(x - scale * 35, baseline - scale * 94, scale * 75, scale * 82); context.restore();
-  drawCharacter(context, x, baseline, scale, 1, heroStyle(settings, faceSprite), pose);
+  drawFrontCharacter(context, x, baseline, scale, heroStyle(settings, faceSprite), pose);
 }
 
 function drawPixelDissolve(context: CanvasRenderingContext2D, source: HTMLCanvasElement, progress: number): void {
@@ -492,7 +537,7 @@ function renderPixelArtFrame(group: THREE.Group, frame: PixelArtNewYorkFrame): v
     const entranceWalkSeconds = timeline.barEntryProgress * Math.min(1.1, Math.max(.55, frame.durationSeconds * .018)); const entranceDistance = entranceWalkSeconds * pixelArtWalkSpeedPixelsPerSecond;
     const sidewalk = drawStreet(context, width, height, timeline.venueDistancePixels, settings); drawVenue(context, venueTargetX, sidewalk, 68, Math.min(112, height * .62), settings, Math.min(1, timeline.barEntryProgress * 2.2));
     pixelateEnvironment(context, data.environmentCanvas, data.environmentContext);
-    const entrancePose = walkingPose(timeline.walkingElapsedSeconds + entranceWalkSeconds, true); const portrait = width < 220; const cameraPullBack = smoothstep(timeline.barEntryProgress / .48); const closeScale = portrait ? 1.82 : 1.54; const fullScale = portrait ? .92 : 1.08; const scale = closeScale + (fullScale - closeScale) * cameraPullBack; const closeX = width * (portrait ? .46 : .38); const characterX = closeX + (heroX + Math.min(16, entranceDistance) - closeX) * cameraPullBack; const closeBaseline = height + (portrait ? 5 : 4); const fullBaseline = sidewalk - timeline.barEntryProgress * 6; const baseline = closeBaseline + (fullBaseline - closeBaseline) * cameraPullBack; drawCharacter(context, characterX, baseline, scale, 1, heroStyle(settings, data.heroFace), entrancePose);
+    const entrancePose = walkingPose(timeline.walkingElapsedSeconds + entranceWalkSeconds, true); const portrait = width < 220; const cameraPullBack = smoothstep(timeline.barEntryProgress / .48); const closeScale = portrait ? 1.82 : 1.54; const fullScale = portrait ? .92 : 1.08; const scale = closeScale + (fullScale - closeScale) * cameraPullBack; const closeX = width * (portrait ? .46 : .38); const characterX = closeX + (heroX + Math.min(16, entranceDistance) - closeX) * cameraPullBack; const closeBaseline = height + (portrait ? 5 : 4); const fullBaseline = sidewalk - timeline.barEntryProgress * 6; const baseline = closeBaseline + (fullBaseline - closeBaseline) * cameraPullBack; drawFrontCharacter(context, characterX, baseline, scale, heroStyle(settings, data.heroFace), entrancePose);
     const vignette = Math.max(0, (timeline.barEntryProgress - .18) / .45); context.save(); context.globalAlpha = vignette * .72; pixelRect(context, "#020307", 0, 0, width * .22 * vignette, height); pixelRect(context, "#020307", width - width * .22 * vignette, 0, width * .22 * vignette, height); context.restore();
     transitionContext.imageSmoothingEnabled = false; transitionContext.globalAlpha = 1; pixelRect(transitionContext, "#030408", 0, 0, width, height); drawBar(transitionContext, width, height, data, frame); drawPixelDissolve(context, transitionCanvas, Math.max(0, (timeline.barEntryProgress - .34) / .66));
   } else {
@@ -515,7 +560,7 @@ export function createPixelArtNewYorkScene(settings: PixelArtSettings, aspectRat
   const planeHeight = 6.02; const planeWidth = planeHeight * canvas.width / canvas.height; const material = new THREE.MeshBasicMaterial({ map: texture, toneMapped: false, transparent: false, depthWrite: true, depthTest: false });
   const plane = new THREE.Mesh(new THREE.PlaneGeometry(planeWidth, planeHeight), material); plane.name = "pixel-art-new-york-screen"; plane.position.z = .65; plane.renderOrder = 20; group.add(plane);
   const data: PixelSceneData = { canvas, context, environmentCanvas, environmentContext, transitionCanvas, transitionContext, texture, settings, cover: null, heroFace: null, lastFrame: { timeSeconds: 0, durationSeconds: 30, rhythmPulse: 0, audioPulse: 0, bpm: 90 } }; group.userData.pixelScene = data;
-  const heroFace = new Image(); data.heroFace = heroFace; heroFace.onload = () => renderPixelArtFrame(group, data.lastFrame); heroFace.src = heroFaceSpriteUrl;
+  const heroFace = new Image(); data.heroFace = heroFace; heroFace.onload = () => renderPixelArtFrame(group, data.lastFrame); heroFace.src = settings.characterImageUrl ?? heroFaceSpriteUrl;
   if (settings.coverImageUrl) { const cover = new Image(); data.cover = cover; cover.onload = () => renderPixelArtFrame(group, data.lastFrame); cover.src = settings.coverImageUrl; }
   renderPixelArtFrame(group, data.lastFrame); return group;
 }

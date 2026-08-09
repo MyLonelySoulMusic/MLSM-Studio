@@ -1,11 +1,23 @@
-"""Local PyTorch/Real-ESRGAN service used by the web editor. Run explicitly; never auto-started."""
+"""Local PyTorch/Real-ESRGAN + ffmpeg service used by the web editor.
+
+In development Vite starts this process as a child; it can also be launched explicitly
+with ``npm run upscaler:server`` for diagnostics or non-Vite clients.
+"""
 from __future__ import annotations
 
 import os
+import json
+import contextlib
+import io
+import shutil
+import subprocess
 import sys
+import tempfile
 import threading
+import time
 import types
 import urllib.request
+import uuid
 from pathlib import Path
 
 import cv2
@@ -25,13 +37,16 @@ if "torchvision.transforms.functional_tensor" not in sys.modules:
 from basicsr.archs.rrdbnet_arch import RRDBNet
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from realesrgan import RealESRGANer
 from realesrgan.archs.srvgg_arch import SRVGGNetCompact
+from starlette.background import BackgroundTask
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = Path(os.environ.get("DSAS_UPSCALER_CACHE", ROOT / ".upscaler-cache" / "pytorch"))
 CACHE.mkdir(parents=True, exist_ok=True)
+VIDEO_TEMP_ROOT = Path(os.environ.get("MLSM_UPSCALER_TEMP", ROOT / "temp" / "upscaler"))
+VIDEO_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
 MODELS = {
     "RealESRGAN_x4plus": (4, 23, "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth"),
     "RealESRGAN_x2plus": (2, 23, "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth"),
@@ -43,9 +58,83 @@ MODELS = {
 status: dict[str, dict[str, object]] = {}
 loaded: dict[tuple[str, str, int], RealESRGANer] = {}
 lock = threading.Lock()
+video_job_lock = threading.Lock()
+video_jobs: dict[str, dict[str, object]] = {}
+cancelled_video_clients: dict[str, float] = {}
+event_log_lock = threading.Lock()
+EVENT_LOG = VIDEO_TEMP_ROOT / "upscaler-events.jsonl"
+READY_JOB_RETENTION_SECONDS = int(os.environ.get("MLSM_UPSCALER_READY_TTL", 30 * 60))
+FAILED_JOB_RETENTION_SECONDS = int(os.environ.get("MLSM_UPSCALER_FAILED_TTL", 5 * 60))
+
+RIFE_WEIGHTS = Path(os.environ.get("DSAS_RIFE_WEIGHTS", CACHE.parent / "rife"))
+INTERPOLATION_METHODS = ("blend", "motion", "rife")
+# Un montaggio esportato può essere lungo: il limite protegge dal riempire /tmp per errore,
+# non è una restrizione editoriale.
+INTERPOLATION_MAX_BYTES = int(os.environ.get("DSAS_INTERPOLATION_MAX_BYTES", 4 * 1024 ** 3))
+INTERPOLATION_TIMEOUT_SECONDS = int(os.environ.get("DSAS_INTERPOLATION_TIMEOUT", 3600))
 
 app = FastAPI(title="MLSM Studio Upscaler", docs_url=None, redoc_url=None)
-app.add_middleware(CORSMiddleware, allow_origin_regex=r"^(https?://(localhost|127\.0\.0\.1)(:\d+)?|tauri://localhost|https://tauri\.localhost)$", allow_methods=["GET", "POST"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origin_regex=r"^(https?://(localhost|127\.0\.0\.1)(:\d+)?|tauri://localhost|https://tauri\.localhost)$", allow_methods=["GET", "POST", "DELETE"], allow_headers=["*"])
+
+
+def log_upscaler_event(source: str, event: str, **details: object) -> None:
+    entry = {"at": time.time(), "source": source, "event": event, **details}
+    line = json.dumps(entry, ensure_ascii=False, default=str)
+    with event_log_lock:
+        with EVENT_LOG.open("a", encoding="utf-8") as output:
+            output.write(line + "\n")
+    print(f"[MLSM Upscaler] {line}", flush=True)
+
+
+def cleanup_video_job(job_id: str, reason: str = "cleanup") -> None:
+    """Rimuove un solo workspace verificato, senza mai cancellare la root temp."""
+    with video_job_lock:
+        item = video_jobs.pop(job_id, None)
+    if item is None:
+        return
+    workspace_value = str(item.get("tempDirectory", ""))
+    if not workspace_value:
+        return
+    root = VIDEO_TEMP_ROOT.resolve()
+    workspace = Path(workspace_value).resolve()
+    if workspace.parent != root:
+        log_upscaler_event("backend", "job-cleanup-refused", jobId=job_id, workspace=workspace, reason=reason)
+        return
+    shutil.rmtree(workspace, ignore_errors=True)
+    log_upscaler_event("backend", "job-cleaned", jobId=job_id, workspace=workspace, reason=reason)
+
+
+def schedule_video_job_cleanup(job_id: str, delay_seconds: int, reason: str) -> None:
+    timer = threading.Timer(delay_seconds, cleanup_video_job, args=(job_id, reason))
+    timer.daemon = True
+    timer.start()
+
+
+def purge_stale_video_temp() -> None:
+    """A ogni avvio elimina soltanto artefatti di job appartenenti a esecuzioni precedenti."""
+    with video_job_lock:
+        video_jobs.clear()
+        cancelled_video_clients.clear()
+    VIDEO_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
+    for child in VIDEO_TEMP_ROOT.iterdir():
+        if child.is_dir():
+            shutil.rmtree(child, ignore_errors=True)
+        else:
+            child.unlink(missing_ok=True)
+
+
+@app.on_event("startup")
+def cleanup_stale_upscaler_jobs() -> None:
+    purge_stale_video_temp()
+    log_upscaler_event("backend", "temp-purged-on-startup", tempDirectory=VIDEO_TEMP_ROOT)
+
+
+@app.post("/diagnostics/events")
+async def diagnostic_event(payload: dict[str, object]):
+    source = str(payload.pop("source", "browser"))
+    event = str(payload.pop("event", "client-event"))
+    log_upscaler_event(source, event, **payload)
+    return {"ok": True}
 
 
 def hardware() -> dict[str, object]:
@@ -87,9 +176,40 @@ def download(model: str) -> None:
             status[model] = {"phase": "error", "progress": 0, "error": str(error)}
 
 
+def ffmpeg_binary() -> str | None:
+    """ffmpeg is resolved from PATH: the service never bundles or downloads a binary."""
+    return os.environ.get("DSAS_FFMPEG") or shutil.which("ffmpeg")
+
+
+def ffprobe_binary() -> str | None:
+    configured = os.environ.get("DSAS_FFPROBE")
+    if configured:
+        return configured
+    binary = ffmpeg_binary()
+    sibling = Path(binary).with_name("ffprobe") if binary else None
+    return str(sibling) if sibling and sibling.exists() else shutil.which("ffprobe")
+
+
+def rife_available() -> bool:
+    return RIFE_WEIGHTS.is_dir() and any(RIFE_WEIGHTS.glob("*.pkl"))
+
+
+def interpolation_capabilities() -> dict[str, object]:
+    binary = ffmpeg_binary()
+    return {"ffmpeg": bool(binary), "ffmpegPath": binary or "", "rife": rife_available(), "device": str(device_from("auto"))}
+
+
 @app.get("/health")
 def health():
-    return {"ok": True, **hardware()}
+    return {
+        "ok": True, "apiVersion": 2, "capabilities": {"imageUpscale": True, "videoJobs": True},
+        **hardware(), "interpolation": interpolation_capabilities(), "videoTempDirectory": str(VIDEO_TEMP_ROOT)
+    }
+
+
+@app.get("/interpolation/health")
+def interpolation_health():
+    return {"ok": True, "interpolation": interpolation_capabilities()}
 
 
 @app.get("/models/{model}/status")
@@ -150,9 +270,9 @@ async def upscale(file: UploadFile = File(...), model: str = Form(...), backend:
     if image is None:
         raise HTTPException(400, "Immagine non valida")
     runner = upsampler(model, backend, max(0, min(1024, tile)))
-    output, _ = runner.enhance(image, outscale=MODELS[model][0])
+    output, _ = quiet_enhance(runner, image, MODELS[model][0])
     if tta:
-        mirrored, _ = runner.enhance(cv2.flip(image, 1), outscale=MODELS[model][0])
+        mirrored, _ = quiet_enhance(runner, cv2.flip(image, 1), MODELS[model][0])
         output = cv2.addWeighted(output, .5, cv2.flip(mirrored, 1), .5, 0)
     if output.shape[1] != width or output.shape[0] != height:
         output = cv2.resize(output, (width, height), interpolation=cv2.INTER_LANCZOS4)
@@ -160,6 +280,413 @@ async def upscale(file: UploadFile = File(...), model: str = Form(...), backend:
     if not ok:
         raise HTTPException(500, "Codifica PNG fallita")
     return Response(encoded.tobytes(), media_type="image/png", headers={"X-Upscaler-Backend": str(device_from(backend))})
+
+
+def update_video_job(job_id: str, **patch: object) -> None:
+    with video_job_lock:
+        current = video_jobs.get(job_id)
+        if current is not None:
+            current.update(patch)
+
+
+def video_job_cancelled(job_id: str) -> bool:
+    with video_job_lock:
+        return bool(video_jobs.get(job_id, {}).get("cancelRequested"))
+
+
+def run_checked(command: list[str], timeout: int = INTERPOLATION_TIMEOUT_SECONDS) -> None:
+    try:
+        result = subprocess.run(command, capture_output=True, timeout=timeout, check=False)
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError("ffmpeg non ha terminato entro il tempo massimo") from error
+    if result.returncode != 0:
+        detail = (result.stderr or b"").decode("utf-8", "replace").strip()[-900:]
+        raise RuntimeError(f"ffmpeg ha restituito un errore: {detail or 'nessun dettaglio disponibile'}")
+
+
+def canvas_enhance(frame: np.ndarray, width: int, height: int) -> np.ndarray:
+    resized = cv2.resize(frame, (width, height), interpolation=cv2.INTER_LANCZOS4)
+    blurred = cv2.GaussianBlur(resized, (0, 0), 1.05)
+    return cv2.addWeighted(resized, 1.16, blurred, -0.16, 0)
+
+
+def quiet_enhance(runner: RealESRGANer, frame: np.ndarray, outscale: int):
+    """RealESRGAN stampa ogni tile su stdout: la UI mostra già un progresso per frame."""
+    with contextlib.redirect_stdout(io.StringIO()):
+        return runner.enhance(frame, outscale=outscale)
+
+
+def source_frame_durations(source: Path, total: int, fallback_fps: float) -> list[float]:
+    """Legge i PTS reali: anche una sorgente VFR mantiene la durata di ogni fotogramma."""
+    probe = ffprobe_binary()
+    if not probe:
+        return [1 / fallback_fps] * total
+    result = subprocess.run([
+        probe, "-v", "error", "-select_streams", "v:0", "-show_frames",
+        "-show_entries", "frame=best_effort_timestamp_time,pkt_duration_time", "-of", "json", str(source)
+    ], capture_output=True, check=False)
+    if result.returncode != 0:
+        return [1 / fallback_fps] * total
+    frames = json.loads(result.stdout or b"{}").get("frames", [])
+    timestamps = [float(item.get("best_effort_timestamp_time", 0)) for item in frames[:total]]
+    durations: list[float] = []
+    for index in range(total):
+        if index + 1 < len(timestamps):
+            duration = timestamps[index + 1] - timestamps[index]
+        else:
+            item = frames[index] if index < len(frames) else {}
+            duration = float(item.get("pkt_duration_time", 0) or 0)
+        durations.append(duration if np.isfinite(duration) and duration > 0 else 1 / fallback_fps)
+    return durations
+
+
+def encoded_video_frame_count(path: Path) -> int:
+    probe = ffprobe_binary()
+    if not probe:
+        raise RuntimeError("ffprobe non disponibile: impossibile verificare tutti i frame del video finale")
+    result = subprocess.run([
+        probe, "-v", "error", "-select_streams", "v:0", "-count_frames",
+        "-show_entries", "stream=nb_read_frames", "-of", "default=nokey=1:noprint_wrappers=1", str(path)
+    ], capture_output=True, check=False)
+    if result.returncode != 0:
+        raise RuntimeError("ffprobe non riesce a verificare il video ricomposto")
+    return int((result.stdout or b"0").decode("utf-8", "replace").strip() or 0)
+
+
+def process_video_upscale_job(job_id: str) -> None:
+    with video_job_lock:
+        job = dict(video_jobs[job_id])
+    workspace = Path(str(job["tempDirectory"]))
+    source = Path(str(job["sourcePath"]))
+    originals = workspace / "original-frames"
+    enhanced = workspace / "upscaled-frames"
+    result_path = workspace / "upscaled-video.mp4"
+    originals.mkdir(parents=True, exist_ok=True)
+    enhanced.mkdir(parents=True, exist_ok=True)
+    started = time.monotonic()
+    try:
+        log_upscaler_event("backend", "job-start", jobId=job_id, sourcePath=source, model=job.get("model"), backend=job.get("backend"), target=f'{job.get("width")}x{job.get("height")}')
+        binary = ffmpeg_binary()
+        if not binary:
+            raise RuntimeError("ffmpeg non trovato nel PATH. Installalo con `brew install ffmpeg` e riavvia il servizio.")
+        update_video_job(job_id, phase="extracting", phaseLabel="Estrazione di tutti i frame originali", progress=0.01)
+        run_checked([
+            binary, "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", str(source),
+            "-vsync", "0", str(originals / "frame-%08d.png")
+        ])
+        original_frames = sorted(originals.glob("frame-*.png"))
+        if not original_frames:
+            raise RuntimeError("Il decoder non ha estratto alcun fotogramma dal video.")
+        capture = cv2.VideoCapture(str(source))
+        fps = float(capture.get(cv2.CAP_PROP_FPS) or 0)
+        capture.release()
+        if not np.isfinite(fps) or fps <= 0:
+            fps = 30.0
+        total = len(original_frames)
+        log_upscaler_event("backend", "frames-extracted", jobId=job_id, totalFrames=total, fps=fps, originals=originals)
+        durations = source_frame_durations(source, total, fps)
+        model_name = str(job["model"])
+        backend = str(job["backend"])
+        tile = int(job["tile"])
+        width = int(job["width"])
+        height = int(job["height"])
+        tta = bool(job["tta"])
+        runner = None if model_name == "canvas" else upsampler(model_name, backend, max(0, min(1024, tile)))
+        update_video_job(job_id, phase="upscaling", phaseLabel="Upscaling frame per frame", totalFrames=total, currentFrame=0, fps=fps, progress=0.04)
+        for index, frame_path in enumerate(original_frames, start=1):
+            if video_job_cancelled(job_id):
+                update_video_job(job_id, phase="cancelled", phaseLabel="Job annullato", cancelled=True)
+                cleanup_video_job(job_id, "cancelled")
+                return
+            frame = cv2.imread(str(frame_path), cv2.IMREAD_COLOR)
+            if frame is None:
+                raise RuntimeError(f"Fotogramma originale illeggibile: {frame_path.name}")
+            completed = index - 1
+            elapsed_before = time.monotonic() - started
+            estimated_before = (elapsed_before / completed * (total - completed)) if completed else None
+            passes = 2 if tta and runner is not None else 1
+            update_video_job(
+                job_id,
+                phaseLabel=f"Frame {index}/{total} · passaggio 1/{passes}",
+                currentFrame=completed,
+                progress=.04 + .9 * completed / total,
+                elapsedSeconds=elapsed_before,
+                estimatedRemainingSeconds=estimated_before,
+                activeFrame=index,
+                inferencePass=1,
+                inferencePasses=passes,
+            )
+            if runner is None:
+                output = canvas_enhance(frame, width, height)
+            else:
+                output, _ = quiet_enhance(runner, frame, MODELS[model_name][0])
+                if tta:
+                    update_video_job(job_id, phaseLabel=f"Frame {index}/{total} · passaggio TTA 2/2", activeFrame=index, inferencePass=2, inferencePasses=2)
+                    mirrored, _ = quiet_enhance(runner, cv2.flip(frame, 1), MODELS[model_name][0])
+                    output = cv2.addWeighted(output, .5, cv2.flip(mirrored, 1), .5, 0)
+                if output.shape[1] != width or output.shape[0] != height:
+                    output = cv2.resize(output, (width, height), interpolation=cv2.INTER_LANCZOS4)
+            destination = enhanced / frame_path.name
+            if not cv2.imwrite(str(destination), output, [cv2.IMWRITE_PNG_COMPRESSION, 2]):
+                raise RuntimeError(f"Impossibile salvare {destination.name}")
+            elapsed = time.monotonic() - started
+            update_video_job(
+                job_id,
+                currentFrame=index,
+                totalFrames=total,
+                progress=.04 + .9 * index / total,
+                elapsedSeconds=elapsed,
+                estimatedRemainingSeconds=(elapsed / index * (total - index)) if index else None,
+                currentOriginalFrame=str(frame_path),
+                currentUpscaledFrame=str(destination),
+            )
+            log_step = max(1, total // 20)
+            if index == 1 or index == total or index % log_step == 0:
+                log_upscaler_event("backend", "frame-progress", jobId=job_id, currentFrame=index, totalFrames=total, progress=.04 + .9 * index / total)
+        if video_job_cancelled(job_id):
+            update_video_job(job_id, phase="cancelled", phaseLabel="Job annullato", cancelled=True)
+            cleanup_video_job(job_id, "cancelled")
+            return
+        update_video_job(job_id, phase="encoding", phaseLabel="Ricomposizione video e audio originale", progress=.95)
+        log_upscaler_event("backend", "encoding-start", jobId=job_id, totalFrames=total)
+        quality = str(job.get("quality", "maximum"))
+        crf = "14" if quality == "maximum" else "17"
+        manifest = workspace / "upscaled-frames.ffconcat"
+        manifest_lines = ["ffconcat version 1.0"]
+        for frame_path, duration in zip(sorted(enhanced.glob("frame-*.png")), durations, strict=True):
+            manifest_lines.extend((f"file '{frame_path.as_posix()}'", f"duration {duration:.9f}"))
+        manifest.write_text("\n".join(manifest_lines) + "\n", encoding="utf-8")
+        run_checked([
+            binary, "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+            "-safe", "0", "-f", "concat", "-i", str(manifest),
+            "-i", str(source), "-map", "0:v:0", "-map", "1:a?", "-map_metadata", "1",
+            "-c:v", "libx264", "-preset", "slow", "-crf", crf, "-pix_fmt", "yuv420p",
+            "-fps_mode", "vfr", "-c:a", "aac", "-b:a", "320k", "-shortest", "-movflags", "+faststart", str(result_path)
+        ])
+        if video_job_cancelled(job_id):
+            update_video_job(job_id, phase="cancelled", phaseLabel="Job annullato", cancelled=True)
+            cleanup_video_job(job_id, "cancelled-after-encoding")
+            return
+        if not result_path.exists() or result_path.stat().st_size <= 0:
+            raise RuntimeError("La ricomposizione non ha prodotto un video valido.")
+        encoded_frames = encoded_video_frame_count(result_path)
+        if encoded_frames != total:
+            result_path.unlink(missing_ok=True)
+            raise RuntimeError(f"Controllo anti-drop fallito: il risultato contiene {encoded_frames}/{total} frame")
+        update_video_job(
+            job_id,
+            phase="ready",
+            phaseLabel="Upscaling video completato",
+            progress=1,
+            currentFrame=total,
+            totalFrames=total,
+            resultPath=str(result_path),
+            resultBytes=result_path.stat().st_size,
+            elapsedSeconds=time.monotonic() - started,
+        )
+        log_upscaler_event("backend", "job-ready", jobId=job_id, totalFrames=total, resultBytes=result_path.stat().st_size, elapsedSeconds=time.monotonic() - started)
+        schedule_video_job_cleanup(job_id, READY_JOB_RETENTION_SECONDS, "ready-expired")
+    except Exception as error:
+        update_video_job(job_id, phase="error", phaseLabel="Upscaling interrotto", error=str(error))
+        log_upscaler_event("backend", "job-error", jobId=job_id, error=str(error))
+        schedule_video_job_cleanup(job_id, FAILED_JOB_RETENTION_SECONDS, "failed-expired")
+
+
+@app.post("/upscale/video/jobs")
+async def create_video_upscale_job(
+    file: UploadFile = File(...), model: str = Form(...), backend: str = Form("auto"),
+    tile: int = Form(256), width: int = Form(...), height: int = Form(...),
+    tta: bool = Form(False), quality: str = Form("maximum"), client_id: str = Form("")
+):
+    log_upscaler_event("backend", "upload-received", fileName=file.filename, model=model, backend=backend, target=f"{width}x{height}", quality=quality)
+    if model != "canvas" and model not in MODELS:
+        raise HTTPException(400, "Modello video sconosciuto")
+    if model != "canvas" and not target(model).exists():
+        raise HTTPException(409, "Modello non ancora scaricato")
+    if not ffmpeg_binary():
+        raise HTTPException(503, "ffmpeg non disponibile nel servizio locale")
+    if width < 64 or height < 64 or width > 16384 or height > 16384:
+        raise HTTPException(400, "Risoluzione finale fuori dai limiti")
+    job_id = uuid.uuid4().hex
+    workspace = VIDEO_TEMP_ROOT / job_id
+    workspace.mkdir(parents=True, exist_ok=False)
+    suffix = Path(file.filename or "source.mp4").suffix.lower()
+    if suffix not in (".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi"):
+        suffix = ".mp4"
+    source = workspace / f"source{suffix}"
+    try:
+        with source.open("wb") as output:
+            while chunk := await file.read(1024 * 1024):
+                output.write(chunk)
+        if source.stat().st_size <= 0:
+            raise HTTPException(400, "Video sorgente vuoto")
+    except BaseException:
+        shutil.rmtree(workspace, ignore_errors=True)
+        raise
+    finally:
+        await file.close()
+    with video_job_lock:
+        cutoff = time.time() - 3600
+        for stale_client in [key for key, cancelled_at in cancelled_video_clients.items() if cancelled_at < cutoff]:
+            cancelled_video_clients.pop(stale_client, None)
+        client_was_cancelled = bool(client_id and client_id in cancelled_video_clients)
+    if client_was_cancelled:
+        shutil.rmtree(workspace, ignore_errors=True)
+        raise HTTPException(409, "La pagina che ha creato il job non è più attiva")
+    record: dict[str, object] = {
+        "id": job_id, "phase": "queued", "phaseLabel": "Job in coda", "progress": 0,
+        "currentFrame": 0, "totalFrames": 0, "tempDirectory": str(workspace),
+        "originalFramesDirectory": str(workspace / "original-frames"),
+        "upscaledFramesDirectory": str(workspace / "upscaled-frames"),
+        "sourcePath": str(source), "model": model, "backend": backend, "tile": tile,
+        "width": width, "height": height, "tta": tta, "quality": quality,
+        "clientId": client_id,
+        "cancelRequested": False, "cancelled": False,
+    }
+    with video_job_lock:
+        video_jobs[job_id] = record
+    log_upscaler_event("backend", "job-created", jobId=job_id, sourceBytes=source.stat().st_size, tempDirectory=workspace)
+    threading.Thread(target=process_video_upscale_job, args=(job_id,), daemon=True).start()
+    return record
+
+
+@app.delete("/upscale/video/clients/{client_id}")
+def release_video_upscale_client(client_id: str):
+    """Segna la pagina come chiusa anche se l'upload non ha ancora restituito il job ID."""
+    with video_job_lock:
+        cancelled_video_clients[client_id] = time.time()
+        released = []
+        for job_id, item in video_jobs.items():
+            if item.get("clientId") == client_id:
+                item["cancelRequested"] = True
+                released.append(job_id)
+    return {"released": released}
+
+
+@app.get("/upscale/video/jobs/{job_id}")
+def video_upscale_job_status(job_id: str):
+    with video_job_lock:
+        item = video_jobs.get(job_id)
+        if item is None:
+            raise HTTPException(404, "Job video non trovato")
+        return dict(item)
+
+
+@app.delete("/upscale/video/jobs/{job_id}")
+def cancel_video_upscale_job(job_id: str):
+    with video_job_lock:
+        item = video_jobs.get(job_id)
+        if item is None:
+            raise HTTPException(404, "Job video non trovato")
+        item["cancelRequested"] = True
+        snapshot = dict(item)
+    if snapshot.get("phase") in ("ready", "error", "cancelled"):
+        cleanup_video_job(job_id, "client-release")
+    return snapshot
+
+
+@app.get("/upscale/video/jobs/{job_id}/result")
+def video_upscale_job_result(job_id: str):
+    with video_job_lock:
+        item = dict(video_jobs.get(job_id) or {})
+    if not item:
+        raise HTTPException(404, "Job video non trovato")
+    if item.get("phase") != "ready":
+        raise HTTPException(409, "Il video non è ancora pronto")
+    path = Path(str(item.get("resultPath", "")))
+    if not path.exists():
+        raise HTTPException(410, "Il risultato del job non è più disponibile")
+    return FileResponse(
+        path,
+        media_type="video/mp4",
+        filename="mlsm-upscaled-video.mp4",
+        background=BackgroundTask(cleanup_video_job, job_id, "download-complete"),
+    )
+
+
+def minterpolate_filter(target_fps: float, method: str) -> str:
+    """Frame interpolation filter graph.
+
+    `motion` runs bidirectional motion estimation and compensation: ffmpeg synthesises
+    genuinely new intermediate frames instead of repeating or cross-dissolving the
+    existing ones. `blend` keeps the cheaper frame-mixing mode for long exports.
+    """
+    if method == "blend":
+        return f"minterpolate=fps={target_fps:g}:mi_mode=blend"
+    return (
+        f"minterpolate=fps={target_fps:g}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir"
+        ":me=epzs:vsbmc=1:search_param=32:scd=fdiff:scd_threshold=8"
+    )
+
+
+def run_ffmpeg(source: Path, destination: Path, target_fps: float, method: str) -> str:
+    binary = ffmpeg_binary()
+    if not binary:
+        raise HTTPException(503, "ffmpeg non trovato nel PATH. Installalo (brew install ffmpeg) e riavvia il servizio.")
+    command = [
+        binary, "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+        "-i", str(source),
+        "-filter:v", minterpolate_filter(target_fps, method),
+        "-r", f"{target_fps:g}",
+        "-c:v", "libx264", "-preset", "slow", "-crf", "16", "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart",
+        # L'audio del montaggio è già stato mixato dall'editor: va copiato intatto.
+        "-c:a", "copy",
+        str(destination),
+    ]
+    try:
+        result = subprocess.run(command, capture_output=True, timeout=INTERPOLATION_TIMEOUT_SECONDS, check=False)
+    except subprocess.TimeoutExpired as error:
+        raise HTTPException(504, "ffmpeg non ha terminato l'interpolazione entro il tempo massimo.") from error
+    if result.returncode != 0:
+        detail = (result.stderr or b"").decode("utf-8", "replace").strip()[-600:]
+        raise HTTPException(500, f"ffmpeg ha restituito un errore: {detail or 'nessun dettaglio disponibile'}")
+    return f"ffmpeg · {method}"
+
+
+def run_rife(source: Path, destination: Path, target_fps: float) -> str:
+    """RIFE reuses the GPU stack already loaded for upscaling; weights stay user-provided."""
+    if not rife_available():
+        raise HTTPException(409, f"Pesi RIFE non presenti in {RIFE_WEIGHTS}. Copiali lì oppure scegli la stima del movimento ffmpeg.")
+    try:
+        from rife_interpolate import interpolate_file  # type: ignore[import-not-found]
+    except ImportError as error:
+        raise HTTPException(503, "Runtime RIFE non installato in questo ambiente. Usa la stima del movimento ffmpeg.") from error
+    interpolate_file(str(source), str(destination), target_fps=target_fps, weights=str(RIFE_WEIGHTS), device=str(device_from("auto")))
+    if not destination.exists() or destination.stat().st_size == 0:
+        raise HTTPException(500, "Il runtime RIFE non ha prodotto un file utilizzabile.")
+    return f"rife · {device_from('auto')}"
+
+
+@app.post("/interpolate")
+async def interpolate(file: UploadFile = File(...), source_fps: float = Form(...), target_fps: float = Form(...), method: str = Form("motion")):
+    if method not in INTERPOLATION_METHODS:
+        raise HTTPException(400, "Metodo di interpolazione sconosciuto")
+    if not 1 <= source_fps <= 480 or not 1 <= target_fps <= 480:
+        raise HTTPException(400, "Frame rate fuori dai limiti supportati (1-480)")
+    if target_fps <= source_fps:
+        raise HTTPException(400, "Il frame rate di destinazione deve superare quello di partenza")
+    payload = await file.read()
+    if not payload:
+        raise HTTPException(400, "File vuoto")
+    if len(payload) > INTERPOLATION_MAX_BYTES:
+        raise HTTPException(413, "File troppo grande per il servizio di interpolazione")
+    with tempfile.TemporaryDirectory(prefix="mlsm-interpolate-") as workspace:
+        source = Path(workspace) / "source.mp4"
+        destination = Path(workspace) / "interpolated.mp4"
+        source.write_bytes(payload)
+        backend = run_rife(source, destination, target_fps) if method == "rife" else run_ffmpeg(source, destination, target_fps, method)
+        if not destination.exists() or destination.stat().st_size == 0:
+            raise HTTPException(500, "L'interpolazione non ha prodotto un file utilizzabile.")
+        return Response(
+            destination.read_bytes(),
+            media_type="video/mp4",
+            headers={
+                "X-Interpolation-Backend": backend,
+                "X-Interpolation-Method": method,
+                "X-Interpolation-Target-Fps": f"{target_fps:g}",
+            },
+        )
 
 
 if __name__ == "__main__":

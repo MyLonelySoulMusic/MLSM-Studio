@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#eee7da">
+  <meta name="application-name" content="MLSM Studio">
+  <meta name="description" content="MLSM Studio AI Quantizer — quantizzazione, allineamento DAW, restauro e mastering audio.">
+  <title>MLSM Studio — AI Quantizer</title>
+  <link rel="icon" href="/mlsm-studio-favicon-192.png" type="image/png">
+  <link rel="apple-touch-icon" href="/mlsm-studio-favicon-192.png">
+  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./mlsm.css">
+</head>
+<body>
+  <div class="noise"></div>
+  <aside class="sidebar">
+    <div class="brand"><img src="/mlsm-studio-favicon-192.png" alt="Logo MLSM Studio"><div><strong>MLSM Studio</strong><small>Music · AI Quantizer</small></div></div>
+    <button id="newProject" class="primary full">＋ Nuovo progetto</button>
+    <div class="side-label">I tuoi progetti</div>
+    <div id="projects" class="project-list"></div>
+    <div class="engine-status"><i id="engineDot"></i><div><strong>Audio engine</strong><span id="engineText">Verifica…</span></div></div>
+  </aside>
+
+  <main>
+    <section id="emptyState" class="empty-state">
+      <div class="orb"><span>⌁</span></div>
+      <p class="eyebrow">PITCH-PRESERVING AUDIO WARP</p>
+      <h1>Il tuo brano.<br><em>Finalmente a tempo.</em></h1>
+      <p>Stabilizza le variazioni di BPM, conserva il pitch e applica la stessa precisione a ogni stem.</p>
+      <button id="emptyNew" class="primary">Crea il primo progetto</button>
+    </section>
+
+    <section id="workspace" class="workspace hidden">
+      <header>
+        <div><p class="eyebrow">PROGETTO</p><h2 id="projectName"></h2></div>
+        <div class="header-actions"><span id="saveState">Salvato</span><button id="deleteProject" class="icon-btn" title="Elimina progetto">⌫</button></div>
+      </header>
+
+      <div class="module-rail">
+        <button class="module-tab active" data-module="quantize"><i>01</i><span>Quantizza</span><label class="mini-toggle"><input id="moduleQuantize" type="checkbox" checked><b></b></label></button>
+        <button class="module-tab" data-module="align"><i>02</i><span>DAW Align</span><label class="mini-toggle"><input id="moduleAlign" type="checkbox" checked><b></b></label></button>
+        <button class="module-tab" data-module="restoration"><i>03</i><span>Restoration</span><label class="mini-toggle"><input id="moduleRestoration" type="checkbox" checked><b></b></label></button>
+        <button class="module-tab" data-module="mastering"><i>04</i><span>Mastering</span><label class="mini-toggle"><input id="moduleMastering" type="checkbox" checked><b></b></label></button>
+        <button class="module-tab" data-module="ai"><i>05</i><span>AI Forensics</span><label class="mini-toggle"><input id="moduleAi" type="checkbox" checked><b></b></label></button>
+      </div>
+
+      <section class="panel upload-panel" id="masterDrop">
+        <div><p class="eyebrow">TRACCIA DI RIFERIMENTO</p><h3>Master track</h3><p id="masterHint">Trascina il mix completo o scegli un file audio.</p></div>
+        <label class="file-button"><input id="masterInput" type="file" accept="audio/*">Scegli audio</label>
+      </section>
+
+      <section id="editor" class="hidden">
+        <div class="module-stage active" data-stage="quantize"><div class="metrics">
+          <div><span>BPM rilevato</span><strong id="detectedBpm">—</strong></div>
+          <div><span>BPM obiettivo</span><label class="bpm-input"><input id="targetBpm" type="number" min="40" max="240" step="1" value="120"><small>BPM</small></label></div>
+          <div><span>Confidenza analisi</span><strong id="confidence">—</strong></div>
+          <div><span>Correzione max</span><strong id="maxCorrection">—</strong></div>
+        </div>
+
+        <section class="panel timeline-panel">
+          <div class="panel-head"><div><p class="eyebrow">WARP MAP</p><h3>Timeline ritmica</h3></div>
+            <div class="legend"><span class="original">Beat originale</span><span class="target">Griglia target</span><span class="critical">Correzione forte</span></div>
+          </div>
+          <canvas id="waveform" height="270"></canvas>
+          <div class="canvas-help">Marker = ogni beat quantizzato · Click: aggiungi beat · Alt/⌥ + click: rimuovi il beat più vicino</div>
+          <div class="controls-row">
+            <label>Modalità <strong>Tempo fisso · quantizzazione beat-by-beat</strong></label>
+            <button id="analyze" class="secondary">Analisi Smart</button>
+            <button id="processMaster" class="primary">Quantizza master + stem</button>
+          </div>
+        </section>
+
+        <section class="panel player-panel">
+          <div><p class="eyebrow">ASCOLTO A/B</p><h3 id="nowPlaying">Master</h3></div>
+          <div class="ab-switch"><button class="active" data-variant="source">Originale</button><button data-variant="output">Risultato</button></div>
+          <audio id="player" controls preload="metadata"></audio>
+        </section>
+        <button class="next-module primary" data-next="align">Continua · DAW Align ↗</button></div>
+
+        <div class="module-stage" data-stage="align"><section class="panel alignment-panel">
+          <div class="panel-head">
+            <div><p class="eyebrow">DAW GRID ALIGNMENT</p><h3>Allinea il brano alle battute</h3>
+              <p>Prima quantizza il tempo, poi porta il primo downbeat forte sulla battuta DAW più adatta.</p>
+            </div>
+            <label class="toggle"><input id="alignEnabled" type="checkbox"><span></span> Abilita</label>
+          </div>
+          <canvas id="alignmentWaveform" height="220"></canvas>
+          <div class="alignment-readout">
+            <div><span>Downbeat di riferimento</span><strong id="alignReference">—</strong></div>
+            <div><span>Spostamento</span><strong id="alignShift">—</strong></div>
+            <div><span>Battuta DAW</span><strong id="alignBar">—</strong></div>
+          </div>
+          <div class="align-controls">
+            <label>Direzione
+              <select id="alignMode"><option value="auto">Auto · più vicina</option><option value="backward">Indietro</option><option value="forward">Avanti</option></select>
+            </label>
+            <label>Fade-in
+              <div class="unit-input"><input id="fadeSeconds" type="number" min="0" max="10" step=".01" value=".15"><small>secondi</small></div>
+            </label>
+            <p id="alignExplanation">Abilita l'opzione per visualizzare lo spostamento.</p>
+          </div>
+        </section><button class="next-module primary" data-next="restoration">Continua · Restoration ↗</button></div>
+
+        <div class="module-stage" data-stage="restoration"><section class="panel restoration-panel">
+          <div class="panel-head"><div><p class="eyebrow">AUDIO RESTORATION</p><h3>Recupero qualità e dettaglio</h3>
+            <p>Riduce artefatti di compressione e ricostruisce armoniche plausibili prima del mastering.</p></div>
+            <button id="renderRestoration" class="primary">Crea versione restaurata</button>
+          </div>
+          <div class="restoration-options">
+            <label class="option-card"><input id="restoreClean" type="checkbox" checked><span><b>De-artifact</b><small>Riduzione conservativa della texture MP3</small></span></label>
+            <label class="option-card"><input id="restoreDeclip" type="checkbox"><span><b>De-clip</b><small>Ripara picchi appiattiti e distorsione impulsiva</small></span></label>
+            <label class="option-card"><input id="restoreBandwidth" type="checkbox"><span><b>Bandwidth extension</b><small>Genera armoniche alte plausibili</small></span></label>
+          </div>
+          <label class="restore-intensity">Intensità <input id="restoreIntensity" type="range" min="0" max="100" value="35"><output id="restoreIntensityValue">35%</output></label>
+          <div class="restore-ab"><button class="secondary restore-listen active" data-restore-variant="output">Prima</button><button class="secondary restore-listen" data-restore-variant="restored">Dopo</button><audio id="restorationPlayer" controls preload="metadata"></audio></div>
+          <div class="forensic-warning">L'estensione di banda crea contenuto armonico plausibile: non recupera le frequenze originali eliminate da un codec lossy.</div>
+        </section><button class="next-module primary" data-next="mastering">Continua · Mastering ↗</button></div>
+
+        <div class="module-stage" data-stage="mastering"><section class="panel mastering-panel">
+          <div class="panel-head">
+            <div><p class="eyebrow">LOUDNESS & ISP MASTERING</p><h3>Controllo finale Spotify</h3>
+              <p>Misura il risultato allineato, applica gain e limiter ISP-aware, quindi verifica nuovamente il master.</p>
+            </div>
+            <button id="measureLoudness" class="secondary">Misura LUFS / True Peak</button>
+          </div>
+          <div class="loudness-compare">
+            <div class="loudness-card"><span>PRIMA DEL MASTERING</span><strong id="preLufs">— LUFS</strong><b id="prePeak">— dBTP</b><small id="preSpotify">Non misurato</small></div>
+            <div class="loudness-arrow">→</div>
+            <div class="loudness-card final"><span>MASTER FINALE</span><strong id="postLufs">— LUFS</strong><b id="postPeak">— dBTP</b><small id="postSpotify">Non renderizzato</small></div>
+          </div>
+          <div class="master-controls">
+            <label>Gain <div class="unit-input"><input id="masterGain" type="number" min="-24" max="24" step=".1" value="0"><small>dB</small></div></label>
+            <label class="toggle limiter-toggle"><input id="limiterEnabled" type="checkbox" checked><span></span> Limiter ISP 4×</label>
+            <label>Ceiling <div class="unit-input"><input id="limiterCeiling" type="number" min="-9" max="-.1" step=".1" value="-1"><small>dBTP</small></div></label>
+            <label>Release <div class="unit-input"><input id="limiterRelease" type="number" min="10" max="1000" step="1" value="100"><small>ms</small></div></label>
+            <button id="renderMaster" class="primary">Crea master finale</button>
+          </div>
+          <div class="spotify-note">Spotify Normal: target −14 LUFS · massimo consigliato −1 dBTP. Se il master supera −14 LUFS, consigliato −2 dBTP.</div>
+          <audio id="masterPlayer" controls preload="metadata"></audio>
+        </section><button class="next-module primary" data-next="ai">Continua · AI Forensics ↗</button></div>
+
+        <div class="module-stage" data-stage="ai"><section class="panel ai-panel">
+          <div class="panel-head"><div><p class="eyebrow">AI MUSIC FORENSICS</p><h3>Impronta generativa per ogni passaggio</h3>
+            <p>Confronta la probabilità stimata sul file originale, quantizzato/allineato e master finale.</p></div>
+            <button id="detectAi" class="primary">Analizza tutti i passaggi</button>
+          </div>
+          <div id="aiStageCards" class="ai-stage-cards"></div>
+          <div class="forensic-warning">Il valore è la probabilità del classificatore, non la percentuale di audio “creata dall’AI” e non costituisce prova legale. Time-stretch e mastering possono alterare l’impronta.</div>
+        </section></div>
+
+        <section class="panel stems-panel">
+          <div class="panel-head"><div><p class="eyebrow">STEM & EXPORT</p><h3>Tracce allineate</h3><p>La warp map del master viene riutilizzata senza rianalizzare.</p></div>
+            <label class="file-button secondary"><input id="stemInput" type="file" accept="audio/*" multiple>＋ Aggiungi stem</label>
+          </div>
+          <div id="trackList" class="track-list"></div>
+          <div class="stem-actions">
+            <button id="downloadAll" class="primary download-all" type="button" disabled>Download all · ZIP</button>
+            <button id="processAll" class="primary">Riapplica a master + stem</button>
+          </div>
+        </section>
+      </section>
+    </section>
+  </main>
+
+  <div id="toast" class="toast"></div>
+  <div id="busy" class="busy hidden"><div class="spinner"></div><strong id="busyTitle">Elaborazione audio</strong><span id="busyText">Questa operazione può richiedere qualche minuto.</span></div>
+  <script src="./i18n.js"></script>
+  <script>document.documentElement.dataset.theme=new URLSearchParams(location.search).get("theme")||parent.documentElement.dataset.theme||"day";</script>
+  <script src="./app.js"></script>
+</body>
+</html>

@@ -24,5 +24,20 @@ apps/desktop/public/upscaler-models/
 *.param
 .venv/
 .venv-upscaler/
+.venv-ai-quantizer/
 __pycache__/
 *.py[cod]
+
+# Runtime, progetti audio e modelli locali di Music / AI Quantizer.
+.ai-quantizer-data/
+tools/ai-quantizer/data/
+tools/ai-quantizer/models/
+
+# Fotogrammi e risultati intermedi generati localmente dai job video.
+temp/
+
+# Database, metadati e cache locali di Memory: mai nel repository.
+/.mlsm-memory/
+
+# Riferimenti social locali dell'artista (contenuto non versionato)
+/social.md

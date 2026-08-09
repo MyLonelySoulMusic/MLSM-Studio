@@ -17,13 +17,19 @@ export const applicationHelpKnowledgeBase: readonly ApplicationHelpArticle[] = [
   title: "Primo progetto: flusso consigliato",
   modeIds: [],
   keywords: ["inizio", "iniziare", "primo", "progetto", "workflow", "audio", "brano", "generare"],
-  content: "1. Scegli la modalità dal menu Modalità animazione in alto nel pannello sinistro. 2. Importa il brano dalla barra superiore; in Add Subtitles e Pro Subtitles importa invece il video dal pannello sinistro. 3. Premi Analizza audio e attendi BPM, beat, energia e strumenti quando la modalità lo richiede. 4. Carica cover, poster o immagini richieste dalla modalità e regola la palette. 5. In Instrumental Falling premi Genera scena; le modalità narrative e i visualizer si aggiornano direttamente. 6. Controlla la preview con Play/Pausa o con la barra spaziatrice. 7. Modifica timeline e pannelli. 8. Salva il progetto, poi usa Esporta per creare il video finale."
+  content: "1. Scegli la modalità dal menu Modalità animazione in alto nel pannello sinistro. 2. Importa il brano dalla barra superiore; in Pro Subtitles importa invece il video dal pannello sinistro. 3. Premi Analizza audio e attendi BPM, beat, energia e strumenti quando la modalità lo richiede. 4. Carica cover, poster o immagini richieste dalla modalità e regola la palette. 5. In Instrumental Falling premi Genera scena; le modalità narrative e i visualizer si aggiornano direttamente. 6. Controlla la preview con Play/Pausa o con la barra spaziatrice. 7. Modifica timeline e pannelli. 8. Salva il progetto, poi usa Esporta per creare il video finale."
 }, {
   id: "interface",
   title: "Come è organizzata l’interfaccia",
   modeIds: [],
   keywords: ["interfaccia", "pannello", "sinistra", "destra", "timeline", "toolbar", "dove", "controlli", "larghezza", "ridimensiona", "tutto schermo", "fullscreen", "palette"],
   content: "La barra superiore gestisce progetto, audio, analisi, generazione ed export. Il pannello sinistro contiene la modalità e soltanto i controlli pertinenti a quella modalità. Il pannello destro modifica progetto, formato, sfondo e l’elemento selezionato. Trascina i separatori rosa fra pannelli e viewport per allargare o stringere i due menu; doppio clic ripristina la misura iniziale e la scelta viene salvata localmente. Nella barra centrale premi Tutto schermo per vedere soltanto l’animazione, poi Torna all’editor o Esc per uscire. La timeline in basso controlla playhead, beat, eventi, fonemi e sottotitoli. In 9:16 e 16:9 la cornice della preview cambia realmente. La barra spaziatrice alterna Play e Pausa, tranne quando si sta scrivendo in un campo. Giorno usa bianco, nero e rosa; Notte inverte bianco e nero mantenendo il rosa. Anche il pulsante AI segue questa palette."
+}, {
+  id: "intelligent-memory",
+  title: "Memory: catalogo semantico locale dei file",
+  modeIds: [],
+  keywords: ["memory", "memoria", "catalogo", "catalogare", "ritrovare", "ricerca semantica", "vector database", "grafo", "relazioni", "anteprima", "copia file", "cartella"],
+  content: "Il pulsante Memory nella barra superiore è disponibile dalla Home e da ogni area di lavoro. In Costruisci memoria seleziona uno o più file oppure una cartella: le cartelle vengono lette ricorsivamente, puoi aggiungere una descrizione comune, tag, categorie personalizzate e una descrizione specifica per ogni elemento. La cartella di appartenenza diventa automaticamente una categoria. MLSM salva nel database vettoriale locale percorso, metadati, descrizioni, categorie e un vettore semantico; i file originali non vengono caricati online né duplicati. In Trova memoria puoi cercare con una frase naturale, filtrare per tipo o categoria e ricevere risultati ordinati per pertinenza. Seleziona un risultato per vedere immagine, video, audio, PDF o testo; passa alla vista Grafo relazioni per esplorare categorie, cartelle e affinità, usando trascinamento e zoom. Seleziona uno o più risultati e premi Copia selezionati per scegliere una cartella di destinazione: i file esistenti non vengono sovrascritti. Se un file viene spostato o eliminato fuori da MLSM, il record resta ricercabile ma l’anteprima segnala che il percorso non è più disponibile.",
 }, {
   id: "studio-assistant",
   title: "Assistente Studio e memoria locale",
@@ -71,7 +77,7 @@ export const applicationHelpKnowledgeBase: readonly ApplicationHelpArticle[] = [
   title: "Modalità Pixel Art: Walking Through New York",
   modeIds: ["pixelArt"],
   keywords: ["pixel", "art", "new york", "bar", "locale", "insegna", "led", "personaggio", "cammina", "semaforo"],
-  content: "La felpa del protagonista è sempre nera. Carica la cover per derivare i colori di pantaloni e neon, poi scrivi il Nome insegna nella sezione Locale. Il protagonista è seguito in primo piano mentre cammina, si ferma al semaforo e raggiunge il locale. L’ingresso avviene sempre a metà del brano senza alterare la velocità del passo; durante l’ingresso la camera torna gradualmente a figura intera. Nel bar il nome scelto compare su una grande insegna LED luminosa e audio-reattiva. Il protagonista siede con il bicchiere vicino mentre personaggi differenti ballano sul brano. Una fascia fissa in basso mostra 48 bande pixel L/R e un vectorscope stereo reale; viene disegnata nella stessa scena ed è quindi inclusa nell’export."
+  content: "La felpa del protagonista è sempre nera. Carica una fotografia frontale, centrata e ben illuminata: viene elaborata localmente in uno sprite pixel nitido e inserita nel cappuccio. La camminata è frontale, continua e usa braccia alternate, appoggio dei piedi e oscillazione del busto senza ginocchia invertite. Carica la cover per derivare i colori di pantaloni e neon, poi scrivi il Nome insegna nella sezione Locale. L’ingresso avviene sempre a metà del brano senza alterare la velocità del passo. Nel bar il nome scelto compare su una grande insegna LED luminosa e audio-reattiva. Una fascia fissa in basso mostra 48 bande pixel L/R e un vectorscope stereo reale; viene disegnata nella stessa scena ed è quindi inclusa nell’export."
 }, {
   id: "portrait-landscape",
   title: "Modalità From 9:16 to 16:9",
@@ -91,12 +97,6 @@ export const applicationHelpKnowledgeBase: readonly ApplicationHelpArticle[] = [
   keywords: ["teddy", "sing", "orso", "canta", "lipsync", "labiale", "fonemi", "poster", "voce", "particelle"],
   content: "Carica la cover come poster e, preferibilmente, importa una traccia vocale isolata. Dopo Analizza audio il labiale 3D usa fonemi e formanti per controllare mandibola, labbra, denti e lingua. La corsia Fonemi appare nella timeline: seleziona un blocco per dividerlo o eliminarlo; fuori dai fonemi la bocca torna chiusa. Nel pannello sinistro puoi regolare sensibilità, intensità del labiale, palette della stanza, LED e particelle atmosferiche."
 }, {
-  id: "add-subtitles",
-  title: "Modalità Add Subtitles",
-  modeIds: ["addSubtitles"],
-  keywords: ["add", "subtitles", "video", "sottotitoli", "carica", "contain", "cover", "oscuramento"],
-  content: "Seleziona Add Subtitles e carica il video dal pannello Video sorgente. Il programma usa il suo audio come clock, mostra solo i controlli pertinenti e conserva il fotogramma originale in preview ed export. Scegli adattamento cover o contain e l’eventuale oscuramento. Puoi generare i sottotitoli con Whisper, inserire blocchi manuali, modificarli nella timeline e poi esportare il video oppure un file SRT."
-}, {
   id: "static-watermark-remover",
   title: "Modalità Static Watermark Remover",
   modeIds: ["staticWatermark"],
@@ -108,6 +108,12 @@ export const applicationHelpKnowledgeBase: readonly ApplicationHelpArticle[] = [
   modeIds: ["upscaler"],
   keywords: ["upscaler", "real esrgan", "risoluzione", "4k", "8k", "cuda", "metal", "webgpu", "foto", "video", "nitidezza"],
   content: "Apri Photo & Video Studio e scegli Upscaler. Carica una foto o un video, quindi seleziona il modello: x4plus per scene reali e massimo dettaglio, x2plus per un aumento naturale 2×, RealESRNet per un risultato conservativo, Anime 6B per illustrazioni, General x4v3 per velocità e poca memoria oppure AnimeVideo v3 per animazione 2D. I checkpoint PyTorch funzionano anche nella web app mediante il servizio locale: esegui una sola volta npm run upscaler:setup e, quando serve, npm run upscaler:server in un terminale separato. Automatico usa prima MPS/Metal su Apple Silicon, CUDA su NVIDIA, poi WebGPU o CPU; puoi forzare il motore e regolare tile e TTA. Imposta liberamente la risoluzione finale o usa Full HD, QHD, 4K e 8K. Prima/dopo, vista singola e fusione confrontano sempre originale e migliorato alla stessa dimensione. Sono disponibili esposizione, contrasto, luci, ombre, bianchi, neri, saturazione, vividezza, temperatura, tinta, nitidezza e denoise. Le immagini escono in PNG; i video vengono elaborati offline conservando timestamp, VFR e audio e vengono consegnati soltanto dopo il controllo anti-frame-drop."
+}, {
+  id: "video-editor",
+  title: "Area Video Editor · montaggio professionale",
+  modeIds: ["videoEditor"],
+  keywords: ["montaggio", "video editor", "capcut", "clip", "pool", "calamita", "magnete", "taglia", "sincronizza", "sincronizzazione", "fusione", "blend", "dissolvenza", "fade", "interpolazione", "ffmpeg", "battute"],
+  content: "Scegli l’area Video Editor per un montaggio multitraccia con clock indipendente dal brano dello studio. Nel Pool media carica video, immagini e audio: le miniature rendono riconoscibili i contenuti. Per ogni media scegli il livello di destinazione, poi inseriscilo al playhead, aggiungilo in coda oppure trascinalo direttamente sul livello e sul tempo desiderati. Tutti i livelli video sono equivalenti: non esistono ruoli principale o overlay; quello più in alto viene composto sopra quelli inferiori e può essere riordinato liberamente. Nell’Inspector puoi spostare una clip fra livelli e regolare posizione, scala, rotazione, opacità, fusione e colore su qualsiasi livello. In timeline trascina il corpo della clip per spostarla o cambiarle livello e i bordi per estenderla o accorciarla. Taglia con S, ✂ Taglia, doppio clic o menu contestuale. La calamita aggancia clip, playhead e battute. Per sincronizzare audio e video seleziona più clip con Shift o Cmd, poi fai clic destro sulla clip di riferimento e scegli Sincronizza audio e video. La Libreria effetti contiene 14 effetti reali nelle categorie Transizioni, Movimento, Colore, Distorsione e Luce: ogni effetto ha un’anteprima, può essere trascinato nella corsia rosa e diventa un blocco autonomo spostabile, rifilabile, selezionabile ed eliminabile. L’Inspector espone i parametri pertinenti, fra durata, intensità, curva, ampiezza, frequenza e diffusione. Durante Play lo stack nativo presenta tutti i video e le immagini attivi nell’ordine esatto della timeline; media cancellati, gap e seek non lasciano un vecchio fotogramma nel monitor. La timeline parte soltanto quando i decoder necessari hanno confermato la riproduzione e mostra gli eventuali errori. L’export è offline, da 24 a 120 fps, con verifica anti-frame-drop. Il frame rate avanzato arriva a 240 tramite ffmpeg minterpolate o RIFE nel servizio locale; per usare RIFE prepara il servizio una sola volta e avvialo con npm run upscaler:server."
 }, {
   id: "pixels-sub",
   title: "Modalità Pixels Subtitles",
@@ -149,13 +155,19 @@ export const applicationHelpKnowledgeBase: readonly ApplicationHelpArticle[] = [
   title: "Esportazione del video",
   modeIds: [],
   keywords: ["esporta", "export", "video", "qualità", "fps", "60", "mp4", "webm", "storage", "quota", "audio", "muto"],
-  content: "Premi Esporta, scegli formato 9:16 o 16:9, risoluzione, FPS e qualità, quindi avvia Video finale. L’audio non viene riprodotto nelle cuffie durante il rendering. Pixels Subtitles usa un export MP4 H.264/AAC completamente offline: il numero del frame è il clock, l’encoder attende ogni immagine e un audit finale impedisce di consegnare un video congelato o con frame mancanti. Pro Subtitles usa anch’esso composizione offline e può esportare un layer senza audio e senza video guida, in WebM VP9 alpha oppure MP4 H.264 con fondo pieno. Le scene 3D restanti usano ancora il renderer live della preview. Quando disponibile, il browser scrive direttamente nel file scelto per evitare errori di quota; altrimenti usa un fallback temporaneo progressivo. Non chiudere la pagina fino al completamento."
+  content: "Premi Esporta, scegli formato 9:16 o 16:9, risoluzione, FPS e qualità, quindi avvia Video finale. Tutte le modalità esportano offline: il numero del frame è il clock, l’encoder attende ogni immagine e un audit finale impedisce di consegnare un video congelato o con frame mancanti. L’audio viene letto dal file e non riprodotto nelle cuffie durante il rendering. Pro Subtitles può inoltre esportare un layer senza audio e senza video guida, in WebM VP9 alpha oppure MP4 H.264 con fondo pieno. Quando disponibile, il browser scrive direttamente nel file scelto per evitare errori di quota; altrimenti usa un fallback temporaneo progressivo. Non chiudere la pagina fino al completamento."
 }, {
   id: "projects",
   title: "Salvare e riaprire un progetto",
   modeIds: [],
   keywords: ["salva", "aprire", "progetto", "file", "rbs", "json", "recuperare"],
   content: "Usa Salva nella barra superiore per conservare impostazioni, eventi, oggetti, colori, sfondo, luce e riferimenti ai media nel progetto .rbs.json. Apri ripristina la configurazione. Nella versione web può essere necessario reimportare l’audio perché gli URL temporanei del browser non sopravvivono alla chiusura; nell’app Tauri il percorso locale può essere riaperto direttamente."
+}, {
+  id: "ai-quantizer",
+  title: "Music: AI Quantizer",
+  modeIds: ["aiQuantizer"],
+  keywords: ["music", "quantizer", "quantizza", "bpm", "warp", "stem", "pitch", "daw", "restoration", "mastering", "forensics"],
+  content: "Apri Music e scegli AI Quantizer. Crea un progetto, carica il master e usa Analisi Smart per rilevare beat, downbeat e BPM; controlla i marker, imposta il BPM intero obiettivo e genera la warp map. Quantizza master e stem con la stessa mappa per evitare derive e preservare il pitch. I moduli successivi gestiscono allineamento alla griglia DAW, restauro, misura LUFS/True Peak, mastering ISP-aware e confronto AI Forensics. Il motore resta locale: richiede il progetto AI Quantizer configurato, Python, FFmpeg/FFprobe e Rubber Band."
 }, {
   id: "troubleshooting",
   title: "Problemi comuni",
@@ -195,7 +207,9 @@ const synonymGroups: readonly (readonly string[])[] = [
   ["sfondo", "background", "foto", "video"],
   ["timeline", "marker", "blocco", "beat", "playhead"],
   ["pixel", "bar", "locale", "insegna", "led"],
-  ["cubo", "cube", "vetro", "facce", "loop"]
+  ["cubo", "cube", "vetro", "facce", "loop"],
+  ["quantizer", "quantizza", "warp", "bpm", "stem", "daw", "mastering"],
+  ["memory", "memoria", "catalogo", "catalogare", "ritrovare", "grafo", "relazioni"]
 ];
 
 function expandedQueryTokens(query: string): Set<string> {

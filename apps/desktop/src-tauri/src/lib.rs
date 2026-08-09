@@ -3,6 +3,8 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{fs, io::{Read, Write}, path::{Path, PathBuf}, process::Command};
 
+mod memory;
+
 #[derive(Debug, thiserror::Error)]
 enum ProjectIoError {
     #[error("Il percorso del progetto non è valido")]
@@ -201,7 +203,11 @@ pub fn run() {
         detect_upscaler_hardware,
         probe_audio,
         generate_waveform,
-        read_audio_data
+        read_audio_data,
+        memory::memory_scan_paths,
+        memory::memory_read_preview,
+        memory::memory_read_text_preview,
+        memory::memory_copy_entries
     ]).run(tauri::generate_context!()).expect("errore durante l'avvio di MLSM Studio");
 }
 

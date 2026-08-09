@@ -5,8 +5,8 @@ export interface AnimationModeDefinition {
   id: string;
   label: string;
   description: string;
-  generator: "instrumentalFalling" | "newYorkStreets" | "coverSphere" | "stereoUnfold" | "walkingCube" | "portraitLandscape" | "pixelArt" | "teddyWalk" | "teddySing" | "addSubtitles" | "proSubtitles" | "pixelsSub" | "staticWatermark" | "upscaler";
-  panel: "instrumentalObjects" | "newYorkStreets" | "coverSphere" | "stereoUnfold" | "walkingCube" | "portraitLandscape" | "pixelArt" | "teddyWalk" | "teddySing" | "addSubtitles" | "proSubtitles" | "pixelsSub" | "staticWatermark" | "upscaler";
+  generator: "instrumentalFalling" | "newYorkStreets" | "coverSphere" | "stereoUnfold" | "walkingCube" | "portraitLandscape" | "pixelArt" | "teddyWalk" | "teddySing" | "proSubtitles" | "pixelsSub" | "staticWatermark" | "upscaler" | "videoEditor" | "aiQuantizer";
+  panel: "instrumentalObjects" | "newYorkStreets" | "coverSphere" | "stereoUnfold" | "walkingCube" | "portraitLandscape" | "pixelArt" | "teddyWalk" | "teddySing" | "proSubtitles" | "pixelsSub" | "staticWatermark" | "upscaler" | "videoEditor" | "aiQuantizer";
   objectTypes: readonly AnimationModeObjectType[];
   defaultBaseObjectTypes: readonly SceneObjectType[];
 }
@@ -70,7 +70,7 @@ export const animationModes: readonly AnimationModeDefinition[] = [{
 }, {
   id: "pixelArt",
   label: "Pixel Art",
-  description: "Storie musicali in pixel art con sotto-modalità dedicate, palette derivata dalla cover e scene narrative sincronizzate alla durata del brano.",
+  description: "Storie musicali in pixel art con volto personalizzato da una foto frontale, camminata frontale e scene narrative sincronizzate alla durata del brano.",
   generator: "pixelArt",
   panel: "pixelArt",
   objectTypes: [],
@@ -89,14 +89,6 @@ export const animationModes: readonly AnimationModeDefinition[] = [{
   description: "L’orsacchiotto canta in una stanza moderna illuminata da LED: il poster riproduce la cover e il muso 3D esegue il labiale analizzato dal brano.",
   generator: "teddySing",
   panel: "teddySing",
-  objectTypes: [],
-  defaultBaseObjectTypes: ["platform"]
-}, {
-  id: "addSubtitles",
-  label: "Add Subtitles",
-  description: "Carica un video, trascrivine la voce in locale e crea sottotitoli animati modificabili senza elementi 3D estranei al flusso.",
-  generator: "addSubtitles",
-  panel: "addSubtitles",
   objectTypes: [],
   defaultBaseObjectTypes: ["platform"]
 }, {
@@ -131,14 +123,31 @@ export const animationModes: readonly AnimationModeDefinition[] = [{
   panel: "upscaler",
   objectTypes: [],
   defaultBaseObjectTypes: ["platform"]
+}, {
+  id: "videoEditor",
+  label: "Video Editor",
+  description: "Montaggio professionale multitraccia: pool media, timeline con calamita, taglio, dissolvenze, modalità di fusione, correzione colore, analisi delle battute ed export con interpolazione dei frame.",
+  generator: "videoEditor",
+  panel: "videoEditor",
+  objectTypes: [],
+  defaultBaseObjectTypes: ["platform"]
+}, {
+  id: "aiQuantizer",
+  label: "AI Quantizer",
+  description: "Stabilizza il tempo di master e stem con una warp map condivisa, preserva il pitch e prosegue con DAW Align, restauro, mastering e AI Forensics.",
+  generator: "aiQuantizer",
+  panel: "aiQuantizer",
+  objectTypes: [],
+  defaultBaseObjectTypes: ["platform"]
 }];
 
 // La modalità urbana resta leggibile nei vecchi progetti e utilizzabile dai
 // relativi generatori, ma non viene più proposta per crearne di nuovi.
 export const visibleAnimationModes: readonly AnimationModeDefinition[] = animationModes.filter((mode) => mode.id !== "newYorkStreets");
-export type AnimationModeGroupId = "visualizers" | "stories" | "typography" | "restoration";
+export type AnimationModeGroupId = "visualizers" | "stories" | "typography" | "restoration" | "editing" | "musicTools";
+export type AnimationCategoryId = "soundAnimation" | "photoVideoStudio" | "videoEditor" | "music";
 export interface AnimationModeGroup { id: AnimationModeGroupId; modeIds: readonly string[]; }
-export interface AnimationCategory { id: "soundAnimation" | "photoVideoStudio"; groups: readonly AnimationModeGroup[]; }
+export interface AnimationCategory { id: AnimationCategoryId; groups: readonly AnimationModeGroup[]; }
 
 /** Data-driven navigation: future product areas can be added without changing the editor shell. */
 export const animationCategories: readonly AnimationCategory[] = [{
@@ -146,11 +155,17 @@ export const animationCategories: readonly AnimationCategory[] = [{
   groups: [
     { id: "visualizers", modeIds: ["instrumentalFalling", "coverSphere", "stereoUnfold", "walkingCube", "portraitLandscape"] },
     { id: "stories", modeIds: ["pixelArt", "teddyWalk", "teddySing"] },
-    { id: "typography", modeIds: ["addSubtitles", "proSubtitles", "pixelsSub"] }
+    { id: "typography", modeIds: ["proSubtitles", "pixelsSub"] }
   ]
 }, {
   id: "photoVideoStudio",
   groups: [{ id: "restoration", modeIds: ["staticWatermark", "upscaler"] }]
+}, {
+  id: "videoEditor",
+  groups: [{ id: "editing", modeIds: ["videoEditor"] }]
+}, {
+  id: "music",
+  groups: [{ id: "musicTools", modeIds: ["aiQuantizer"] }]
 }];
 export function getAnimationMode(modeId: string): AnimationModeDefinition { return animationModes.find((mode) => mode.id === modeId) ?? animationModes[0]!; }
 export function getAnimationCategory(modeId: string): AnimationCategory { return animationCategories.find((category) => category.groups.some((group) => group.modeIds.includes(modeId))) ?? animationCategories[0]!; }

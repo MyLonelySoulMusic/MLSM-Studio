@@ -40,7 +40,8 @@ describe("PortraitLandscapePreview", () => {
 
   it("rifitta il 16:9 nella riga reale quando la timeline riduce il workspace", () => {
     const settings = createProject().animation.portraitLandscape;
-    render(<PortraitLandscapePreview settings={settings} timeSeconds={0} durationSeconds={10} playing={false} bpm={120} analysisReady={false} audioPulse={0} rhythmPulse={0} spectrumBands={[]} stereoLeftBands={[]} stereoRightBands={[]} onPlayPause={vi.fn()} onStop={vi.fn()} onSeek={vi.fn()} />);
+    const project = createProject();
+    render(<PortraitLandscapePreview settings={settings} subtitles={project.subtitles} proSubtitlesSettings={project.animation.proSubtitles} timeSeconds={0} durationSeconds={10} playing={false} bpm={120} analysisReady={false} audioPulse={0} rhythmPulse={0} spectrumBands={[]} stereoLeftBands={[]} stereoRightBands={[]} onPlayPause={vi.fn()} onStop={vi.fn()} onSeek={vi.fn()} />);
     const frame = screen.getByLabelText("Composizione From 9:16 to 16:9").parentElement;
     expect(frame).toHaveStyle({ width: "898px", height: "505px" });
 

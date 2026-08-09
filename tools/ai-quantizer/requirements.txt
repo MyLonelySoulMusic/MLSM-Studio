@@ -1,0 +1,5 @@
+beat-this==1.1.0
+soundfile==0.14.0
+scipy==1.17.1
+onnxruntime==1.27.0
+pyyaml==6.0.3

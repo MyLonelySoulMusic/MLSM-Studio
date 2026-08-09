@@ -11,13 +11,13 @@
 - preview con frame step e diagnostica FPS/drop/drift;
 - formati 9:16 e 16:9, preset, sfera, materiali e sfondo personalizzabili;
 - progetto JSON salvabile e caricabile dal browser;
-- export diretto MP4 H.264/AAC o WebM VP9/Opus, con audio, progress e cancel, registrando lo stesso renderer WebGL della preview;
+- export offline MP4 H.264/AAC con audio, progress, cancel, backpressure e verifica anti-drop, valutando lo stesso renderer WebGL della preview a timestamp deterministici;
 - cache temporanea privata OPFS eliminata al termine e consegna del solo video finale;
 - insegne neon 3D ripetute lungo il percorso, con frasi e colore modificabili.
 
-## Adapter finale ancora da valutare
+## Adapter professionali ancora da valutare
 
-MediaRecorder espone codec diversi in base al browser: l'app preferisce MP4 e ripiega su WebM. Codec broadcast come ProRes, encoding offline più rapido del tempo reale e verifica FFprobe restano dietro i contratti già definiti e potranno richiedere Tauri/FFmpeg, WebCodecs più muxer oppure FFmpeg WebAssembly. Nessun bundle desktop deve essere generato fino a tale decisione.
+L'app usa già WebCodecs e muxing offline per le esportazioni finali. Codec broadcast come ProRes e una verifica FFprobe nativa potranno richiedere Tauri/FFmpeg o VideoToolbox; i layer trasparenti Pro Subtitles usano WebM VP9 alpha quando supportato. Nessun bundle desktop deve essere generato fino a tale decisione.
 
 ## Verifica
 
