@@ -60,15 +60,17 @@ describe("MemoryStudio", () => {
     fireEvent.click(screen.getByRole("button", { name: "Apri memoria intelligente" }));
     fireEvent.click(screen.getByRole("button", { name: /Costruisci memoria/ }));
     fireEvent.click(screen.getByRole("button", { name: /Seleziona file/ }));
-    expect(await screen.findAllByText("cover.png")).toHaveLength(2);
+    expect((await screen.findAllByText("cover.png")).length).toBeGreaterThanOrEqual(3);
+    expect(screen.getByLabelText("Anteprima prima del salvataggio: cover.png")).toBeInTheDocument();
+    expect(screen.getAllByText("/Music/Empty Streets/cover.png").length).toBeGreaterThanOrEqual(2);
 
     fireEvent.change(screen.getByLabelText("Descrizione comune"), { target: { value: "Copertina rosa con una strada notturna" } });
     fireEvent.change(screen.getByLabelText("Nome categoria"), { target: { value: "Singolo Empty Streets" } });
     fireEvent.click(screen.getByRole("button", { name: "Crea categoria" }));
-    await screen.findByText("Singolo Empty Streets");
+    expect((await screen.findAllByText("Singolo Empty Streets")).length).toBeGreaterThanOrEqual(1);
     fireEvent.click(screen.getByRole("button", { name: "Salva nella memoria" }));
 
-    await screen.findByText("Copertina rosa con una strada notturna");
+    expect((await screen.findAllByText("Copertina rosa con una strada notturna")).length).toBeGreaterThanOrEqual(1);
     const records = await engine.listRecords();
     expect(records).toHaveLength(1);
     expect(records[0]).toMatchObject({ name: "cover.png", kind: "image", description: "Copertina rosa con una strada notturna" });
@@ -81,7 +83,7 @@ describe("MemoryStudio", () => {
     await engine.upsertRecord({ path: "/project/drums.wav", description: "Registrazione audio della batteria" });
     renderMemory(engine);
     fireEvent.click(screen.getByRole("button", { name: "Apri memoria intelligente" }));
-    expect(await screen.findByText("cover.jpg")).toBeInTheDocument();
+    expect((await screen.findAllByText("cover.jpg")).length).toBeGreaterThanOrEqual(1);
 
     fireEvent.change(screen.getByPlaceholderText(/Descrivi ciò che cerchi/), { target: { value: "pink night photo" } });
     fireEvent.click(screen.getByRole("button", { name: "Cerca" }));

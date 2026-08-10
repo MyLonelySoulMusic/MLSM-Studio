@@ -2485,8 +2485,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .memory-preview dl > div { min-width: 0; display: grid; grid-template-columns: 73px minmax(0, 1fr); gap: 8px; padding-bottom: 6px; border-bottom: 1px solid color-mix(in srgb, var(--line) 64%, transparent); }
 .memory-preview dt { color: var(--muted); font-size: 8px; font-weight: 800; }
 .memory-preview dd { min-width: 0; margin: 0; overflow-wrap: anywhere; color: var(--ink); font-size: 8px; line-height: 1.45; }
+.memory-preview dd code { color: var(--ink); font: 700 8px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; user-select: text; }
 .memory-preview dd span { display: inline-block; margin: 0 3px 3px 0; padding: 2px 6px; border: 1px solid color-mix(in srgb, var(--memory-category) 45%, var(--line)); border-radius: 999px; background: color-mix(in srgb, var(--memory-category) 11%, transparent); }
 .memory-preview .memory-delete { justify-self: start; color: #c73b64; border-color: color-mix(in srgb, #e65378 38%, var(--line)); font-size: 8px; }
+.memory-preview-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.memory-preview-actions button { min-height: 34px; padding: 7px 10px; color: var(--accent-strong); font-size: 8px; font-weight: 850; }
 .memory-preview-empty { place-content: center; justify-items: center; grid-template-rows: auto auto; color: var(--muted); text-align: center; }
 .memory-preview-symbol { color: var(--accent); font-size: 42px; }
 
@@ -2508,7 +2511,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .memory-graph-tooltip strong, .memory-graph-tooltip span, .memory-graph-tooltip small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .memory-graph-tooltip strong { font-size: 9px; } .memory-graph-tooltip span { color: var(--muted); font-size: 8px; } .memory-graph-tooltip small { color: var(--accent-strong); font-size: 7px; }
 
-.memory-build { min-width: 0; min-height: 0; display: grid; grid-template-columns: minmax(300px, 36%) minmax(420px, 1fr); overflow: hidden; }
+.memory-build { min-width: 0; min-height: 0; display: grid; grid-template-columns: minmax(280px, 29%) minmax(360px, 1fr) minmax(270px, 31%); overflow: hidden; }
 .memory-build-controls { min-height: 0; display: grid; align-content: start; gap: 10px; overflow: auto; padding: 14px 18px; border-right: 1px solid var(--line); }
 .memory-source-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
 .memory-source-actions button { min-height: 44px; color: var(--accent-strong); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); font-size: 10px; font-weight: 850; }
@@ -2554,7 +2557,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   .memory-health, .memory-tabs > small { display: none; }
   .memory-search { grid-template-columns: minmax(250px, 1fr) 125px 145px auto; }
   .memory-find-body { grid-template-columns: minmax(370px, 1fr) minmax(250px, 32%); }
-  .memory-build { grid-template-columns: 330px minmax(390px, 1fr); }
+  .memory-build { grid-template-columns: 290px minmax(350px, 1fr) minmax(250px, 30%); }
   .memory-button.is-compact span { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
