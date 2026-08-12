@@ -16,10 +16,9 @@ describe("application assistant knowledge base", () => {
     expect(fallbackApplicationHelpAnswer("Ehi, tutto bene?", "instrumentalFalling")).not.toContain("biglia");
   });
 
-  it("recupera la guida della modalità corrente per domande contestuali", () => {
-    const results = retrieveApplicationHelp("Come imposto il nome del bar e i led?", "pixelArt");
-    expect(results[0]).toMatchObject({ id: "pixel-art" });
-    expect(applicationHelpContext("insegna del locale", "pixelArt")).toContain("insegna LED");
+  it("non espone una guida per modalità rimosse", () => {
+    expect(retrieveApplicationHelp("Pixel Art", "pixelArt").some((result) => result.id === "pixel-art")).toBe(false);
+    expect(applicationHelpContext("insegna del locale", "pixelArt")).not.toContain("Pixel Art");
   });
 
   it("riconosce sinonimi italiani e inglesi dell’esportazione", () => {

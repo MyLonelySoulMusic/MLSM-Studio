@@ -453,11 +453,11 @@ async function createProjectArchive(id, project) {
       const archiveName = uniqueArchiveName(entry.name, used);
       const source = path.join(projectDir(id), entry.source);
       await fsp.access(source);
-      await fsp.symlink(source, path.join(folderDir, archiveName));
+      await fsp.copyFile(source, path.join(folderDir, archiveName));
     }
     const archiveName = `${projectName}-download-all.zip`;
     const archive = path.join(tempDir, archiveName);
-    await run('zip', ['-q', '-r', archiveName, rootName], { cwd: tempDir });
+    await run(PYTHON, ['-m', 'zipfile', '-c', archiveName, rootName], { cwd: tempDir });
     return { archive, archiveName, tempDir };
   } catch (error) {
     await fsp.rm(tempDir, { recursive: true, force: true });
@@ -470,7 +470,7 @@ async function api(req, res, url) {
   if (url.pathname === '/api/health') {
     const toolArgs = {
       ffmpeg: ['-version'], ffprobe: ['-version'],
-      rubberband: ['--version'], zip: ['-v']
+      rubberband: ['--version']
     };
     const checks = Object.fromEntries(Object.entries(toolArgs).map(([cmd, args]) =>
       [cmd, spawnSync(cmd, args, { stdio: 'ignore' }).status === 0]));

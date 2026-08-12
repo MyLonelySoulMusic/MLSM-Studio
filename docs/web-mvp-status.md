@@ -1,24 +1,25 @@
-# Stato MVP web
+# Stato applicazione
 
-## Funzionalità operative
+## Operativo
 
-- import MP3/WAV, waveform e player audio-master;
-- analyzer TypeScript in Web Worker con BPM, beat/downbeat, onset, bande ed eventi classificati;
-- cache IndexedDB legata a hash audio, versione e parametri;
-- marker selezionabili, trascinabili, aggiungibili, eliminabili e modificabili, con snapping e undo/redo;
-- scena Three.js con sfera e cinque famiglie di oggetti editabili;
-- generazione seeded, planner balistico ed evaluator deterministico;
-- preview con frame step e diagnostica FPS/drop/drift;
-- formati 9:16 e 16:9, preset, sfera, materiali e sfondo personalizzabili;
-- progetto JSON salvabile e caricabile dal browser;
-- export offline MP4 H.264/AAC con audio, progress, cancel, backpressure e verifica anti-drop, valutando lo stesso renderer WebGL della preview a timestamp deterministici;
-- cache temporanea privata OPFS eliminata al termine e consegna del solo video finale;
-- insegne neon 3D ripetute lungo il percorso, con frasi e colore modificabili.
+- Home a quattro aree con lingua e tema.
+- Dieci modalità Sound Animation visibili.
+- Watermark Remover e upscaling immagine/video.
+- Video Editor multitraccia con 14 effetti.
+- AI Quantizer integrato nel repository.
+- Memory locale con anteprima, ricerca, grafo e copia.
+- Modelli locali con cache e fallback.
+- Export video offline con verifica anti-drop.
+- Installer, launcher e script di build macOS/Windows.
 
-## Adapter professionali ancora da valutare
+## Da validare su hardware reale
 
-L'app usa già WebCodecs e muxing offline per le esportazioni finali. Codec broadcast come ProRes e una verifica FFprobe nativa potranno richiedere Tauri/FFmpeg o VideoToolbox; i layer trasparenti Pro Subtitles usano WebM VP9 alpha quando supportato. Nessun bundle desktop deve essere generato fino a tale decisione.
+- prestazioni 4K/8K e 120 fps;
+- disponibilità codec alpha fra piattaforme;
+- Metal/CUDA per tutti i checkpoint;
+- firma/notarizzazione dei pacchetti;
+- stress test di timeline con centinaia di clip.
 
-## Verifica
+## Gate
 
-`npm run typecheck`, `npm run lint`, `npm test` e `npm run build` sono i gate. Lo smoke test serve correttamente l'app da `http://127.0.0.1:1420/`.
+La baseline è `typecheck + lint + test + build`. Un warning sulle dimensioni dei chunk non equivale a un errore, ma resta un obiettivo di ottimizzazione.

@@ -67,8 +67,6 @@ interface ProjectState {
   setWalkingCubePalette: (colors: readonly string[]) => void;
   updatePortraitLandscape: (patch: Partial<RhythmBallProject["animation"]["portraitLandscape"]>) => void;
   setPortraitLandscapePalette: (colors: readonly string[]) => void;
-  updatePixelArt: (patch: Partial<RhythmBallProject["animation"]["pixelArt"]>) => void;
-  setPixelArtPalette: (colors: readonly string[]) => void;
   updateTeddyWalk: (patch: Partial<RhythmBallProject["animation"]["teddyWalk"]>) => void;
   setTeddyWalkPalette: (colors: readonly string[]) => void;
   updateTeddySing: (patch: Partial<RhythmBallProject["animation"]["teddySing"]>) => void;
@@ -76,6 +74,14 @@ interface ProjectState {
   setProSubtitlesPalette: (colors: readonly string[]) => void;
   updatePixelsSub: (patch: Partial<RhythmBallProject["animation"]["pixelsSub"]>) => void;
   setPixelsSubPalette: (colors: readonly string[]) => void;
+  updateBackgroundAuto: (patch: Partial<RhythmBallProject["animation"]["backgroundAuto"]>) => void;
+  setBackgroundAutoPalette: (colors: readonly string[]) => void;
+  setBackgroundAutoDetections: (detections: readonly BackgroundAutoDetectionInput[]) => void;
+  patchBackgroundAutoDetection: (id: string, patch: Partial<Omit<BackgroundAutoDetection, "id">>) => void;
+  toggleBackgroundAutoDetectionAnimation: (id: string) => void;
+  addBackgroundAutoEffect: () => void;
+  removeBackgroundAutoEffect: (id: string) => void;
+  updateBackgroundAutoEffect: (id: string, patch: Partial<RhythmBallProject["animation"]["backgroundAuto"]["effects"][number]>) => void;
   updateStaticWatermark: (patch: Partial<RhythmBallProject["animation"]["staticWatermark"]>) => void;
   updateUpscaler: (patch: Partial<RhythmBallProject["animation"]["upscaler"]>) => void;
   updateVideoEditor: (patch: Partial<Omit<RhythmBallProject["animation"]["videoEditor"], "assets" | "tracks" | "clips" | "selectedClipIds" | "effectClips" | "selectedEffectClipIds">>) => void;
@@ -152,6 +158,56 @@ function analysisSummary(result: AudioAnalysisResult, events: RhythmBallProject[
 type ProSubtitleSettings = RhythmBallProject["animation"]["proSubtitles"];
 type ProSubtitleCueStyle = ProSubtitleSettings["cueStyles"][number];
 type SubtitleCue = RhythmBallProject["subtitles"]["cues"][number];
+type BackgroundAutoSettings = RhythmBallProject["animation"]["backgroundAuto"];
+type BackgroundAutoEffect = BackgroundAutoSettings["effects"][number];
+type BackgroundAutoDetection = BackgroundAutoSettings["detections"][number];
+type BackgroundAutoPalette = [string, string, string];
+type BackgroundAutoDetectionInput = Omit<BackgroundAutoDetection, "alias" | "palette" | "paletteMode"> & { alias?: string | undefined; palette?: readonly string[] | null | undefined; paletteMode?: "auto" | "manual" | undefined };
+
+function completeBackgroundAutoPalette(colors: readonly string[], fallback: readonly string[]): BackgroundAutoPalette {
+  return [colors[0] ?? fallback[0] ?? "#63f0d1", colors[1] ?? fallback[1] ?? colors[0] ?? "#7657ff", colors[2] ?? fallback[2] ?? colors[1] ?? colors[0] ?? "#ff4f9a"];
+}
+
+function detectionPalette(detection: BackgroundAutoDetection, fallback: readonly string[]): BackgroundAutoPalette {
+  return completeBackgroundAutoPalette(detection.palette ?? [], fallback);
+}
+
+function normalizeBackgroundAutoDetection(detection: BackgroundAutoDetectionInput, fallback: readonly string[]): BackgroundAutoDetection {
+  const palette = completeBackgroundAutoPalette(detection.palette ?? [], fallback);
+  return { ...detection, alias: detection.alias?.trim() || detection.label, paletteMode: detection.paletteMode ?? "auto", palette };
+}
+
+function normalizeBackgroundAutoSettings(settings: BackgroundAutoSettings): BackgroundAutoSettings {
+  return {
+    ...settings,
+    effects: settings.effects.map((effect) => ({
+      ...effect,
+      centerSpectrumEnabled: effect.centerSpectrumEnabled ?? true,
+      stereoSidesEnabled: effect.stereoSidesEnabled ?? true,
+      subtitlesEnabled: effect.subtitlesEnabled ?? false
+    }))
+  };
+}
+
+function autoBackgroundEffect(effect: BackgroundAutoEffect, settings: BackgroundAutoSettings, effectIndex: number): BackgroundAutoEffect {
+  const target = effect.detectionId ? settings.detections.find((detection) => detection.id === effect.detectionId) : undefined;
+  const palette = target ? detectionPalette(target, settings.palette) : completeBackgroundAutoPalette(settings.palette, settings.palette);
+  return { ...effect, centerSpectrumEnabled: effect.centerSpectrumEnabled ?? true, stereoSidesEnabled: effect.stereoSidesEnabled ?? true, subtitlesEnabled: effect.subtitlesEnabled ?? false, palette, color: palette[effectIndex % palette.length] ?? palette[0] };
+}
+
+/** Keeps effect foreign keys valid after a new detection snapshot. Null is
+ * accepted only as a legacy input and is assigned deterministically to the
+ * first detection; explicit dangling references are cascaded out. */
+export function reconcileBackgroundAutoEffects(settings: BackgroundAutoSettings): BackgroundAutoEffect[] {
+  const eligible = settings.detections;
+  const eligibleIds = new Set(eligible.map((detection) => detection.id));
+  return settings.effects.flatMap((effect) => {
+    if (effect.detectionId && !eligibleIds.has(effect.detectionId)) return [];
+    // Null targets remain disabled editor placeholders; never infer a target
+    // from array position because animation is an explicit user choice.
+    return [{ ...effect, centerSpectrumEnabled: effect.centerSpectrumEnabled ?? true, stereoSidesEnabled: effect.stereoSidesEnabled ?? true, subtitlesEnabled: effect.subtitlesEnabled ?? false, detectionId: effect.detectionId ?? null, enabled: effect.detectionId ? effect.enabled : false }];
+  });
+}
 function defaultProSubtitleCueStyle(
   settings: ProSubtitleSettings,
   cue: Pick<SubtitleCue, "id" | "text" | "startSeconds" | "endSeconds">,
@@ -283,7 +339,7 @@ function moveTargetEffects(settings: VideoEditorSettings, clips: readonly VideoE
 export const useProjectStore = create<ProjectState>((set) => ({
   project: createProject(), filePath: null, dirty: false, status: "Pronto", eventHistory: [], eventFuture: [], selectedEventId: null, selectedEventIds: [],
   newProject: () => set({ project: createProject(), filePath: null, dirty: false, status: "Nuovo progetto creato", eventHistory: [], eventFuture: [], selectedEventId: null, selectedEventIds: [] }),
-  setProject: (project, filePath) => set({ project, filePath, dirty: false, status: "Progetto caricato", eventHistory: [], eventFuture: [], selectedEventId: null, selectedEventIds: [] }),
+  setProject: (project, filePath) => set({ project: { ...project, animation: { ...project.animation, backgroundAuto: normalizeBackgroundAutoSettings(project.animation.backgroundAuto) } }, filePath, dirty: false, status: "Progetto caricato", eventHistory: [], eventFuture: [], selectedEventId: null, selectedEventIds: [] }),
   renameProject: (name) => set((state) => ({ project: { ...state.project, project: { ...state.project.project, name } }, dirty: true })),
   attachAudio: (metadata, waveform, options = {}) => set((state) => {
     const preserveSubtitleTrack = options.preserveSubtitleTrack === true;
@@ -340,13 +396,6 @@ export const useProjectStore = create<ProjectState>((set) => ({
     const palette = [colors[0] ?? settings.palette[0], colors[1] ?? settings.palette[1], colors[2] ?? settings.palette[2]] as [string, string, string];
     const effectColors = settings.autoPalette ? { ...settings.effectColors, lightning: palette[0], particles: palette[0] } : settings.effectColors;
     return { project: { ...state.project, animation: { ...state.project.animation, portraitLandscape: { ...settings, palette, effectColors } } }, dirty: true, status: "Palette cover applicata a cubo, spettrogramma ed effetti" };
-  }),
-  updatePixelArt: (patch) => set((state) => ({ project: { ...state.project, animation: { ...state.project.animation, pixelArt: { ...state.project.animation.pixelArt, ...patch, hoodieColor: "#08090e" } } }, dirty: true })),
-  setPixelArtPalette: (colors) => set((state) => {
-    const settings = state.project.animation.pixelArt; const primary = colors[0] ?? settings.palettePrimary; const secondary = colors[1] ?? colors[2] ?? primary; const neonPrimary = colors[2] ?? primary; const neonSecondary = colors[3] ?? secondary;
-    const pixelArt = { ...settings, palettePrimary: primary, paletteSecondary: secondary, hoodieColor: "#08090e", pantsColor: secondary, neonPrimary, neonSecondary };
-    const subtitles = state.project.subtitles.autoPalette ? { ...state.project.subtitles, color: neonPrimary, glowColor: neonSecondary } : state.project.subtitles;
-    return { project: { ...state.project, animation: { ...state.project.animation, pixelArt }, subtitles }, dirty: true, status: "Palette cover applicata a pantaloni e neon · felpa nera fissa" };
   }),
   updateTeddyWalk: (patch) => set((state) => ({ project: { ...state.project, animation: { ...state.project.animation, teddyWalk: { ...state.project.animation.teddyWalk, ...patch } } }, dirty: true })),
   setTeddyWalkPalette: (colors) => set((state) => { const settings = state.project.animation.teddyWalk; return { project: { ...state.project, animation: { ...state.project.animation, teddyWalk: { ...settings, furColor: colors[0] ?? settings.furColor, patchColor: colors[1] ?? colors[0] ?? settings.patchColor, roadColor: colors[2] ?? colors[1] ?? settings.roadColor } } }, dirty: true }; }),
@@ -414,6 +463,98 @@ export const useProjectStore = create<ProjectState>((set) => ({
     const palette = [colors[0] ?? current[0], colors[1] ?? colors[0] ?? current[1], colors[2] ?? colors[1] ?? colors[0] ?? current[2]] as [string, string, string];
     const shadowFollowedPalette = settings.subtitleShadowColor.trim().toLowerCase() === current[0].trim().toLowerCase();
     return { project: { ...state.project, animation: { ...state.project.animation, pixelsSub: { ...settings, palette, subtitleShadowColor: shadowFollowedPalette ? palette[0] : settings.subtitleShadowColor } } }, dirty: true, status: "Palette a 3 colori applicata a Pixels Subtitles" };
+  }),
+  updateBackgroundAuto: (patch) => set((state) => {
+    const current = state.project.animation.backgroundAuto;
+    const next = {
+      ...current,
+      ...patch,
+      detections: "detections" in patch
+        ? patch.detections.map((detection) => normalizeBackgroundAutoDetection(detection, current.palette))
+        : current.detections
+    };
+    const shouldReconcile = Object.prototype.hasOwnProperty.call(patch, "detections");
+    const backgroundAuto = shouldReconcile ? { ...next, effects: reconcileBackgroundAutoEffects(next).map((effect, index) => effect.paletteMode === "auto" ? autoBackgroundEffect(effect, next, index) : effect) } : next;
+    return { project: { ...state.project, animation: { ...state.project.animation, backgroundAuto } }, dirty: true };
+  }),
+  setBackgroundAutoPalette: (colors) => set((state) => {
+    const settings = state.project.animation.backgroundAuto;
+    const palette = completeBackgroundAutoPalette(colors, settings.palette);
+    const detections = settings.detections.map((detection) => detection.paletteMode === "manual" ? detection : { ...detection, paletteMode: "auto" as const, palette });
+    const next = { ...settings, palette, detections };
+    const effects = settings.effects.map((effect, index) => effect.paletteMode === "auto" ? autoBackgroundEffect(effect, next, index) : effect);
+    return { project: { ...state.project, animation: { ...state.project.animation, backgroundAuto: { ...next, effects } } }, dirty: true, status: "Palette applicata agli oggetti automatici e ai Circular Spectrum" };
+  }),
+  setBackgroundAutoDetections: (detections) => set((state) => {
+    const current = state.project.animation.backgroundAuto;
+    const normalizedDetections: BackgroundAutoSettings["detections"] = detections.map((detection) => normalizeBackgroundAutoDetection(detection, current.palette));
+    const next = { ...current, detections: normalizedDetections, personAnimationEnabled: false };
+    const effects = reconcileBackgroundAutoEffects(next).map((effect, index) => effect.paletteMode === "auto" ? autoBackgroundEffect(effect, next, index) : effect);
+    return { project: { ...state.project, animation: { ...state.project.animation, backgroundAuto: { ...next, effects } } }, dirty: true };
+  }),
+  patchBackgroundAutoDetection: (id, patch) => set((state) => {
+    const settings = state.project.animation.backgroundAuto;
+    if (!settings.detections.some((detection) => detection.id === id)) return state;
+    const detections = settings.detections.map((detection) => detection.id === id
+      ? (() => {
+        const paletteWasEdited = patch.palette !== undefined;
+        const paletteMode = patch.paletteMode ?? (paletteWasEdited ? "manual" : detection.paletteMode ?? "auto");
+        const palette = paletteMode === "auto"
+          ? settings.palette
+          : completeBackgroundAutoPalette(patch.palette ?? detection.palette ?? settings.palette, settings.palette);
+        return { ...detection, ...patch, alias: patch.alias === undefined ? detection.alias || detection.label : patch.alias.trim() || detection.label, paletteMode, palette };
+      })()
+      : detection);
+    const next = { ...settings, detections };
+    const effects = settings.effects.map((effect, index) => effect.paletteMode === "auto" && effect.detectionId === id ? autoBackgroundEffect(effect, next, index) : effect);
+    return { project: { ...state.project, animation: { ...state.project.animation, backgroundAuto: { ...next, effects } } }, dirty: true };
+  }),
+  toggleBackgroundAutoDetectionAnimation: (id) => set((state) => {
+    const settings = state.project.animation.backgroundAuto;
+    if (!settings.detections.some((detection) => detection.id === id)) return state;
+    const matching = settings.effects.filter((effect) => effect.detectionId === id);
+    let effects = settings.effects;
+    if (matching.length) {
+      const enable = !matching.some((effect) => effect.enabled);
+      effects = settings.effects.map((effect) => effect.detectionId === id ? { ...effect, enabled: enable } : effect);
+    } else {
+      const placeholderIndex = settings.effects.findIndex((effect) => effect.detectionId === null);
+      if (placeholderIndex >= 0) {
+        effects = settings.effects.map((effect, index) => index === placeholderIndex
+          ? autoBackgroundEffect({ ...effect, detectionId: id, enabled: true }, settings, index)
+          : effect);
+      }
+      else if (settings.effects.length < 16) {
+      const index = settings.effects.length;
+      const target = settings.detections.find((detection) => detection.id === id);
+      const targetPalette = target ? detectionPalette(target, settings.palette) : settings.palette;
+      const color = targetPalette[index % targetPalette.length] ?? targetPalette[0];
+      effects = [...settings.effects, { id: `circular-spectrum-${index + 1}-${crypto.randomUUID()}`, type: "circularSpectrum" as const, label: "Circular Spectrum" as const, enabled: true, detectionId: id, paletteMode: "auto" as const, color, palette: targetPalette, intensity: 1, scale: 1, opacity: .9, rotationSpeed: .08, collisionParticles: true, centerSpectrumEnabled: true, stereoSidesEnabled: true, subtitlesEnabled: false }];
+    }
+    }
+    return effects === settings.effects ? state : { project: { ...state.project, animation: { ...state.project.animation, backgroundAuto: { ...settings, effects, personAnimationEnabled: false } } }, dirty: true };
+  }),
+  addBackgroundAutoEffect: () => set((state) => {
+    const settings = state.project.animation.backgroundAuto; if (settings.effects.length >= 16) return state;
+    const index = settings.effects.length; const color = settings.palette[index % settings.palette.length] ?? settings.palette[0];
+    const effect = { id: `circular-spectrum-${index + 1}-${crypto.randomUUID()}`, type: "circularSpectrum" as const, label: "Circular Spectrum" as const, enabled: false, detectionId: null, paletteMode: "auto" as const, color, palette: settings.palette, intensity: 1, scale: 1, opacity: .9, rotationSpeed: .08, collisionParticles: true, centerSpectrumEnabled: true, stereoSidesEnabled: true, subtitlesEnabled: false };
+    return { project: { ...state.project, animation: { ...state.project.animation, backgroundAuto: { ...settings, effects: [...settings.effects, effect] } } }, dirty: true };
+  }),
+  removeBackgroundAutoEffect: (id) => set((state) => {
+    const settings = state.project.animation.backgroundAuto; if (settings.effects.length <= 1) return state;
+    return { project: { ...state.project, animation: { ...state.project.animation, backgroundAuto: { ...settings, effects: settings.effects.filter((effect) => effect.id !== id) } } }, dirty: true };
+  }),
+  updateBackgroundAutoEffect: (id, patch) => set((state) => {
+    const settings = state.project.animation.backgroundAuto;
+    const allowed = new Set(settings.detections.map((detection) => detection.id));
+    const safePatch = patch.detectionId && !allowed.has(patch.detectionId) ? { ...patch, detectionId: null } : patch;
+    const effects = settings.effects.map((effect) => {
+      if (effect.id !== id) return effect;
+      const paletteMode = safePatch.paletteMode ?? effect.paletteMode;
+      const automatic = paletteMode === "auto" ? autoBackgroundEffect({ ...effect, ...safePatch, paletteMode }, settings, settings.effects.indexOf(effect)) : {};
+      return { ...effect, ...safePatch, ...automatic, paletteMode, label: "Circular Spectrum" as const, type: "circularSpectrum" as const };
+    });
+    return { project: { ...state.project, animation: { ...state.project.animation, backgroundAuto: { ...settings, effects } } }, dirty: true };
   }),
   updateStaticWatermark: (patch) => set((state) => ({
     project: { ...state.project, animation: { ...state.project.animation, staticWatermark: { ...state.project.animation.staticWatermark, ...patch } } },

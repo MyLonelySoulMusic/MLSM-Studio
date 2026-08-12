@@ -27,7 +27,7 @@ export function aiQuantizerRuntimePaths(root = projectRoot) {
     publicRoot: resolve(sourceRoot, "public"),
     python: resolve(root, process.platform === "win32" ? ".venv-ai-quantizer/Scripts/python.exe" : ".venv-ai-quantizer/bin/python"),
     readyMarker: resolve(root, ".venv-ai-quantizer/.mlsm-aiq-ready"),
-    setup: resolve(root, "tools/setup_ai_quantizer_env.sh"),
+    setup: resolve(root, "tools/setup_python_runtime.cjs"),
     dataRoot: resolve(root, ".ai-quantizer-data/projects")
   };
 }
@@ -123,7 +123,7 @@ export function localAiQuantizerService(): Plugin {
     phaseDetail = "Installazione delle dipendenze nel runtime isolato. Questa operazione avviene una sola volta.";
     recordLog(phaseDetail);
     server.config.logger.info("[AI Quantizer] primo utilizzo: preparo l’ambiente Python isolato. L’operazione avviene una sola volta…");
-    child = spawn("bash", [paths.setup], { cwd: projectRoot, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+    child = spawn(process.execPath, [paths.setup, "ai-quantizer"], { cwd: projectRoot, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
     captureSetupOutput(child);
     child.once("error", (error) => {
       phase = "failed"; phaseDetail = error.message;

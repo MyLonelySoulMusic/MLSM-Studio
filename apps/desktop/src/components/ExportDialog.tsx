@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { estimateExportResources } from "@rbs/export-engine";
 import { recordingBitrate, type ExportQuality } from "../services/offline-video-exporter";
 import type { ProSubtitleExportFormatId } from "../services/pro-subtitle-exporter";
+import { backgroundAutoOutputDimensions, backgroundAutoRatioLabel, backgroundAutoResolutionOptions } from "../services/background-auto-renderer";
 import { videoEditorInterpolationCommand, videoEditorInterpolationHealth, videoEditorInterpolationMethodLabel, type VideoEditorInterpolationHealth, type VideoEditorInterpolationMethod } from "../services/video-editor-interpolation-client";
 
 export interface ProSubtitleDialogSettings {
@@ -15,6 +16,11 @@ export interface ProSubtitleDialogSettings {
 export interface VideoEditorDialogSettings {
   compositionWidth: number;
   compositionHeight: number;
+}
+
+export interface BackgroundAutoDialogSettings {
+  sourceWidth: number;
+  sourceHeight: number;
 }
 
 export interface ExportDialogStartSettings {
@@ -83,6 +89,7 @@ interface ExportDialogProps {
   aspectRatio?: "9:16" | "16:9";
   proSubtitles?: ProSubtitleDialogSettings;
   videoEditor?: VideoEditorDialogSettings | undefined;
+  backgroundAuto?: BackgroundAutoDialogSettings | undefined;
   sourceVideoExport?: { label: string } | undefined;
   offlineExportProfile?: { title: string; defaultResolution: string; defaultFps: number; recommendation: string } | undefined;
   onClose: () => void;
@@ -90,9 +97,19 @@ interface ExportDialogProps {
   onStart: (settings: ExportDialogStartSettings) => void;
 }
 
-export function ExportDialog({ duration, running, progress, currentFrame, totalFrames, error, aspectRatio = "9:16", proSubtitles, videoEditor, sourceVideoExport, offlineExportProfile, onClose, onCancel, onStart }: ExportDialogProps) {
+export function ExportDialog({ duration, running, progress, currentFrame, totalFrames, error, aspectRatio = "9:16", proSubtitles, videoEditor, backgroundAuto, sourceVideoExport, offlineExportProfile, onClose, onCancel, onStart }: ExportDialogProps) {
   const videoEditorResolutions = videoEditor ? videoEditorResolutionOptions(videoEditor.compositionWidth, videoEditor.compositionHeight) : [];
-  const [resolution, setResolution] = useState(videoEditor ? `${evenDimension(videoEditor.compositionWidth)}x${evenDimension(videoEditor.compositionHeight)}` : offlineExportProfile?.defaultResolution ?? defaultProjectResolution(aspectRatio));
+  const backgroundAutoSourceWidth = backgroundAuto?.sourceWidth ?? 0; const backgroundAutoSourceHeight = backgroundAuto?.sourceHeight ?? 0;
+  const backgroundAutoResolutions = useMemo(() => backgroundAuto ? backgroundAutoResolutionOptions(backgroundAutoSourceWidth, backgroundAutoSourceHeight) : [], [backgroundAuto, backgroundAutoSourceHeight, backgroundAutoSourceWidth]);
+  const backgroundAutoDefaultResolution = useMemo(() => {
+    let native = "";
+    try {
+      const dimensions = backgroundAutoOutputDimensions(backgroundAutoSourceWidth, backgroundAutoSourceHeight, backgroundAutoSourceWidth, backgroundAutoSourceHeight);
+      native = `${dimensions.width}x${dimensions.height}`;
+    } catch { /* Invalid/incompatible source dimensions fall back to an available preset. */ }
+    return backgroundAutoResolutions.find((option) => option.value === native)?.value ?? backgroundAutoResolutions.at(-1)?.value ?? defaultProjectResolution(aspectRatio);
+  }, [aspectRatio, backgroundAutoResolutions, backgroundAutoSourceHeight, backgroundAutoSourceWidth]);
+  const [resolution, setResolution] = useState(videoEditor ? `${evenDimension(videoEditor.compositionWidth)}x${evenDimension(videoEditor.compositionHeight)}` : backgroundAuto ? backgroundAutoDefaultResolution : offlineExportProfile?.defaultResolution ?? defaultProjectResolution(aspectRatio));
   const [fps, setFps] = useState(offlineExportProfile?.defaultFps ?? 30);
   const [interpolationEnabled, setInterpolationEnabled] = useState(false);
   const [interpolationTargetFps, setInterpolationTargetFps] = useState(60);
@@ -118,6 +135,7 @@ export function ExportDialog({ duration, running, progress, currentFrame, totalF
   const resolvedInterpolationTargetFps = availableInterpolationTargets.includes(interpolationTargetFps as typeof interpolationTargets[number]) ? interpolationTargetFps : availableInterpolationTargets[0] ?? fps;
   const serviceReady = interpolationHealth !== null && interpolationHealth !== "checking";
   const methodUnavailable = interpolationEnabled && serviceReady && (interpolationMethod === "rife" ? !interpolationHealth.rife : !interpolationHealth.ffmpeg);
+  const previousBackgroundSource = useRef<string | null>(null);
 
   // Lo stato del servizio locale va letto all’apertura: l’utente deve sapere prima di
   // avviare se l’aumento reale dei frame è disponibile o se otterrà solo il file reso.
@@ -132,10 +150,19 @@ export function ExportDialog({ duration, running, progress, currentFrame, totalF
   // Se il rapporto del progetto cambia mentre la finestra è aperta, non deve
   // sopravvivere una risoluzione appartenente al rapporto precedente.
   useEffect(() => {
-    if (videoEditor || offlineExportProfile || sourceVideoExport) return;
+    if (videoEditor || offlineExportProfile || sourceVideoExport || backgroundAuto) return;
     const allowed = projectResolutionOptions(aspectRatio).some((option) => option.value === resolution);
     if (!allowed) setResolution(defaultProjectResolution(aspectRatio));
-  }, [aspectRatio, offlineExportProfile, resolution, sourceVideoExport, videoEditor]);
+  }, [aspectRatio, backgroundAuto, offlineExportProfile, resolution, sourceVideoExport, videoEditor]);
+
+  useEffect(() => {
+    if (!backgroundAuto) return;
+    const sourceKey = `${backgroundAuto.sourceWidth}x${backgroundAuto.sourceHeight}`;
+    const sourceChanged = previousBackgroundSource.current !== null && previousBackgroundSource.current !== sourceKey;
+    previousBackgroundSource.current = sourceKey;
+    const allowed = backgroundAutoResolutions.some((option) => option.value === resolution);
+    if (sourceChanged || !allowed) setResolution(backgroundAutoDefaultResolution);
+  }, [backgroundAuto, backgroundAutoDefaultResolution, backgroundAutoResolutions, resolution]);
 
   const start = () => onStart({
     width,
@@ -162,7 +189,7 @@ export function ExportDialog({ duration, running, progress, currentFrame, totalF
   });
 
   return <div className="dialog-backdrop" role="presentation"><section className="export-dialog" role="dialog" aria-modal="true" aria-labelledby="export-title">
-    <header><h2 id="export-title">{offlineExportProfile?.title ?? (sourceVideoExport ? `Esporta ${sourceVideoExport.label}` : proSubtitles ? "Esporta Pro Subtitles" : videoEditor ? "Esporta montaggio" : "Video finale")}</h2><button aria-label="Chiudi" onClick={onClose} disabled={running}>×</button></header>
+    <header><h2 id="export-title">{offlineExportProfile?.title ?? (sourceVideoExport ? `Esporta ${sourceVideoExport.label}` : backgroundAuto ? "Export Background Auto Animation" : proSubtitles ? "Esporta Pro Subtitles" : videoEditor ? "Esporta montaggio" : "Video finale")}</h2><button aria-label={backgroundAuto ? "Close" : "Chiudi"} onClick={onClose} disabled={running}>×</button></header>
     {proSubtitles ? <>
       <label>Contenuto export<select aria-label="Contenuto export ProSubtitles" value={proSubtitleOutputMode} onChange={(event) => setProSubtitleOutputMode(event.target.value as typeof proSubtitleOutputMode)} disabled={running}><option value="subtitleLayer">Solo sottotitoli · layer per il montaggio</option><option value="completeVideo" disabled={!proSubtitles.hasSourceVideo}>Video originale + sottotitoli incorporati</option></select></label>
       {completeVideo
@@ -172,10 +199,10 @@ export function ExportDialog({ duration, running, progress, currentFrame, totalF
           {backgroundMode === "transparent" ? <label>Formato<select aria-label="Formato ProSubtitles" value={alphaFormat} onChange={(event) => setAlphaFormat(event.target.value as typeof alphaFormat)} disabled={running}><option value="webmVp9Alpha">WebM · VP9 con canale alpha</option><option value="movProRes4444">MOV · Apple ProRes 4444 con alpha</option></select></label> : <><label>Formato<select disabled><option>MP4 · H.264 su sfondo pieno</option></select></label><label>Colore sfondo<input aria-label="Colore sfondo export ProSubtitles" type="color" value={backgroundColor} onChange={(event) => setBackgroundColor(event.target.value)} disabled={running} /></label><label className="export-fallback-toggle"><input type="checkbox" checked={allowOpaqueWebmFallback} onChange={(event) => setAllowOpaqueWebmFallback(event.target.checked)} disabled={running} /> Consenti WebM VP9 opaco solo se H.264 non è disponibile</label></>}
         </>}
       {proResUnavailable ? <p className="export-warning">ProRes 4444 richiede la build desktop con FFmpeg. La versione web non produrrà un MOV finto o privo di alpha: scegli WebM VP9 con alpha.</p> : null}
-    </> : <label>Formato<select disabled><option>{sourceVideoExport ? "MP4 · H.264 + audio originale · proprietà sorgente" : "MP4 · H.264/AAC offline verificato"}</option></select></label>}
+    </> : <label>{backgroundAuto ? "Format" : "Formato"}<select disabled><option>{sourceVideoExport ? "MP4 · H.264 + audio originale · proprietà sorgente" : backgroundAuto ? `MP4 · verified offline H.264/AAC · ${backgroundAutoRatioLabel(backgroundAuto.sourceWidth, backgroundAuto.sourceHeight)} source` : "MP4 · H.264/AAC offline verificato"}</option></select></label>}
     {!preservesSourceVideo ? <>
-      <label>Risoluzione · formato {videoEditor ? "composizione" : offlineExportProfile ? "16:9" : aspectRatio}<select aria-label="Risoluzione" value={resolution} onChange={(event) => setResolution(event.target.value)} disabled={running}>{videoEditor ? videoEditorResolutions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>) : offlineExportProfile ? <><option value="1920x1080">1920 × 1080 (16:9 · Full HD)</option><option value="2560x1440">2560 × 1440 (16:9 · QHD / 2K)</option><option value="3840x2160">3840 × 2160 (16:9 · 4K consigliato)</option><option value="5120x2880">5120 × 2880 (16:9 · 5K)</option><option value="7680x4320">7680 × 4320 (16:9 · 8K)</option></> : projectResolutionOptions(aspectRatio).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
-      <label>Frame rate<select aria-label="Frame rate" value={fps} onChange={(event) => setFps(Number(event.target.value))} disabled={running}>{[24, 25, 30, 50, 60, 120].map((value) => <option key={value}>{value}</option>)}</select></label>
+      <label>{backgroundAuto ? "Resolution · format" : "Risoluzione · formato"} {videoEditor ? "composizione" : backgroundAuto ? `${backgroundAutoRatioLabel(backgroundAuto.sourceWidth, backgroundAuto.sourceHeight)} source` : offlineExportProfile ? "16:9" : aspectRatio}<select aria-label={backgroundAuto ? "Resolution" : "Risoluzione"} value={resolution} onChange={(event) => setResolution(event.target.value)} disabled={running}>{videoEditor ? videoEditorResolutions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>) : backgroundAuto ? backgroundAutoResolutions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>) : offlineExportProfile ? <><option value="1920x1080">1920 × 1080 (16:9 · Full HD)</option><option value="2560x1440">2560 × 1440 (16:9 · QHD / 2K)</option><option value="3840x2160">3840 × 2160 (16:9 · 4K consigliato)</option><option value="5120x2880">5120 × 2880 (16:9 · 5K)</option><option value="7680x4320">7680 × 4320 (16:9 · 8K)</option></> : projectResolutionOptions(aspectRatio).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+    <label>{backgroundAuto ? "Frame rate" : "Frame rate"}<select aria-label="Frame rate" value={fps} onChange={(event) => setFps(Number(event.target.value))} disabled={running}>{[24, 25, 30, 50, 60, 120].map((value) => <option key={value}>{value}</option>)}</select></label>
     </> : null}
     {videoEditor ? <fieldset className="export-interpolation">
       <legend>Frame rate avanzato · interpolazione reale</legend>
@@ -191,12 +218,12 @@ export function ExportDialog({ duration, running, progress, currentFrame, totalF
           {serviceReady && !methodUnavailable ? <p className="muted">Servizio pronto · {interpolationHealth.device}. I fotogrammi intermedi vengono calcolati dopo la verifica del file a {fps} fps: se l’interpolazione non riesce, il montaggio originale resta consegnato.</p> : null}
         </> : <p className="muted">Senza interpolazione il file conserva esattamente i {fps} fps resi dal montaggio.</p>}
     </fieldset> : null}
-    <label>Qualità codifica<select aria-label="Qualità codifica" value={quality} onChange={(event) => setQuality(event.target.value as ExportQuality)} disabled={running}><option value="maximum">Massima · bitrate elevato</option><option value="high">Alta · file più leggero</option></select></label>
+    <label>{backgroundAuto ? "Encoding quality" : "Qualità codifica"}<select aria-label={backgroundAuto ? "Encoding quality" : "Qualità codifica"} value={quality} onChange={(event) => setQuality(event.target.value as ExportQuality)} disabled={running}><option value="maximum">{backgroundAuto ? "Maximum · high bitrate" : "Massima · bitrate elevato"}</option><option value="high">{backgroundAuto ? "High · smaller file" : "Alta · file più leggero"}</option></select></label>
     {offlineExportProfile ? <p className="export-recommendation"><strong>Scelta consigliata</strong><span>{offlineExportProfile.recommendation}</span></p> : null}
-    <p className="muted">{sourceVideoExport ? "Mantiene risoluzione, rapporto, ordine, timestamp e durata di ogni frame del video caricato. La correzione viene composta offline; i pacchetti audio originali vengono copiati senza ricodifica e senza essere riprodotti durante l’export." : proSubtitles ? completeVideo ? "Usa direttamente risoluzione, rapporto, ordine, timestamp e durata di ogni frame del video caricato. I sottotitoli vengono composti offline; l’audio originale viene copiato senza essere riprodotto durante l’export." : "Esporta soltanto la tipografia, senza il video guida e senza audio duplicato. Ogni frame viene calcolato offline con gli stessi tempi della preview, senza drop volontari." : videoEditor ? "Ogni clip viene decodificata in sequenza e composta offline con fusione, correzione colore e dissolvenze della timeline. L’audio è un mixdown con i volumi e le dissolvenze del montaggio; il file viene riaperto e verificato prima della consegna." : "Calcola ogni frame offline alla risoluzione scelta. L’encoder attende il frame prima di proseguire, conserva il frame rate richiesto fino a 120 fps e unisce l’audio senza riprodurlo: carico e fluidità della preview non possono causare frame persi."}</p>
-    {preservesSourceVideo ? <div className="estimate-grid"><span>{totalFrames ? `${totalFrames.toLocaleString("it-IT")} frame sorgente` : "Conteggio frame sorgente in preflight"}</span><span>Durata originale ≈ {Math.ceil(duration)} s</span><span>Nessuna conversione FPS</span></div> : <div className="estimate-grid"><span>{estimate.frames.toLocaleString("it-IT")} frame</span><span>Tempo ≈ {Math.ceil(duration)} s</span><span>Video stimato ≈ {megabytes >= 1024 ? `${(megabytes / 1024).toFixed(1)} GB` : `${megabytes.toFixed(0)} MB`}</span></div>}
-    {fps >= 120 || width >= 2160 ? <p className="export-warning">{proSubtitles ? "Il preset scelto richiede molta memoria GPU e tempi di codifica maggiori." : "Il preset scelto richiede più tempo. L’encoder offline attende ciascun frame e non riduce volontariamente risoluzione o frame rate."}</p> : null}
+    <p className="muted">{backgroundAuto ? "Each frame is rendered offline at the selected source ratio. The encoder waits for every frame, preserves the requested frame rate, and combines audio without playback." : sourceVideoExport ? "Mantiene risoluzione, rapporto, ordine, timestamp e durata di ogni frame del video caricato. La correzione viene composta offline; i pacchetti audio originali vengono copiati senza ricodifica e senza essere riprodotti durante l’export." : proSubtitles ? completeVideo ? "Usa direttamente risoluzione, rapporto, ordine, timestamp e durata di ogni frame del video caricato. I sottotitoli vengono composti offline; l’audio originale viene copiato senza essere riprodotto durante l’export." : "Esporta soltanto la tipografia, senza il video guida e senza audio duplicato. Ogni frame viene calcolato offline con gli stessi tempi della preview, senza drop volontari." : videoEditor ? "Ogni clip viene decodificata in sequenza e composta offline con fusione, correzione colore e dissolvenze della timeline. L’audio è un mixdown con i volumi e le dissolvenze del montaggio; il file viene riaperto e verificato prima della consegna." : "Calcola ogni frame offline alla risoluzione scelta. L’encoder attende il frame prima di proseguire, conserva il frame rate richiesto fino a 120 fps e unisce l’audio senza riprodurlo: carico e fluidità della preview non possono causare frame persi."}</p>
+    {preservesSourceVideo ? <div className="estimate-grid"><span>{totalFrames ? `${totalFrames.toLocaleString("it-IT")} frame sorgente` : "Conteggio frame sorgente in preflight"}</span><span>Durata originale ≈ {Math.ceil(duration)} s</span><span>Nessuna conversione FPS</span></div> : <div className="estimate-grid"><span>{estimate.frames.toLocaleString(backgroundAuto ? "en-US" : "it-IT")} frames</span><span>{backgroundAuto ? "Duration" : "Tempo"} ≈ {Math.ceil(duration)} s</span><span>{backgroundAuto ? "Estimated video" : "Video stimato"} ≈ {megabytes >= 1024 ? `${(megabytes / 1024).toFixed(1)} GB` : `${megabytes.toFixed(0)} MB`}</span></div>}
+    {fps >= 120 || width >= 2160 ? <p className="export-warning">{backgroundAuto ? "The selected preset takes longer to encode. The offline encoder waits for every frame and never reduces resolution or frame rate." : proSubtitles ? "Il preset scelto richiede molta memoria GPU e tempi di codifica maggiori." : "Il preset scelto richiede più tempo. L’encoder offline attende ciascun frame e non riduce volontariamente risoluzione o frame rate."}</p> : null}
     <progress max="1" value={progress} /><div className="property"><span>Frame</span><output>{currentFrame} / {preservesSourceVideo ? totalFrames || "…" : totalFrames || estimate.frames}</output></div>{error ? <p className="status-error">{error}</p> : null}
-    <footer>{running ? <button onClick={onCancel}>Annulla</button> : <><button onClick={onClose}>Chiudi</button><button className="export" onClick={start} disabled={duration <= 0 || proResUnavailable}>Scegli destinazione e crea video</button></>}</footer>
+    <footer>{running ? <button onClick={onCancel}>{backgroundAuto ? "Cancel" : "Annulla"}</button> : <><button onClick={onClose}>{backgroundAuto ? "Close" : "Chiudi"}</button><button className="export" onClick={start} disabled={duration <= 0 || proResUnavailable}>{backgroundAuto ? "Choose destination and export" : "Scegli destinazione e crea video"}</button></>}</footer>
   </section></div>;
 }

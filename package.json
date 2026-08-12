@@ -13,15 +13,19 @@
   "scripts": {
     "dev": "npm run dev --workspace @rbs/desktop",
     "build": "npm run build --workspace @rbs/desktop",
+    "package:mac": "bash build-macos.sh",
+    "package:windows": "build-windows.bat",
     "typecheck": "tsc -b",
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
-    "upscaler:setup": "bash tools/setup_upscaler_env.sh",
-    "upscaler:server": ".venv/bin/python tools/upscaler_server.py",
-    "ai-quantizer:setup": "bash tools/setup_ai_quantizer_env.sh",
-    "ai-quantizer:server": "AIQ_PYTHON=.venv-ai-quantizer/bin/python AIQ_DATA_ROOT=.ai-quantizer-data/projects node tools/ai-quantizer/server.cjs"
+    "setup:runtimes": "node tools/setup_python_runtime.cjs upscaler && node tools/setup_python_runtime.cjs ai-quantizer",
+    "install:verify": "node tools/verify_installation.cjs",
+    "upscaler:setup": "node tools/setup_python_runtime.cjs upscaler",
+    "upscaler:server": "node tools/run_python_service.cjs upscaler",
+    "ai-quantizer:setup": "node tools/setup_python_runtime.cjs ai-quantizer",
+    "ai-quantizer:server": "node tools/run_python_service.cjs ai-quantizer"
   },
   "devDependencies": {
     "@eslint/js": "^9.32.0",

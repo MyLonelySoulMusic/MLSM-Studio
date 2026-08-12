@@ -104,17 +104,6 @@ const portraitLandscapeSchema = z.object({
   sideImageAdjustments: z.object({ brightness: z.number().min(.2).max(2), exposure: z.number().min(-1).max(1), contrast: z.number().min(.2).max(2), saturation: z.number().min(0).max(2.5), temperature: z.number().min(-1).max(1), blur: z.number().min(0).max(12) }).strict().default(defaultPortraitLandscape.sideImageAdjustments),
   effectIntensity: z.number().min(.1).max(2.5).default(defaultPortraitLandscape.effectIntensity)
 }).strict();
-const pixelArtSchema = z.object({
-  subMode: z.enum(["walkingThroughNewYork"]).default("walkingThroughNewYork"),
-  coverImageUrl: z.string().nullable().default(null),
-  characterImageUrl: z.string().nullable().default(null),
-  characterImageName: z.string().max(500).default(""),
-  venueName: z.string().trim().min(1).max(24).default("BAR"),
-  palettePrimary: z.string().default("#e94290"), paletteSecondary: z.string().default("#32d7ff"),
-  hoodieColor: z.string().default("#08090e"), pantsColor: z.string().default("#4252c8"),
-  neonPrimary: z.string().default("#e94290"), neonSecondary: z.string().default("#32d7ff")
-}).strict();
-const defaultPixelArt = { subMode: "walkingThroughNewYork" as const, coverImageUrl: null, characterImageUrl: null, characterImageName: "", venueName: "BAR", palettePrimary: "#e94290", paletteSecondary: "#32d7ff", hoodieColor: "#08090e", pantsColor: "#4252c8", neonPrimary: "#e94290", neonSecondary: "#32d7ff" };
 const teddyWalkSchema = z.object({
   coverImageUrl: z.string().nullable(), furColor: z.string(), patchColor: z.string(), accentColor: z.string(), roadColor: z.string(),
   walkIntensity: z.number().min(.1).max(3), pulseIntensity: z.number().min(0).max(2), danceEnabled: z.boolean().default(false)
@@ -204,6 +193,67 @@ const defaultPixelsSub = {
   subtitleFontFamily: "Pixelify Sans" as const, subtitleColorIndex: 1, subtitleShadowEnabled: true, subtitleShadowColor: "#000000",
   subtitleShadowOffset: 3, subtitlePositionY: 72
 };
+const backgroundAutoDefaultPalette = ["#63f0d1", "#7657ff", "#ff4f9a"] as [string, string, string];
+const backgroundAutoDetectionSchema = z.object({
+  id: z.string().min(1), label: z.string().trim().min(1).max(120), alias: z.string().trim().max(120).default(""), score: z.number().min(0).max(1),
+  bbox: z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), width: z.number().min(0).max(1), height: z.number().min(0).max(1) }).strict(),
+  isPerson: z.boolean().default(false),
+  // Optional here for legacy JSON compatibility. The parent transform fills
+  // this from the current image palette before returning a project snapshot.
+  paletteMode: z.enum(["auto", "manual"]).optional(),
+  // Arrays shorter than three are accepted during migration and replaced by
+  // the parent image palette in the transform below.
+  palette: z.array(z.string()).max(3).nullable().optional()
+}).strict().transform((value) => ({ ...value, alias: value.alias || value.label })).superRefine((value, context) => {
+  if (value.bbox.x + value.bbox.width > 1.000001) context.addIssue({ code: "custom", path: ["bbox", "width"], message: "Il riquadro supera il bordo destro" });
+  if (value.bbox.y + value.bbox.height > 1.000001) context.addIssue({ code: "custom", path: ["bbox", "height"], message: "Il riquadro supera il bordo inferiore" });
+});
+const backgroundAutoEffectSchema = z.object({
+  id: z.string().min(1), type: z.literal("circularSpectrum"), label: z.literal("Circular Spectrum"), enabled: z.boolean().default(true),
+  detectionId: z.string().min(1).nullable().default(null), paletteMode: z.enum(["auto", "manual"]).default("auto"),
+  color: z.string().default("#63f0d1"), palette: z.tuple([z.string(), z.string(), z.string()]).default(["#63f0d1", "#7657ff", "#ff4f9a"]),
+  intensity: z.number().min(0).max(3).default(1), scale: z.number().min(.25).max(3).default(1),
+  opacity: z.number().min(0).max(1).default(.9), collisionParticles: z.boolean().default(true),
+  // These independent toggles were added after the first Background Auto
+  // release. Keep them optional in persisted JSON via Zod defaults so old
+  // projects continue to render the original radial spectrum.
+  centerSpectrumEnabled: z.boolean().default(true),
+  stereoSidesEnabled: z.boolean().default(true),
+  subtitlesEnabled: z.boolean().default(false),
+  // Revolutions per second. Zero is a valid, deterministic freeze value.
+  rotationSpeed: z.number().min(0).max(1).default(.08)
+}).strict();
+const defaultBackgroundAuto = {
+  imageUrl: null, sourceWidth: 0, sourceHeight: 0, palette: backgroundAutoDefaultPalette,
+  detectionThreshold: .15,
+  detections: [] as Array<{ id: string; label: string; alias: string; score: number; bbox: { x: number; y: number; width: number; height: number }; isPerson: boolean; paletteMode?: "auto" | "manual"; palette?: [string, string, string] | null }>,
+  effects: [{ id: "circular-spectrum-1", type: "circularSpectrum" as const, label: "Circular Spectrum" as const, enabled: false, detectionId: null, paletteMode: "auto" as const, color: "#63f0d1", palette: backgroundAutoDefaultPalette, intensity: 1, scale: 1, opacity: .9, collisionParticles: true, centerSpectrumEnabled: true, stereoSidesEnabled: true, subtitlesEnabled: false, rotationSpeed: .08 }],
+  personAnimationEnabled: false
+};
+const backgroundAutoSchema = z.object({
+  imageUrl: z.string().nullable().default(defaultBackgroundAuto.imageUrl),
+  sourceWidth: z.number().int().nonnegative().default(defaultBackgroundAuto.sourceWidth),
+  sourceHeight: z.number().int().nonnegative().default(defaultBackgroundAuto.sourceHeight),
+  palette: z.tuple([z.string(), z.string(), z.string()]).default(defaultBackgroundAuto.palette),
+  // DETR confidence threshold used on the next explicit detection run.
+  detectionThreshold: z.number().min(.05).max(.9).default(defaultBackgroundAuto.detectionThreshold),
+  detections: z.array(backgroundAutoDetectionSchema).max(256).default(defaultBackgroundAuto.detections),
+  effects: z.array(backgroundAutoEffectSchema).max(16).default(defaultBackgroundAuto.effects),
+  personAnimationEnabled: z.boolean().default(defaultBackgroundAuto.personAnimationEnabled)
+}).strict().transform((value) => ({
+  ...value,
+  // Legacy detections did not carry an object-local palette. Keep their
+  // image-following behaviour while making the persisted snapshot explicit.
+  detections: value.detections.map((detection) => ({
+    ...detection,
+    paletteMode: detection.paletteMode ?? "auto",
+    palette: detection.palette && detection.palette.length === 3 ? detection.palette : value.palette
+  })) as typeof value.detections,
+  // Null-target effects are intentional editor placeholders. Legacy projects
+  // may have persisted them as enabled; disable those placeholders rather
+  // than implicitly animating the first detection.
+  effects: value.effects.map((effect) => effect.detectionId || !effect.enabled ? effect : { ...effect, enabled: false })
+}));
 const pixelsSubSchema = z.object({
   imageUrl: z.string().nullable().default(defaultPixelsSub.imageUrl),
   palette: z.tuple([z.string(), z.string(), z.string()]).default(defaultPixelsSub.palette),
@@ -440,7 +490,7 @@ export const projectSchema = z.object({
   canvas: z.object({ aspectRatio: z.enum(["9:16", "16:9", "1:1", "4:5", "custom"]), previewWidth: z.number().int().positive(), previewHeight: z.number().int().positive(), previewFps: fpsSchema, exportWidth: z.number().int().positive(), exportHeight: z.number().int().positive(), exportFps: fpsSchema }).strict(),
   analysis: z.object({ analyzerVersion: z.string(), cacheKey: z.string(), globalBpm: z.number().positive().nullable(), latencyCompensationMs: z.number(), waveform: z.array(z.number().min(-1).max(1)), localTempo: z.array(z.unknown()).default([]), segments: z.array(z.unknown()).default([]) }).strict(),
   events: z.array(musicEventSchema),
-  animation: z.object({ modeId: z.string().min(1), baseObjectTypes: z.array(z.enum(["drum", "kick", "snare", "cymbal", "piano", "guitar", "strings", "peg", "platform", "block", "spring", "pebble"])).min(1), newYorkStreets: newYorkStreetsSchema.default(defaultNewYorkStreets), coverSphere: coverSphereSchema.default(defaultCoverSphere), stereoUnfold: stereoUnfoldSchema.default(defaultStereoUnfold), walkingCube: walkingCubeSchema.default(defaultWalkingCube), portraitLandscape: portraitLandscapeSchema.default(defaultPortraitLandscape), pixelArt: pixelArtSchema.default(defaultPixelArt), teddyWalk: teddyWalkSchema.default(defaultTeddyWalk), teddySing: teddySingSchema.default(defaultTeddySing), proSubtitles: proSubtitlesSchema.default(defaultProSubtitles), pixelsSub: pixelsSubSchema.default(defaultPixelsSub), staticWatermark: staticWatermarkSchema.default(defaultStaticWatermark), upscaler: upscalerSchema.default(defaultUpscaler), videoEditor: videoEditorSchema.default(defaultVideoEditor) }).default({ modeId: "instrumentalFalling", baseObjectTypes: ["kick", "snare", "drum", "cymbal"], newYorkStreets: defaultNewYorkStreets, coverSphere: defaultCoverSphere, stereoUnfold: defaultStereoUnfold, walkingCube: defaultWalkingCube, portraitLandscape: defaultPortraitLandscape, pixelArt: defaultPixelArt, teddyWalk: defaultTeddyWalk, teddySing: defaultTeddySing, proSubtitles: defaultProSubtitles, pixelsSub: defaultPixelsSub, staticWatermark: defaultStaticWatermark, upscaler: defaultUpscaler, videoEditor: defaultVideoEditor }),
+  animation: z.object({ modeId: z.string().min(1), baseObjectTypes: z.array(z.enum(["drum", "kick", "snare", "cymbal", "piano", "guitar", "strings", "peg", "platform", "block", "spring", "pebble"])).min(1), newYorkStreets: newYorkStreetsSchema.default(defaultNewYorkStreets), coverSphere: coverSphereSchema.default(defaultCoverSphere), stereoUnfold: stereoUnfoldSchema.default(defaultStereoUnfold), walkingCube: walkingCubeSchema.default(defaultWalkingCube), portraitLandscape: portraitLandscapeSchema.default(defaultPortraitLandscape), teddyWalk: teddyWalkSchema.default(defaultTeddyWalk), teddySing: teddySingSchema.default(defaultTeddySing), proSubtitles: proSubtitlesSchema.default(defaultProSubtitles), pixelsSub: pixelsSubSchema.default(defaultPixelsSub), backgroundAuto: backgroundAutoSchema.default(defaultBackgroundAuto), staticWatermark: staticWatermarkSchema.default(defaultStaticWatermark), upscaler: upscalerSchema.default(defaultUpscaler), videoEditor: videoEditorSchema.default(defaultVideoEditor) }).default({ modeId: "instrumentalFalling", baseObjectTypes: ["kick", "snare", "drum", "cymbal"], newYorkStreets: defaultNewYorkStreets, coverSphere: defaultCoverSphere, stereoUnfold: defaultStereoUnfold, walkingCube: defaultWalkingCube, portraitLandscape: defaultPortraitLandscape, teddyWalk: defaultTeddyWalk, teddySing: defaultTeddySing, proSubtitles: defaultProSubtitles, pixelsSub: defaultPixelsSub, backgroundAuto: defaultBackgroundAuto, staticWatermark: defaultStaticWatermark, upscaler: defaultUpscaler, videoEditor: defaultVideoEditor }),
   ball: z.object({ radius: z.number().positive(), visualMass: z.number().positive(), material: materialSchema, spinRate: z.number(), impactDeformation: z.number().min(0).max(1), trailEnabled: z.boolean(), innerColor: z.string().default("#63f0d1"), innerShape: z.enum(["orb", "icosahedron", "torusKnot"]).default("icosahedron"), innerImageUrl: z.string().nullable().default(null), endRevealEnabled: z.boolean().default(false), revealMode: z.enum(["end", "time"]).default("end"), revealTimeSeconds: z.number().nonnegative().default(0), revealHoldSeconds: z.number().min(0).max(30).default(2) }).strict(),
   objects: z.array(sceneObjectSchema), trajectorySegments: z.array(trajectorySegmentSchema),
   camera: z.object({ mode: z.enum(["fixed", "verticalTracking", "fullTracking", "smoothFollow", "cinematic", "keyframed", "autoFraming", "spline"]), position: vector3Schema, target: vector3Schema, fieldOfView: z.number().positive().max(179), damping: z.number().min(0).max(1), lookAhead: z.number().nonnegative() }).strict(),
@@ -512,10 +562,8 @@ export function parseProject(input: unknown): RhythmBallProject {
   const candidate = input as Record<string, unknown>; const animation = candidate.animation;
   if (!animation || typeof animation !== "object" || Array.isArray(animation)) return projectSchema.parse(input);
   const legacyAnimation = animation as Record<string, unknown>; const legacyTeddy = legacyAnimation.teddyWheel;
-  const legacyPixelArt = legacyAnimation.pixelArt;
   const legacyProSubtitles = legacyAnimation.proSubtitles;
   const legacyAddSubtitles = legacyAnimation.addSubtitles;
-  const migratedPixelArt = legacyPixelArt && typeof legacyPixelArt === "object" && !Array.isArray(legacyPixelArt) ? { characterImageUrl: null, characterImageName: "", ...legacyPixelArt as Record<string, unknown>, hoodieColor: "#08090e" } : defaultPixelArt;
   const migratedProSubtitles = legacyProSubtitles && typeof legacyProSubtitles === "object" && !Array.isArray(legacyProSubtitles)
     ? (() => {
       const settings = legacyProSubtitles as Record<string, unknown>;
@@ -597,12 +645,13 @@ export function parseProject(input: unknown): RhythmBallProject {
       return { ...source, tracks, clips, effectClips, selectedEffectClipIds: [] };
     })()
     : defaultVideoEditor;
-  const migratedModeId = legacyAnimation.modeId === "teddyWheel" ? "teddyWalk" : legacyAnimation.modeId === "addSubtitles" ? "proSubtitles" : legacyAnimation.modeId;
+  const migratedModeId = legacyAnimation.modeId === "pixelArt" ? "instrumentalFalling" : legacyAnimation.modeId === "teddyWheel" ? "teddyWalk" : legacyAnimation.modeId === "addSubtitles" ? "proSubtitles" : legacyAnimation.modeId;
   const migratedLegacySubtitleSource = legacyAnimation.modeId === "addSubtitles" && legacyAddSubtitles && typeof legacyAddSubtitles === "object" && !Array.isArray(legacyAddSubtitles)
     ? { ...migratedProSubtitles, ...legacyAddSubtitles as Record<string, unknown> }
     : migratedProSubtitles;
-  const currentAnimation = { ...legacyAnimation }; delete currentAnimation.addSubtitles;
-  return projectSchema.parse({ ...candidate, animation: { ...currentAnimation, modeId: migratedModeId, pixelArt: migratedPixelArt, teddyWalk: migratedTeddy, proSubtitles: migratedLegacySubtitleSource, pixelsSub: legacyAnimation.pixelsSub ?? defaultPixelsSub, staticWatermark: migratedStaticWatermark, videoEditor: migratedVideoEditor } });
+  const currentAnimation = { ...legacyAnimation }; delete currentAnimation.addSubtitles; delete currentAnimation.pixelArt;
+  const migratedBaseObjectTypes = legacyAnimation.modeId === "pixelArt" ? ["kick", "snare", "drum", "cymbal"] : currentAnimation.baseObjectTypes;
+  return projectSchema.parse({ ...candidate, animation: { ...currentAnimation, modeId: migratedModeId, baseObjectTypes: migratedBaseObjectTypes, teddyWalk: migratedTeddy, proSubtitles: migratedLegacySubtitleSource, pixelsSub: legacyAnimation.pixelsSub ?? defaultPixelsSub, staticWatermark: migratedStaticWatermark, videoEditor: migratedVideoEditor } });
 }
 
 export function createProject(name = "Progetto senza titolo", now = new Date()): RhythmBallProject {
@@ -614,7 +663,7 @@ export function createProject(name = "Progetto senza titolo", now = new Date()):
     canvas: { aspectRatio: "9:16", previewWidth: 540, previewHeight: 960, previewFps: { numerator: 30, denominator: 1 }, exportWidth: 1080, exportHeight: 1920, exportFps: { numerator: 60, denominator: 1 } },
     analysis: { analyzerVersion: "", cacheKey: "", globalBpm: null, latencyCompensationMs: 0, waveform: [], localTempo: [], segments: [] },
     events: [],
-    animation: { modeId: "instrumentalFalling", baseObjectTypes: ["kick", "snare", "drum", "cymbal"], newYorkStreets: defaultNewYorkStreets, coverSphere: defaultCoverSphere, stereoUnfold: defaultStereoUnfold, walkingCube: defaultWalkingCube, portraitLandscape: defaultPortraitLandscape, pixelArt: defaultPixelArt, teddyWalk: defaultTeddyWalk, teddySing: defaultTeddySing, proSubtitles: defaultProSubtitles, pixelsSub: defaultPixelsSub, staticWatermark: defaultStaticWatermark, upscaler: defaultUpscaler, videoEditor: defaultVideoEditor },
+    animation: { modeId: "instrumentalFalling", baseObjectTypes: ["kick", "snare", "drum", "cymbal"], newYorkStreets: defaultNewYorkStreets, coverSphere: defaultCoverSphere, stereoUnfold: defaultStereoUnfold, walkingCube: defaultWalkingCube, portraitLandscape: defaultPortraitLandscape, teddyWalk: defaultTeddyWalk, teddySing: defaultTeddySing, proSubtitles: defaultProSubtitles, pixelsSub: defaultPixelsSub, backgroundAuto: defaultBackgroundAuto, staticWatermark: defaultStaticWatermark, upscaler: defaultUpscaler, videoEditor: defaultVideoEditor },
     ball: { radius: 0.45, visualMass: 1, material: { color: "#dffeff", palette: ["#63f0d1", "#7857ff"], roughness: 0.05, metalness: 0, emission: 0.2, opacity: .32, textureAssetId: null }, spinRate: 1, impactDeformation: 0.2, trailEnabled: true, innerColor: "#63f0d1", innerShape: "icosahedron", innerImageUrl: null, endRevealEnabled: false, revealMode: "end", revealTimeSeconds: 0, revealHoldSeconds: 2 },
     objects: [], trajectorySegments: [],
     camera: { mode: "smoothFollow", position: { x: 0, y: 2, z: 10 }, target: { x: 0, y: 2, z: 0 }, fieldOfView: 45, damping: 0.12, lookAhead: 1.5 },

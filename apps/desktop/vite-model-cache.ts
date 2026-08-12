@@ -6,6 +6,9 @@ import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Plugin } from "vite";
+import { modelCacheErrorResponse } from "./src/services/model-cache-errors";
+
+export { modelCacheErrorResponse } from "./src/services/model-cache-errors";
 
 const modelRoute = "/__local-models/";
 const statusRoute = "/__local-model-cache/status";
@@ -13,7 +16,8 @@ const allowedRepositories = new Set([
   "onnx-community/whisper-tiny_timestamped",
   "onnx-community/whisper-base_timestamped",
   "onnx-community/whisper-medium_timestamped",
-  "onnx-community/Qwen2.5-0.5B-Instruct"
+  "onnx-community/Qwen2.5-0.5B-Instruct",
+  "Xenova/detr-resnet-50"
 ]);
 
 const cacheRoot = fileURLToPath(new URL("../../.transformers-cache/", import.meta.url));
@@ -55,7 +59,10 @@ async function downloadOnce(repository: string, filename: string, target: string
     pending = (async () => {
       const remote = `https://huggingface.co/${repository}/resolve/main/${filename}`;
       const response = await fetch(remote, { redirect: "follow" });
-      if (!response.ok || !response.body) throw new Error(`Hugging Face ${response.status} per ${filename}`);
+      if (!response.ok || !response.body) {
+        const status = response.ok ? 502 : response.status;
+        throw Object.assign(new Error(`Hugging Face ${response.status} per ${filename}`), { status });
+      }
       await mkdir(dirname(target), { recursive: true });
       const temporary = `${target}.${process.pid}.partial`;
       try {
@@ -113,8 +120,14 @@ async function handleModel(request: IncomingMessage, response: ServerResponse, n
     await downloadOnce(parsed.repository, parsed.filename, target);
     await serveFile(response, target);
   } catch (error) {
-    response.statusCode = error instanceof Error && error.message.includes(" 404 ") ? 404 : 502;
-    response.end(error instanceof Error ? error.message : String(error));
+    const failure = modelCacheErrorResponse(error);
+    response.statusCode = failure.statusCode;
+    response.setHeader("Content-Type", failure.contentType);
+    response.setHeader("Cache-Control", "no-store");
+    response.setHeader("X-Model-Cache", failure.fallbackToRemote ? "miss" : "error");
+    response.setHeader("X-Model-Cache-Diagnostic", failure.diagnostic);
+    if (failure.fallbackToRemote) response.setHeader("X-Model-Cache-Fallback", "remote");
+    response.end(failure.body);
   }
 }
 
@@ -128,4 +141,3 @@ export function persistentModelCache(): Plugin {
     }
   };
 }
-

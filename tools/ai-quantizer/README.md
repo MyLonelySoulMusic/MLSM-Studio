@@ -1,14 +1,23 @@
-# MLSM Studio · AI Quantizer runtime
+# Runtime AI Quantizer
 
-Questo runtime appartiene al repository MLSM Studio e alimenta la modalità `Music → AI Quantizer`.
+Questo runtime è parte di MLSM Studio e alimenta `Music → AI Quantizer`; non dipende da cartelle o progetti esterni.
 
-- `server.cjs`: API, upload/download, progetti e pipeline FFmpeg/Rubber Band.
-- `public/`: interfaccia MLSM incorporata nella modalità Music.
-- `audio_engine/`: analisi ritmica Beat This e AI Music Forensics.
-- `requirements.txt`: dipendenze dell’ambiente isolato `.venv-ai-quantizer`.
+| Percorso | Ruolo |
+| --- | --- |
+| `server.cjs` | API locale, progetti, upload/download e pipeline FFmpeg/Rubber Band. |
+| `public/` | Interfaccia incorporata nella modalità Music. |
+| `audio_engine/` | Beat This, analisi ritmica e AI Music Forensics. |
+| `requirements.txt` | Dipendenze di `.venv-ai-quantizer`. |
 
-`npm run dev --workspace @rbs/desktop -- --port 1421` prepara automaticamente l’ambiente al primo avvio. In alternativa: `npm run ai-quantizer:setup`.
+Preparazione manuale:
 
-I modelli non sono versionati: vengono scaricati al primo utilizzo e conservati in `tools/ai-quantizer/models/`. I progetti audio risiedono in `.ai-quantizer-data/`. Entrambi sono esclusi da Git.
+```bash
+npm run ai-quantizer:setup
+npm run ai-quantizer:server
+```
 
-AI Music Forensics usa il modello MIT `lofcz/ai-music-detector`, fissato alla revisione `6ba389e94a179ac90f3eb134b741ef37baa30434`.
+Il normale `npm run dev` prepara l’ambiente quando manca e inoltra i log alla schermata di bootstrap. I modelli vengono scaricati al primo uso in `tools/ai-quantizer/models/`; i progetti vivono in `.ai-quantizer-data/`. Entrambi sono esclusi da Git.
+
+AI Music Forensics usa `lofcz/ai-music-detector` (licenza MIT), revisione fissata `6ba389e94a179ac90f3eb134b741ef37baa30434`.
+
+Per il flusso utente consulta [Music · AI Quantizer](../../docs/music.md); per ambiente e test consulta [Installazione e sviluppo](../../docs/development.md).

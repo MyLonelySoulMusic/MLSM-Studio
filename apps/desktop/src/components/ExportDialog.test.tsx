@@ -59,6 +59,39 @@ describe("ExportDialog", () => {
     expect(screen.getByText("MP4 · H.264 + audio originale · proprietà sorgente")).toBeInTheDocument();
   });
 
+  it("propone soltanto risoluzioni proporzionali alla cover Background Auto", () => {
+    const onStart = vi.fn();
+    render(<ExportDialog duration={10} running={false} progress={0} currentFrame={0} totalFrames={0} error={null} aspectRatio="16:9" backgroundAuto={{ sourceWidth: 1080, sourceHeight: 1920 }} onClose={vi.fn()} onCancel={vi.fn()} onStart={onStart} />);
+    expect(screen.getByRole("heading", { name: "Export Background Auto Animation" })).toBeInTheDocument();
+    const resolutions = screen.getByLabelText("Resolution");
+    expect(resolutions).toHaveValue("1080x1920");
+    expect(resolutions).toHaveTextContent("1080 × 1920 (9:16 · native)");
+    expect(resolutions).toHaveTextContent("2160 × 3840 (9:16 · 200%)");
+    expect(resolutions).not.toHaveTextContent("16:9");
+    expect(screen.getByText("Duration ≈ 10 s")).toBeInTheDocument();
+    expect(screen.getByText(/Estimated video/)).toBeInTheDocument();
+    expect(screen.queryByText(/Tempo|Video stimato|nativa/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Choose destination and export" }));
+    expect(onStart).toHaveBeenCalledWith(expect.objectContaining({ width: 1080, height: 1920 }));
+  });
+
+  it("riallinea il preset quando la cover Background Auto cambia formato", () => {
+    const common = { duration: 10, running: false, progress: 0, currentFrame: 0, totalFrames: 0, error: null, onClose: vi.fn(), onCancel: vi.fn(), onStart: vi.fn() };
+    const view = render(<ExportDialog {...common} backgroundAuto={{ sourceWidth: 1080, sourceHeight: 1920 }} />);
+    fireEvent.change(screen.getByLabelText("Resolution"), { target: { value: "540x960" } });
+    view.rerender(<ExportDialog {...common} backgroundAuto={{ sourceWidth: 1000, sourceHeight: 1000 }} />);
+    expect(screen.getByLabelText("Resolution")).toHaveValue("1000x1000");
+  });
+
+  it("usa come preset nativo le dimensioni encoder pari per una cover dispari", () => {
+    const onStart = vi.fn();
+    render(<ExportDialog duration={10} running={false} progress={0} currentFrame={0} totalFrames={0} error={null} backgroundAuto={{ sourceWidth: 941, sourceHeight: 1672 }} onClose={vi.fn()} onCancel={vi.fn()} onStart={onStart} />);
+    expect(screen.getByLabelText("Resolution")).toHaveValue("942x1672");
+    expect(screen.getByLabelText("Resolution")).toHaveTextContent("942 × 1672 (941:1672 · native)");
+    fireEvent.click(screen.getByRole("button", { name: "Choose destination and export" }));
+    expect(onStart).toHaveBeenCalledWith(expect.objectContaining({ width: 942, height: 1672 }));
+  });
+
   it("inizializza ProSubtitles con la risoluzione coerente al ratio del progetto", () => {
     const commonProps = {
       duration: 10,

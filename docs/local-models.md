@@ -1,33 +1,23 @@
 # Modelli AI locali
 
-I pesi dei modelli non sono inclusi nel repository o nella build.
-Durante lo sviluppo web, un middleware Vite scarica soltanto i file mancanti e
-li conserva nella directory `.transformers-cache/` del progetto. La directory
-è persistente, esclusa da Git e non dipende dalla quota Cache Storage del
-browser. Refresh, riavvio del browser e riavvio di Vite leggono quindi i file
-dal disco senza ripetere il download. La build desktop usa la cache persistente
-del WebView fino al packaging nativo finale.
+I modelli vengono inizializzati su richiesta. Il primo uso può richiedere un download; quelli successivi usano cache persistente.
 
-| ID applicazione | Repository | Formato |
-| --- | --- | --- |
-| `whisper-tiny_timestamped` | `onnx-community/whisper-tiny_timestamped` | ONNX Q4 |
-| `whisper-base_timestamped` | `onnx-community/whisper-base_timestamped` | ONNX Q4 |
-| `whisper-medium_timestamped` | `onnx-community/whisper-medium_timestamped` | ONNX Q4 |
-| `qwen2.5-0.5b-instruct` | `onnx-community/Qwen2.5-0.5B-Instruct` | ONNX Q4 |
+| Funzione | Modello/runtime | Cache | Fallback |
+| --- | --- | --- | --- |
+| Sottotitoli | Whisper selezionabile | cache modelli locale | modello più piccolo/CPU |
+| Revisione e assistente | Qwen locale | cache Transformers | WebGPU → WASM → knowledge base |
+| Upscaling | Real-ESRGAN/RealESRNet | `.upscaler-cache` | CUDA/MPS → CPU; Canvas Enhanced |
+| Interpolazione | FFmpeg minterpolate o RIFE | cache runtime/pesi | render nativo senza interpolazione |
+| Background Auto Animation | `Xenova/detr-resnet-50` (Transformers.js), vocabolario COCO chiuso | cache lazy del modello | WebGPU → WASM |
 
-Il primo utilizzo richiede una connessione. Al termine del download il modello
-lavora localmente tramite WebGPU, quando disponibile, oppure WASM.
-Per Qwen il runtime usa `q4f16` su WebGPU (circa 483 MB, particolarmente adatto
-ai Mac Apple Silicon) quando l’adapter espone `shader-f16`, altrimenti `q4`.
-La presenza della sola proprietà `navigator.gpu` non viene considerata
-sufficiente: il runtime richiede un adapter reale e, se la pipeline WebGPU
-fallisce, riprova automaticamente con `q4` su WASM (circa 786 MB).
+## Regole
 
-Qwen2.5 0.5B Instruct è il modello predefinito per la redazione dei
-sottotitoli e per Assistente Studio. È stato scelto al posto del precedente
-135M perché gestisce meglio italiano, istruzioni e JSON strutturato, pur
-restando in una classe di dimensioni adatta a macchine modeste. I progetti
-precedenti che indicavano SmolLM2 vengono migrati automaticamente a Qwen.
-Gemma 3 270M non è il predefinito perché il download dei pesi su Hugging Face
-richiede l'accettazione preventiva della licenza e quindi non garantisce un
-primo utilizzo automatico senza account.
+- Nessun checkpoint entra in Git.
+- Un download incompleto non viene marcato come pronto.
+- L’interfaccia mostra modello, fase, percentuale e messaggio d’errore.
+- Un errore azzera la promise di bootstrap, così il nuovo tentativo può ripartire.
+- Su Apple Silicon il backend preferito è Metal/MPS quando il modello lo supporta; su NVIDIA è CUDA.
+
+In sviluppo, la cache del modello DETR è consentita per `Xenova/detr-resnet-50`. Dopo aver modificato la whitelist della cache del dev server, riavvia il dev server prima di riprovare il download o l’analisi. Se il download della cache su disco fallisce per un errore di trasporto, il middleware risponde come cache miss e Transformers.js ritenta direttamente dal repository remoto, senza interpretare il testo dell’errore come JSON.
+
+Background Auto Animation usa una soglia di sensibilità regolabile, predefinita a 0,15. L’analisi viene ripetuta solo con **Detect again**; i duplicati sono filtrati per classe e il risultato è limitato a 256 oggetti.

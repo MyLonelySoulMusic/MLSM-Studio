@@ -1,29 +1,33 @@
 # Memory
 
-**Memory** è il catalogo semantico locale di MLSM Studio. Indicizza riferimenti a file e cartelle senza caricare i contenuti su servizi cloud e consente di ritrovarli con descrizioni naturali.
+![Memory](screenshots/07-memory.png)
 
-## Costruire la memoria
+Memory è un catalogo semantico locale per ritrovare file tramite descrizioni naturali. Salva metadati, categorie, embedding e percorso reale; non duplica né carica online gli originali.
 
-1. Premi **Memory** nella barra superiore e apri **Costruisci memoria**.
-2. Scegli uno o più file oppure una cartella. Una cartella viene letta ricorsivamente; collegamenti simbolici ed elementi nascosti vengono ignorati per sicurezza.
-3. Seleziona un elemento nell'elenco per controllarne subito contenuto e percorso assoluto nel pannello **Anteprima prima del salvataggio**. L'anteprima è disponibile prima che il record entri nel database.
-4. Inserisci una descrizione comune, eventuali tag e categorie personalizzate. Puoi selezionare un singolo elemento per correggerne il tipo o aggiungere una descrizione specifica.
-5. Premi **Salva nella memoria**. La percentuale indica quanti elementi sono stati vettorizzati e registrati.
+## Costruisci memoria
 
-Per ogni elemento vengono conservati percorso, nome, tipo, MIME, dimensione, data, descrizione, tag, categorie e vettore semantico 384D. La cartella di appartenenza viene aggiunta automaticamente come categoria. I file originali non vengono copiati nel database.
+1. Apri **Memory** e scegli **Costruisci memoria**.
+2. Seleziona file o una cartella dal sistema operativo.
+3. Prima del salvataggio seleziona un elemento per vederne l’anteprima.
+4. Indica tipo, descrizione generale, descrizioni specifiche e categorie.
+5. Crea categorie personalizzate quando quelle automatiche non bastano.
+6. Salva: il database genera i vettori e conserva il percorso assoluto del PC.
 
-## Cercare e utilizzare i risultati
+Foto, video, audio, testo e PDF mostrano l’anteprima compatibile. Le cartelle generano una categoria di origine e mantengono la relazione con i file contenuti.
 
-In **Trova memoria** scrivi una frase come `cover rosa con strada di notte`. La ricerca ibrida combina similarità vettoriale, nome, descrizione, tag, categorie e percorso; i risultati sono ordinati per pertinenza e possono essere filtrati per tipo o categoria.
+## Trova memoria
 
-Il primo risultato apre automaticamente l'anteprima di immagini, video, audio, PDF e testo; puoi poi selezionarne un altro. Il pannello mostra sempre il percorso assoluto reale e offre **Copia percorso** e **Copia file in…**. La vista **Grafo relazioni** collega file, cartelle, categorie e affinità semantiche: trascina lo sfondo per spostarti, usa la rotella per lo zoom e passa sui nodi per vedere i dettagli.
+Scrivi una frase come “cover rosa con strada di notte”. I risultati vengono ordinati per pertinenza e filtrati per tipo o categoria. Selezionando un risultato ottieni anteprima, descrizione, percorso reale e azioni:
 
-Spunta più risultati e premi **Copia selezionati**, oppure copia l'intero insieme trovato. MLSM chiede la cartella di destinazione, non sovrascrive file esistenti e assegna un suffisso progressivo in caso di conflitto.
+- **Copia percorso** negli appunti;
+- **Copia questo** verso una cartella scelta;
+- selezione multipla e **Copia selezionati**;
+- **Copia tutti i risultati** senza sovrascrivere file omonimi.
+
+## Grafo relazioni
+
+La vista grafo collega file, cartelle e categorie. Zoom e trascinamento sono interattivi; hover o focus mostrano contenuto e percorso, clic apre l’anteprima.
 
 ## Persistenza e privacy
 
-Il catalogo vettoriale vive in IndexedDB nei dati locali del browser/WebView, fuori dalla cartella del progetto e quindi fuori dal repository Git. Nella build desktop, scansione, anteprima e copia passano attraverso comandi Rust che accettano soltanto percorsi assoluti esistenti e applicano limiti espliciti a profondità, quantità e dimensione delle anteprime. Durante lo sviluppo web locale le stesse operazioni passano attraverso il servizio filesystem integrato nel dev server: il selettore è quello del sistema operativo e nel database entra il percorso assoluto reale. MLSM non genera più riferimenti virtuali `browser://`, perché non sarebbero riutilizzabili dopo il riavvio.
-
-I file originali scelti dall'utente non vengono copiati in MLSM Studio: Memory salva soltanto percorso, metadati, descrizioni, categorie e vettori. Anche l'eventuale directory locale di fallback `.mlsm-memory/` è esclusa esplicitamente da Git.
-
-Se un file viene spostato o cancellato fuori dall'app, Memory non elimina silenziosamente la scheda: la ricerca continua a mostrarla e l'anteprima segnala il percorso non disponibile. La rimozione dalla memoria elimina soltanto il record, mai il file originale.
+Il database vive nei dati applicativi locali di macOS o Windows ed è escluso dal repository. Gli originali restano nel percorso scelto; se vengono spostati, il record conserva il vecchio riferimento finché non viene aggiornato o rimosso.

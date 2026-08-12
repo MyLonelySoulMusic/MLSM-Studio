@@ -2,6 +2,7 @@ import type { ExportProgress } from "@rbs/export-engine";
 import type { RhythmBallProject } from "@rbs/project-schema";
 import type { ExportQuality } from "./offline-video-exporter";
 import { generatePythonUpscaledVideo } from "./upscaler-python-client";
+import { resolvedUpscalerDimensions } from "./upscaler-renderer";
 
 type UpscalerSettings = RhythmBallProject["animation"]["upscaler"];
 
@@ -29,6 +30,8 @@ export interface UpscalerVideoExportProgress extends ExportProgress {
   phaseLabel?: string;
   tempDirectory?: string;
   originalFramesDirectory?: string;
+  width?: number;
+  height?: number;
 }
 
 function safeName(value: string): string {
@@ -54,9 +57,12 @@ export async function exportUpscaledVideo(
   signal: AbortSignal,
   onProgress: (progress: UpscalerVideoExportProgress) => void
 ): Promise<UpscalerVideoExportResult> {
-  const width = Math.max(64, Math.min(16384, Math.round(settings.upscalerSettings.finalWidth / 2) * 2));
-  const height = Math.max(64, Math.min(16384, Math.round(settings.upscalerSettings.finalHeight / 2) * 2));
-  const fileName = `${safeName(settings.projectName)}-upscaled-${width}x${height}.mp4`;
+  // Old projects can retain a 16:9 target after a non-16:9 video is loaded.
+  // Normalize the target at the last boundary while leaving unlocked custom
+  // dimensions independent of the source ratio.
+  const dimensions = resolvedUpscalerDimensions(settings.upscalerSettings, "width");
+  const width = dimensions.width;
+  const height = dimensions.height;
   const result = await generatePythonUpscaledVideo({
     sourceUrl: settings.sourceVideoUrl,
     ...(settings.sourceVideoFile ? { sourceBlob: settings.sourceVideoFile } : {}),
@@ -73,18 +79,23 @@ export async function exportUpscaledVideo(
       phase: status.phase,
       phaseLabel: status.phaseLabel,
       tempDirectory: status.tempDirectory,
-      originalFramesDirectory: status.originalFramesDirectory
+      originalFramesDirectory: status.originalFramesDirectory,
+      ...(status.effectiveWidth ? { width: status.effectiveWidth } : {}),
+      ...(status.effectiveHeight ? { height: status.effectiveHeight } : {})
     })
   });
   if (signal.aborted) throw new DOMException("Esportazione annullata", "AbortError");
   if (result.status.totalFrames <= 0 || result.status.currentFrame !== result.status.totalFrames) {
     throw new Error(`Controllo anti-drop fallito: elaborati ${result.status.currentFrame}/${result.status.totalFrames} frame.`);
   }
+  const effectiveWidth = result.status.effectiveWidth ?? width;
+  const effectiveHeight = result.status.effectiveHeight ?? height;
+  const fileName = `${safeName(settings.projectName)}-upscaled-${effectiveWidth}x${effectiveHeight}.mp4`;
   downloadVideoBlob(result.blob, fileName);
   return {
     fileName,
-    width,
-    height,
+    width: effectiveWidth,
+    height: effectiveHeight,
     sourceFrameCount: result.status.totalFrames,
     encodedFrameCount: result.status.currentFrame,
     audioPacketCount: 0,

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { pythonUpscalerSupportsVideoJobs, shouldUsePythonUpscaler, type PythonUpscalerHealth } from "./upscaler-python-client";
+import { createProject } from "@rbs/project-schema";
+import { buildUpscalerVideoForm, pythonUpscalerSupportsVideoJobs, shouldUsePythonUpscaler, type PythonUpscalerHealth } from "./upscaler-python-client";
 
 const cpuHealth: PythonUpscalerHealth = { ok: true, mps: false, cuda: false, recommendedBackend: "cpu", gpuName: "CPU" };
 const metalHealth: PythonUpscalerHealth = { ok: true, mps: true, cuda: false, recommendedBackend: "metal", gpuName: "Apple Silicon · MPS/Metal" };
@@ -23,5 +24,13 @@ describe("routing Upscaler PyTorch", () => {
   it("distingue il vecchio endpoint immagine dal backend video frame-per-frame", () => {
     expect(pythonUpscalerSupportsVideoJobs(metalHealth)).toBe(false);
     expect(pythonUpscalerSupportsVideoJobs({ ...metalHealth, apiVersion: 2, capabilities: { imageUpscale: true, videoJobs: true } })).toBe(true);
+  });
+
+  it("invia preserve_aspect_ratio insieme alla richiesta video", () => {
+    const settings = createProject().animation.upscaler;
+    const form = buildUpscalerVideoForm(new Blob(["video"], { type: "video/mp4" }), "source.mp4", settings, "maximum", "client");
+    expect(form.get("preserve_aspect_ratio")).toBe("true");
+    expect(form.get("width")).toBe(String(settings.finalWidth));
+    expect(form.get("height")).toBe(String(settings.finalHeight));
   });
 });

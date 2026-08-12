@@ -15,7 +15,9 @@ const remoteModelRepositories = {
   "whisper-tiny_timestamped": "onnx-community/whisper-tiny_timestamped",
   "whisper-base_timestamped": "onnx-community/whisper-base_timestamped",
   "whisper-medium_timestamped": "onnx-community/whisper-medium_timestamped",
-  "qwen2.5-0.5b-instruct": "onnx-community/Qwen2.5-0.5B-Instruct"
+  "qwen2.5-0.5b-instruct": "onnx-community/Qwen2.5-0.5B-Instruct",
+  "detr-resnet-50": "Xenova/detr-resnet-50",
+  "Xenova/detr-resnet-50": "Xenova/detr-resnet-50"
 } as const;
 
 export const preferredLocalAssistantModel = "qwen2.5-0.5b-instruct";
@@ -23,6 +25,7 @@ export const preferredLocalAssistantLabel = "Qwen2.5 0.5B";
 
 const transcriberPromises = new Map<string, Promise<unknown>>();
 const textGeneratorPromises = new Map<string, Promise<unknown>>();
+const objectDetectorPromises = new Map<string, Promise<unknown>>();
 const readyTextGenerators = new Set<string>();
 const localModelStatuses = new Map<string, LocalModelStatus>();
 let persistentStorageRequest: Promise<boolean> | undefined;
@@ -48,13 +51,25 @@ function setLocalModelStatus(model: string, phase: LocalModelPhase, message: str
 }
 
 export function getLocalModelStatus(model: string): LocalModelStatus {
-  return localModelStatuses.get(model) ?? { phase: "idle", message: `${model} non ancora inizializzato` };
+  return localModelStatuses.get(model) ?? { phase: "idle", message: `${model} is not initialized` };
 }
 
 export function remoteModelRepository(model: string): string {
   const repository = remoteModelRepositories[model as keyof typeof remoteModelRepositories];
-  if (!repository) throw new Error(`Modello locale non supportato: ${model}`);
+  if (!repository) throw new Error(`Unsupported local model: ${model}`);
   return repository;
+}
+
+/** Converts the common Vite HTML fallback/invalid JSON response into an
+ * actionable error instead of exposing the opaque `Unexpected token '<'` text. */
+export function localModelErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/fetch failed|failed to fetch|unexpected token\s*['"]?e\b.*(?:fetch failed|not valid json)/i.test(message)) {
+    return "The local model download failed due to a network error. Check your connection and retry.";
+  }
+  return /unexpected token\s*['"]?<|<!doctype\s+html|returned html|invalid json/i.test(message)
+    ? "The local model server returned an HTML or invalid JSON response. Restart the development server and retry the model download."
+    : message;
 }
 
 async function preserveModelCache(): Promise<void> {
@@ -68,7 +83,9 @@ async function cachedFilesForRepository(repository: string): Promise<Set<string>
     try {
       const response = await fetch(`/__local-model-cache/status?repository=${encodeURIComponent(repository)}`);
       if (response.ok) {
-        const data = await response.json() as { files?: unknown };
+        const contentType = response.headers.get("content-type") ?? "";
+        if (!contentType.toLowerCase().includes("json")) throw new Error("Local model cache returned invalid JSON.");
+        const data = await response.json().catch(() => { throw new Error("Local model cache returned invalid JSON."); }) as { files?: unknown };
         if (Array.isArray(data.files)) return new Set(data.files.filter((file): file is string => typeof file === "string"));
       }
     } catch {
@@ -97,21 +114,21 @@ export function modelProgressMessage(model: string, event: unknown, cachedFiles:
   if (!event || typeof event !== "object") return null;
   const data = event as Record<string, unknown>; const progress = typeof data.progress === "number" ? data.progress : null; const file = typeof data.file === "string" ? data.file.split("/").at(-1) : null;
   const fullFile = typeof data.file === "string" ? data.file : null;
-  const source = fullFile && cachedFiles.has(fullFile) ? "Caricamento dalla cache" : "Download iniziale";
+  const source = fullFile && cachedFiles.has(fullFile) ? "Loading from cache" : "Initial download";
   if (progress !== null) return `${source} ${model} · ${Math.round(progress)}%${file ? ` · ${file}` : ""}`;
-  if (data.status === "ready") return `${model} pronto · cache locale persistente`;
+  if (data.status === "ready") return `${model} ready · persistent local cache`;
   return null;
 }
 
-async function createLocalPipeline(task: "automatic-speech-recognition" | "text-generation", model: string, progress?: (message: string) => void): Promise<unknown> {
+async function createLocalPipeline(task: "automatic-speech-recognition" | "text-generation" | "object-detection", model: string, progress?: (message: string) => void): Promise<unknown> {
   const transformers = await import("@huggingface/transformers");
   configureModelDownloads(transformers.env);
   await preserveModelCache();
   const repository = remoteModelRepository(model);
   const cachedFiles = await cachedFilesForRepository(repository);
   setLocalModelStatus(model, "loading", cachedFiles.size
-    ? `Cache persistente su disco ${model} trovata · ${cachedFiles.size} file disponibili`
-    : `${import.meta.env.DEV ? "Cache persistente su disco" : "Cache locale"} ${model} vuota · download necessario solo questa volta`, progress);
+    ? `Persistent disk cache for ${model} found · ${cachedFiles.size} files available`
+    : `${import.meta.env.DEV ? "Persistent disk cache" : "Local cache"} for ${model} is empty · one-time download required`, progress);
   const reportProgress = (event: unknown) => {
     const message = modelProgressMessage(model, event, cachedFiles);
     if (message) setLocalModelStatus(model, "loading", message, progress);
@@ -126,13 +143,13 @@ async function createLocalPipeline(task: "automatic-speech-recognition" | "text-
   if (adapter) {
     const dtype = task === "text-generation" && adapter.features?.has("shader-f16") ? "q4f16" : "q4";
     try {
-      setLocalModelStatus(model, "loading", `Inizializzazione ${model} su WebGPU · ${dtype}`, progress);
+      setLocalModelStatus(model, "loading", `Initializing ${model} on WebGPU · ${dtype}`, progress);
       return await transformers.pipeline(task, repository, { dtype, device: "webgpu", progress_callback: reportProgress });
     } catch (error) {
-      setLocalModelStatus(model, "loading", `WebGPU non compatibile con ${model}: ${error instanceof Error ? error.message : String(error)} · nuovo tentativo WASM`, progress);
+      setLocalModelStatus(model, "loading", `WebGPU is not compatible with ${model}: ${localModelErrorMessage(error)} · retrying with WASM`, progress);
     }
   }
-  setLocalModelStatus(model, "loading", `Inizializzazione ${model} su WASM · q4`, progress);
+  setLocalModelStatus(model, "loading", `Initializing ${model} on WASM · q4`, progress);
   return transformers.pipeline(task, repository, { dtype: "q4", device: "wasm", progress_callback: reportProgress });
 }
 
@@ -147,12 +164,13 @@ export async function getLocalTextGenerator(model: string, progress?: (message: 
   if (!pipeline) {
     pipeline = createLocalPipeline("text-generation", model, progress).then((generator) => {
       readyTextGenerators.add(model);
-      setLocalModelStatus(model, "ready", `${model} pronto per rispondere`, progress);
+      setLocalModelStatus(model, "ready", `${model} ready for responses`, progress);
       return generator;
     }).catch((error: unknown) => {
       textGeneratorPromises.delete(model); readyTextGenerators.delete(model);
-      setLocalModelStatus(model, "error", `${model} non disponibile: ${error instanceof Error ? error.message : String(error)}`, progress);
-      throw error;
+      const message = localModelErrorMessage(error);
+      setLocalModelStatus(model, "error", `${model} unavailable: ${message}`, progress);
+      throw new Error(message, { cause: error });
     });
     textGeneratorPromises.set(model, pipeline);
   } else if (progress) {
@@ -165,12 +183,34 @@ export function isLocalTextGeneratorReady(model: string): boolean {
   return readyTextGenerators.has(model);
 }
 
+export type LocalObjectDetector = (input: unknown, options?: Record<string, unknown>) => Promise<unknown>;
+
+/** Lazy, cached DETR object detector. WebGPU is attempted first and the pipeline
+ * falls back to WASM inside createLocalPipeline; failed promises are evicted so a
+ * retry from the panel can recover after a transient model/cache error. */
+export async function getLocalObjectDetector(model = "detr-resnet-50", progress?: (message: string) => void): Promise<LocalObjectDetector> {
+  let pipeline = objectDetectorPromises.get(model);
+  if (!pipeline) {
+    pipeline = createLocalPipeline("object-detection", model, progress).then((detector) => {
+      setLocalModelStatus(model, "ready", `${model} ready for object detection`, progress);
+      return detector;
+    }).catch((error: unknown) => {
+      objectDetectorPromises.delete(model);
+      const message = localModelErrorMessage(error);
+      setLocalModelStatus(model, "error", `${model} unavailable: ${message}`, progress);
+      throw new Error(message, { cause: error });
+    });
+    objectDetectorPromises.set(model, pipeline);
+  } else if (progress) progress(getLocalModelStatus(model).message);
+  return pipeline as Promise<LocalObjectDetector>;
+}
+
 export async function warmLocalTextGenerator(model: string, progress?: (message: string) => void): Promise<boolean> {
   try {
     await getLocalTextGenerator(model, progress);
     return true;
   } catch {
-    progress?.(`${model} non disponibile · uso knowledge base locale`);
+    progress?.(`${model} unavailable · using local knowledge base`);
     return false;
   }
 }
@@ -184,7 +224,7 @@ export async function runLocalTextGeneration(generator: LocalTextGenerator, inpu
   const timer = globalThis.setTimeout(() => { timedOut = true; interrupt.interrupt(); }, timeoutMs);
   try {
     const output = await generator(input, { ...options, stopping_criteria: stoppingCriteria });
-    if (timedOut) throw new Error(`Timeout modello locale dopo ${Math.round(timeoutMs / 1_000)} secondi`);
+    if (timedOut) throw new Error(`Local model timed out after ${Math.round(timeoutMs / 1_000)} seconds`);
     return output;
   } finally {
     globalThis.clearTimeout(timer);

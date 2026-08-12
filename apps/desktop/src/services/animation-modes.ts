@@ -5,8 +5,8 @@ export interface AnimationModeDefinition {
   id: string;
   label: string;
   description: string;
-  generator: "instrumentalFalling" | "newYorkStreets" | "coverSphere" | "stereoUnfold" | "walkingCube" | "portraitLandscape" | "pixelArt" | "teddyWalk" | "teddySing" | "proSubtitles" | "pixelsSub" | "staticWatermark" | "upscaler" | "videoEditor" | "aiQuantizer";
-  panel: "instrumentalObjects" | "newYorkStreets" | "coverSphere" | "stereoUnfold" | "walkingCube" | "portraitLandscape" | "pixelArt" | "teddyWalk" | "teddySing" | "proSubtitles" | "pixelsSub" | "staticWatermark" | "upscaler" | "videoEditor" | "aiQuantizer";
+  generator: "instrumentalFalling" | "newYorkStreets" | "coverSphere" | "stereoUnfold" | "walkingCube" | "portraitLandscape" | "teddyWalk" | "teddySing" | "proSubtitles" | "pixelsSub" | "backgroundAuto" | "staticWatermark" | "upscaler" | "videoEditor" | "aiQuantizer";
+  panel: "instrumentalObjects" | "newYorkStreets" | "coverSphere" | "stereoUnfold" | "walkingCube" | "portraitLandscape" | "teddyWalk" | "teddySing" | "proSubtitles" | "pixelsSub" | "backgroundAuto" | "staticWatermark" | "upscaler" | "videoEditor" | "aiQuantizer";
   objectTypes: readonly AnimationModeObjectType[];
   defaultBaseObjectTypes: readonly SceneObjectType[];
 }
@@ -68,14 +68,6 @@ export const animationModes: readonly AnimationModeDefinition[] = [{
   objectTypes: [],
   defaultBaseObjectTypes: ["platform"]
 }, {
-  id: "pixelArt",
-  label: "Pixel Art",
-  description: "Storie musicali in pixel art con volto personalizzato da una foto frontale, camminata frontale e scene narrative sincronizzate alla durata del brano.",
-  generator: "pixelArt",
-  panel: "pixelArt",
-  objectTypes: [],
-  defaultBaseObjectTypes: ["platform"]
-}, {
   id: "teddyWalk",
   label: "Teddy Walk",
   description: "Un orsacchiotto vissuto cammina lentamente e sempre di mezzo profilo su una strada realistica, con la cover audio-reattiva nello squarcio sul petto.",
@@ -105,6 +97,14 @@ export const animationModes: readonly AnimationModeDefinition[] = [{
   description: "Crea un livello di kinetic typography professionale sopra un video guida, con palette automatica, stile per parola ed export trasparente per il montaggio.",
   generator: "proSubtitles",
   panel: "proSubtitles",
+  objectTypes: [],
+  defaultBaseObjectTypes: ["platform"]
+}, {
+  id: "backgroundAuto",
+  label: "Background Auto Animation",
+  description: "Rileva automaticamente gli oggetti nella cover e li circonda con più Circular Spectrum audio-reattivi, mantenendo il risultato esportabile offline.",
+  generator: "backgroundAuto",
+  panel: "backgroundAuto",
   objectTypes: [],
   defaultBaseObjectTypes: ["platform"]
 }, {
@@ -153,8 +153,8 @@ export interface AnimationCategory { id: AnimationCategoryId; groups: readonly A
 export const animationCategories: readonly AnimationCategory[] = [{
   id: "soundAnimation",
   groups: [
-    { id: "visualizers", modeIds: ["instrumentalFalling", "coverSphere", "stereoUnfold", "walkingCube", "portraitLandscape"] },
-    { id: "stories", modeIds: ["pixelArt", "teddyWalk", "teddySing"] },
+    { id: "visualizers", modeIds: ["instrumentalFalling", "coverSphere", "stereoUnfold", "walkingCube", "portraitLandscape", "backgroundAuto"] },
+    { id: "stories", modeIds: ["teddyWalk", "teddySing"] },
     { id: "typography", modeIds: ["proSubtitles", "pixelsSub"] }
   ]
 }, {

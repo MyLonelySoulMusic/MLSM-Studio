@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createProject } from "@rbs/project-schema";
 import { registerUpscalerSourceFile } from "../services/upscaler-source-file";
+import { useProjectStore } from "../store/project-store";
 
 const exportUpscaledVideo = vi.hoisted(() => vi.fn().mockResolvedValue({}));
 const generateAiUpscalerPreview = vi.hoisted(() => vi.fn().mockResolvedValue(document.createElement("canvas")));
@@ -11,7 +12,7 @@ vi.mock("../services/upscaler-ai", () => ({ generateAiUpscalerPreview }));
 import { UpscalerPreview } from "./UpscalerPreview";
 
 describe("UpscalerPreview video export", () => {
-  beforeEach(() => { vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null); });
+  beforeEach(() => { useProjectStore.getState().newProject(); vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null); });
   afterEach(() => { cleanup(); exportUpscaledVideo.mockClear(); generateAiUpscalerPreview.mockClear(); vi.restoreAllMocks(); });
 
   it("collega l'azione globale al job del video intero usando il File originale", async () => {
@@ -56,5 +57,52 @@ describe("UpscalerPreview video export", () => {
     const signal = exportUpscaledVideo.mock.calls[0]?.[1] as AbortSignal;
     window.dispatchEvent(new Event("pagehide"));
     expect(signal.aborted).toBe(true);
+  });
+
+  it("sincronizza metadata e target proporzionale quando il video reale non è 16:9", async () => {
+    vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
+    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
+    const settings = { ...createProject().animation.upscaler, sourceUrl: "blob:metadata-video", sourceName: "metadata.mp4", sourceKind: "video" as const, sourceWidth: 1920, sourceHeight: 1080, durationSeconds: 8, finalWidth: 3840, finalHeight: 2160, lockAspectRatio: true };
+    useProjectStore.getState().updateUpscaler(settings);
+    const { container, rerender } = render(<UpscalerPreview settings={settings} />);
+    const item = container.querySelector("video")!;
+    Object.defineProperties(item, { videoWidth: { configurable: true, value: 1440 }, videoHeight: { configurable: true, value: 1080 }, duration: { configurable: true, value: 12.5 } });
+    fireEvent.loadedMetadata(item);
+    await waitFor(() => expect(useProjectStore.getState().project.animation.upscaler).toMatchObject({ sourceWidth: 1440, sourceHeight: 1080, durationSeconds: 12.5, finalWidth: 3840, finalHeight: 2880 }));
+    const updated = useProjectStore.getState().project.animation.upscaler;
+    rerender(<UpscalerPreview settings={updated} />);
+    act(() => window.dispatchEvent(new Event("upscaler:export")));
+    await waitFor(() => expect(exportUpscaledVideo).toHaveBeenCalledOnce());
+    expect(exportUpscaledVideo.mock.calls[0]?.[0].upscalerSettings).toMatchObject({ finalWidth: 3840, finalHeight: 2880 });
+  });
+
+  it("ignora il metadata event di una sorgente sostituita", async () => {
+    vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
+    const first = { ...createProject().animation.upscaler, sourceUrl: "blob:first-video", sourceName: "first.mp4", sourceKind: "video" as const, sourceWidth: 1920, sourceHeight: 1080, finalWidth: 3840, finalHeight: 2160, lockAspectRatio: true };
+    const second = { ...first, sourceUrl: "blob:second-video", sourceName: "second.mp4", sourceWidth: 1080, sourceHeight: 1920, finalWidth: 2160, finalHeight: 3840 };
+    useProjectStore.getState().updateUpscaler(first);
+    const { container, rerender } = render(<UpscalerPreview settings={first} />);
+    const staleVideo = container.querySelector("video")!;
+    useProjectStore.getState().updateUpscaler(second);
+    rerender(<UpscalerPreview settings={second} />);
+    Object.defineProperties(staleVideo, { videoWidth: { configurable: true, value: 1920 }, videoHeight: { configurable: true, value: 1080 }, duration: { configurable: true, value: 99 } });
+    fireEvent.loadedMetadata(staleVideo);
+    await waitFor(() => expect(useProjectStore.getState().project.animation.upscaler).toMatchObject({ sourceUrl: second.sourceUrl, sourceWidth: second.sourceWidth, sourceHeight: second.sourceHeight, durationSeconds: 0 }));
+    expect(useProjectStore.getState().project.animation.upscaler.finalHeight).toBe(second.finalHeight);
+  });
+
+  it("espone badge e stile preview con dimensioni intrinseche senza stiramento", () => {
+    vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
+    const settings = { ...createProject().animation.upscaler, sourceUrl: "blob:badge-video", sourceName: "badge.mp4", sourceKind: "video" as const, sourceWidth: 1440, sourceHeight: 1080, finalWidth: 1920, finalHeight: 1440 };
+    const { container } = render(<UpscalerPreview settings={settings} />);
+    const video = container.querySelector("video")!;
+    fireEvent.loadedData(video);
+    expect(screen.getByText("Originale 1440 × 1080")).toBeInTheDocument();
+    expect(screen.getByText("Output 1920 × 1440")).toBeInTheDocument();
+    const canvas = container.querySelector("canvas")!;
+    expect(canvas.style.width).toBe("auto");
+    expect(canvas.style.height).toBe("auto");
+    expect(canvas.style.maxWidth).toBe("100%");
+    expect(canvas.style.maxHeight).toBe("100%");
   });
 });

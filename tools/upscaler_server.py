@@ -9,6 +9,8 @@ import os
 import json
 import contextlib
 import io
+import math
+import re
 import shutil
 import subprocess
 import sys
@@ -188,6 +190,172 @@ def ffprobe_binary() -> str | None:
     binary = ffmpeg_binary()
     sibling = Path(binary).with_name("ffprobe") if binary else None
     return str(sibling) if sibling and sibling.exists() else shutil.which("ffprobe")
+
+
+def _ratio_value(value: object) -> float:
+    """Return a finite sample-aspect ratio from ffprobe's ``num:den`` value."""
+    if isinstance(value, (int, float)):
+        return float(value) if np.isfinite(value) and float(value) > 0 else 1.0
+    text = str(value or "1:1").strip()
+    if ":" in text:
+        numerator, denominator = text.split(":", 1)
+        try:
+            result = float(numerator) / float(denominator)
+        except (ValueError, ZeroDivisionError):
+            return 1.0
+        return result if np.isfinite(result) and result > 0 else 1.0
+    try:
+        result = float(text)
+    except ValueError:
+        return 1.0
+    return result if np.isfinite(result) and result > 0 else 1.0
+
+
+def _rotation_value(stream: dict[str, object]) -> int:
+    """Read legacy rotate tags and modern display-matrix side data."""
+    candidates: list[object] = []
+    tags = stream.get("tags")
+    if isinstance(tags, dict):
+        candidates.append(tags.get("rotate"))
+    side_data = stream.get("side_data_list")
+    if isinstance(side_data, list):
+        for item in side_data:
+            if isinstance(item, dict):
+                candidates.extend((item.get("rotation"), item.get("rotate"), item.get("displaymatrix")))
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        if isinstance(candidate, (int, float)):
+            angle = float(candidate)
+        else:
+            text = str(candidate)
+            match = re.search(r"rotation(?:\s+of)?\s*[:=]?\s*(-?\d+(?:\.\d+)?)", text, re.IGNORECASE)
+            if match:
+                angle = float(match.group(1))
+            else:
+                try:
+                    angle = float(text)
+                except ValueError:
+                    # ffprobe prints display matrices as three address-prefixed
+                    # rows, for example ``00000000: 0 -65536 0``. Parse only the
+                    # row payload so the addresses never become coefficients.
+                    matrix_rows: list[list[float]] = []
+                    for line in text.splitlines():
+                        if ":" not in line:
+                            continue
+                        entries = line.split(":", 1)[1]
+                        hex_values = re.findall(r"(?<![0-9A-Fa-f])[0-9A-Fa-f]{8}(?![0-9A-Fa-f])", entries)
+                        if any(re.search(r"[A-Fa-f]", value) for value in hex_values):
+                            row: list[float] = []
+                            for value in hex_values:
+                                raw = int(value, 16)
+                                if raw & 0x80000000:
+                                    raw -= 0x100000000
+                                row.append(raw / 65536.0)
+                            if len(row) >= 2:
+                                matrix_rows.append(row)
+                            continue
+                        values = re.findall(r"(?<![\w.])[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?![\w.])", entries)
+                        if len(values) >= 2:
+                            matrix_rows.append([float(value) for value in values])
+
+                    # Keep compatibility with unprefixed decimal matrices and
+                    # the signed 16.16 hexadecimal form used by some ffprobe
+                    # versions/wrappers.
+                    if not matrix_rows:
+                        values = re.findall(r"(?<![\w.])[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?![\w.])", text)
+                        if len(values) >= 2:
+                            matrix_rows.append([float(value) for value in values])
+                    if not matrix_rows:
+                        matrix_values: list[float] = []
+                        for entry in re.findall(r"(?<![0-9A-Fa-f])[0-9A-Fa-f]{8}(?![0-9A-Fa-f])", text):
+                            raw = int(entry, 16)
+                            if raw & 0x80000000:
+                                raw -= 0x100000000
+                            matrix_values.append(raw / 65536.0)
+                        if len(matrix_values) >= 2:
+                            matrix_rows.append(matrix_values)
+                    if not matrix_rows:
+                        continue
+                    try:
+                        # The first row contains the 2D transform coefficients
+                        # a and b; atan2(b, a) recovers its rotation.
+                        angle = math.degrees(math.atan2(matrix_rows[0][1], matrix_rows[0][0]))
+                    except (TypeError, ValueError):
+                        continue
+        if np.isfinite(angle):
+            normalized = int(round(angle / 90.0) * 90) % 360
+            return normalized
+    return 0
+
+
+def parse_ffprobe_geometry(payload: dict[str, object]) -> dict[str, object]:
+    """Parse display geometry from a ffprobe JSON response.
+
+    ``width``/``height`` are coded dimensions; ``display_*`` account for SAR and
+    quarter-turn rotation. Keeping this helper pure makes odd mobile-video
+    metadata testable without invoking ffmpeg.
+    """
+    streams = payload.get("streams") if isinstance(payload, dict) else None
+    stream = streams[0] if isinstance(streams, list) and streams and isinstance(streams[0], dict) else {}
+    width = int(stream.get("width") or 0)
+    height = int(stream.get("height") or 0)
+    if width <= 0 or height <= 0:
+        raise ValueError("ffprobe non ha restituito width/height del video")
+    sar_text = str(stream.get("sample_aspect_ratio") or "1:1")
+    sar = _ratio_value(sar_text)
+    rotation = _rotation_value(stream)
+    quarter_turn = rotation % 180 == 90
+    if quarter_turn:
+        display_width, display_height = height, width
+        display_aspect_ratio = height / max(1e-9, width * sar)
+    else:
+        display_width, display_height = width, height
+        display_aspect_ratio = (width * sar) / max(1e-9, height)
+    return {
+        "width": width,
+        "height": height,
+        "sample_aspect_ratio": sar_text if ":" in sar_text else "1:1",
+        "sample_aspect_ratio_value": sar,
+        "rotation": rotation,
+        "display_width": display_width,
+        "display_height": display_height,
+        "display_aspect_ratio": display_aspect_ratio,
+    }
+
+
+def resolve_video_dimensions(requested_width: int, requested_height: int, geometry: dict[str, object] | None, preserve_aspect_ratio: bool) -> tuple[int, int]:
+    """Resolve an even, bounded output size using requested width as the axis."""
+    width = max(64, min(16384, int(round(max(1, requested_width) / 2) * 2)))
+    height = max(64, min(16384, int(round(max(1, requested_height) / 2) * 2)))
+    if preserve_aspect_ratio and geometry:
+        dar = float(geometry.get("display_aspect_ratio") or 0)
+        if np.isfinite(dar) and dar > 0:
+            height = max(64, min(16384, int(round(width / dar / 2) * 2)))
+    return width, height
+
+
+def _frame_extraction_filter() -> str:
+    """Square pixels using the decoded frame SAR after ffmpeg autorotation."""
+    return "scale=trunc(iw*sar/2)*2:ih,setsar=1"
+
+
+def probe_video_geometry(path: Path) -> dict[str, object]:
+    probe = ffprobe_binary()
+    if not probe:
+        raise RuntimeError("ffprobe non disponibile: impossibile determinare la geometria del video")
+    result = subprocess.run([
+        probe, "-v", "error", "-select_streams", "v:0", "-show_streams",
+        "-show_entries", "stream=width,height,sample_aspect_ratio:stream_tags=rotate:stream_side_data=rotation,displaymatrix",
+        "-of", "json", str(path)
+    ], capture_output=True, check=False)
+    if result.returncode != 0:
+        detail = (result.stderr or b"").decode("utf-8", "replace").strip()[-500:]
+        raise RuntimeError(f"ffprobe non riesce a leggere il video: {detail or 'nessun dettaglio disponibile'}")
+    try:
+        return parse_ffprobe_geometry(json.loads(result.stdout or b"{}"))
+    except (ValueError, json.JSONDecodeError) as error:
+        raise RuntimeError("ffprobe non ha restituito una geometria video valida") from error
 
 
 def rife_available() -> bool:
@@ -372,7 +540,7 @@ def process_video_upscale_job(job_id: str) -> None:
         update_video_job(job_id, phase="extracting", phaseLabel="Estrazione di tutti i frame originali", progress=0.01)
         run_checked([
             binary, "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", str(source),
-            "-vsync", "0", str(originals / "frame-%08d.png")
+            "-vf", _frame_extraction_filter(), "-vsync", "0", str(originals / "frame-%08d.png")
         ])
         original_frames = sorted(originals.glob("frame-*.png"))
         if not original_frames:
@@ -459,8 +627,8 @@ def process_video_upscale_job(job_id: str) -> None:
         run_checked([
             binary, "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
             "-safe", "0", "-f", "concat", "-i", str(manifest),
-            "-i", str(source), "-map", "0:v:0", "-map", "1:a?", "-map_metadata", "1",
-            "-c:v", "libx264", "-preset", "slow", "-crf", crf, "-pix_fmt", "yuv420p",
+            "-i", str(source), "-map", "0:v:0", "-map", "1:a?", "-map_metadata", "-1",
+            "-vf", "setsar=1", "-metadata:s:v:0", "rotate=0", "-c:v", "libx264", "-preset", "slow", "-crf", crf, "-pix_fmt", "yuv420p",
             "-fps_mode", "vfr", "-c:a", "aac", "-b:a", "320k", "-shortest", "-movflags", "+faststart", str(result_path)
         ])
         if video_job_cancelled(job_id):
@@ -473,6 +641,16 @@ def process_video_upscale_job(job_id: str) -> None:
         if encoded_frames != total:
             result_path.unlink(missing_ok=True)
             raise RuntimeError(f"Controllo anti-drop fallito: il risultato contiene {encoded_frames}/{total} frame")
+        encoded_geometry = probe_video_geometry(result_path)
+        encoded_width = int(encoded_geometry["width"])
+        encoded_height = int(encoded_geometry["height"])
+        encoded_sar = float(encoded_geometry["sample_aspect_ratio_value"])
+        if encoded_width != width or encoded_height != height or not np.isclose(encoded_sar, 1.0, atol=1e-6) or int(encoded_geometry["rotation"]) % 360 != 0:
+            result_path.unlink(missing_ok=True)
+            raise RuntimeError(
+                f"Controllo geometria fallito: ottenuto {encoded_width}x{encoded_height}, "
+                f"SAR {encoded_geometry['sample_aspect_ratio']}, rotazione {encoded_geometry['rotation']}"
+            )
         update_video_job(
             job_id,
             phase="ready",
@@ -482,6 +660,10 @@ def process_video_upscale_job(job_id: str) -> None:
             totalFrames=total,
             resultPath=str(result_path),
             resultBytes=result_path.stat().st_size,
+            effectiveWidth=encoded_width,
+            effectiveHeight=encoded_height,
+            sampleAspectRatio=encoded_geometry["sample_aspect_ratio"],
+            rotation=encoded_geometry["rotation"],
             elapsedSeconds=time.monotonic() - started,
         )
         log_upscaler_event("backend", "job-ready", jobId=job_id, totalFrames=total, resultBytes=result_path.stat().st_size, elapsedSeconds=time.monotonic() - started)
@@ -496,9 +678,9 @@ def process_video_upscale_job(job_id: str) -> None:
 async def create_video_upscale_job(
     file: UploadFile = File(...), model: str = Form(...), backend: str = Form("auto"),
     tile: int = Form(256), width: int = Form(...), height: int = Form(...),
-    tta: bool = Form(False), quality: str = Form("maximum"), client_id: str = Form("")
+    tta: bool = Form(False), quality: str = Form("maximum"), client_id: str = Form(""), preserve_aspect_ratio: bool = Form(True)
 ):
-    log_upscaler_event("backend", "upload-received", fileName=file.filename, model=model, backend=backend, target=f"{width}x{height}", quality=quality)
+    log_upscaler_event("backend", "upload-received", fileName=file.filename, model=model, backend=backend, target=f"{width}x{height}", quality=quality, preserveAspectRatio=preserve_aspect_ratio)
     if model != "canvas" and model not in MODELS:
         raise HTTPException(400, "Modello video sconosciuto")
     if model != "canvas" and not target(model).exists():
@@ -525,6 +707,12 @@ async def create_video_upscale_job(
         raise
     finally:
         await file.close()
+    try:
+        source_geometry = probe_video_geometry(source)
+        effective_width, effective_height = resolve_video_dimensions(width, height, source_geometry, preserve_aspect_ratio)
+    except Exception as error:
+        shutil.rmtree(workspace, ignore_errors=True)
+        raise HTTPException(400, f"Impossibile determinare la geometria del video: {error}") from error
     with video_job_lock:
         cutoff = time.time() - 3600
         for stale_client in [key for key, cancelled_at in cancelled_video_clients.items() if cancelled_at < cutoff]:
@@ -539,7 +727,9 @@ async def create_video_upscale_job(
         "originalFramesDirectory": str(workspace / "original-frames"),
         "upscaledFramesDirectory": str(workspace / "upscaled-frames"),
         "sourcePath": str(source), "model": model, "backend": backend, "tile": tile,
-        "width": width, "height": height, "tta": tta, "quality": quality,
+        "requestedWidth": width, "requestedHeight": height,
+        "width": effective_width, "height": effective_height, "preserveAspectRatio": preserve_aspect_ratio,
+        "sourceGeometry": source_geometry, "tta": tta, "quality": quality,
         "clientId": client_id,
         "cancelRequested": False, "cancelled": False,
     }

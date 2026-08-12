@@ -53,7 +53,7 @@ export const applicationHelpKnowledgeBase: readonly ApplicationHelpArticle[] = [
   title: "Modalità legacy New York Streets",
   modeIds: ["newYorkStreets"],
   keywords: ["new york", "streets", "legacy", "biglie", "gara", "tombino", "fogne", "volantini"],
-  content: "New York Streets non compare più nel selettore per creare nuovi progetti, ma resta supportata quando si apre un progetto precedente. La camera segue la biglia principale, mentre le secondarie hanno corsie e ritmo indipendenti. Il percorso passa dalla strada al tombino e poi alla fognatura inferiore. Numero e colori delle biglie e immagini dei volantini restano modificabili dal pannello sinistro. Per un nuovo lavoro urbano in pixel art usa invece Pixel Art: Walking Through New York."
+  content: "New York Streets non compare più nel selettore per creare nuovi progetti, ma resta supportata quando si apre un progetto precedente. La camera segue la biglia principale, mentre le secondarie hanno corsie e ritmo indipendenti. Il percorso passa dalla strada al tombino e poi alla fognatura inferiore. Numero e colori delle biglie e immagini dei volantini restano modificabili dal pannello sinistro."
 }, {
   id: "cover-sphere",
   title: "Modalità Cover Sphere Visualizer",
@@ -72,12 +72,6 @@ export const applicationHelpKnowledgeBase: readonly ApplicationHelpArticle[] = [
   modeIds: ["walkingCube"],
   keywords: ["cube", "animation", "cubo", "vetro", "facce", "rotazione", "loop", "palette", "spettro", "sfondo", "fresnel"],
   content: "Carica l’immagine principale nel pannello sinistro: viene adattata senza tagli a tutte le sei facce del cubo. La cover mantiene luminosità e saturazione originali perché è separata dal materiale del vetro. Puoi anche caricare una fotografia di sfondo, adattata in modalità cover, e regolarne l’oscuramento. Il cubo rimane sospeso al centro, senza piano d’appoggio, spostamenti, split o rimbalzi, e compie rotazioni morbide su assi combinati X/Y/Z seguendo i beat analizzati. Il vetro usa trasmissione PBR, riflessi ambientali, bordo Fresnel e tre luci dedicate senza coprire la cover. In basso, 48 bande spettrali con indicatori di picco seguono realmente il brano. Increspature d’acqua concentriche si propagano sui beat con intensità regolabile; alone, anelli orbitali, particelle profonde e light sweep sono attivabili singolarmente. La palette automatica ricava dalla cover corrente i colori di ogni elemento audiovisivo. Orientamento ed effetti tornano allo stato iniziale sul frame finale per produrre un loop chiuso."
-}, {
-  id: "pixel-art",
-  title: "Modalità Pixel Art: Walking Through New York",
-  modeIds: ["pixelArt"],
-  keywords: ["pixel", "art", "new york", "bar", "locale", "insegna", "led", "personaggio", "cammina", "semaforo"],
-  content: "La felpa del protagonista è sempre nera. Carica una fotografia frontale, centrata e ben illuminata: viene elaborata localmente in uno sprite pixel nitido e inserita nel cappuccio. La camminata è frontale, continua e usa braccia alternate, appoggio dei piedi e oscillazione del busto senza ginocchia invertite. Carica la cover per derivare i colori di pantaloni e neon, poi scrivi il Nome insegna nella sezione Locale. L’ingresso avviene sempre a metà del brano senza alterare la velocità del passo. Nel bar il nome scelto compare su una grande insegna LED luminosa e audio-reattiva. Una fascia fissa in basso mostra 48 bande pixel L/R e un vectorscope stereo reale; viene disegnata nella stessa scena ed è quindi inclusa nell’export."
 }, {
   id: "portrait-landscape",
   title: "Modalità From 9:16 to 16:9",

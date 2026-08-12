@@ -6,7 +6,7 @@
   "build": { "beforeDevCommand": "npm run dev", "devUrl": "http://localhost:1420", "beforeBuildCommand": "npm run build", "frontendDist": "../dist" },
   "app": {
     "windows": [{ "title": "MLSM Studio — My Lonely Soul Music Studio", "width": 1440, "height": 920, "minWidth": 960, "minHeight": 680, "resizable": true }],
-    "security": { "csp": "default-src 'self'; script-src 'self' https://www.tiktok.com; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data: blob:; media-src 'self' blob:; frame-src blob: https://open.spotify.com https://www.youtube.com https://www.youtube-nocookie.com https://www.tiktok.com https://*.tiktok.com; connect-src ipc: http://ipc.localhost https://huggingface.co https://*.huggingface.co https://*.hf.co https://*.xethub.hf.co https://www.tiktok.com https://*.tiktok.com" }
+    "security": { "csp": "default-src 'self'; script-src 'self' https://www.tiktok.com; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data: blob:; media-src 'self' blob:; frame-src blob: https://open.spotify.com https://www.youtube.com https://www.youtube-nocookie.com https://www.tiktok.com https://*.tiktok.com; connect-src ipc: http://ipc.localhost https://storage.googleapis.com https://huggingface.co https://*.huggingface.co https://*.hf.co https://*.xethub.hf.co https://www.tiktok.com https://*.tiktok.com" }
   },
   "bundle": { "active": true, "targets": "all" }
 }

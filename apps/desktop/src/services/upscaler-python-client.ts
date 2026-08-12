@@ -14,6 +14,12 @@ export interface PythonVideoUpscaleStatus {
   tempDirectory: string;
   originalFramesDirectory: string;
   upscaledFramesDirectory: string;
+  requestedWidth?: number;
+  requestedHeight?: number;
+  effectiveWidth?: number;
+  effectiveHeight?: number;
+  sampleAspectRatio?: string;
+  preserveAspectRatio?: boolean;
   elapsedSeconds?: number;
   estimatedRemainingSeconds?: number | null;
   error?: string;
@@ -44,6 +50,21 @@ export function shouldUsePythonUpscaler(webExecutable: boolean, backend: Setting
 
 export function pythonUpscalerSupportsVideoJobs(health: PythonUpscalerHealth | null | undefined): boolean {
   return Boolean(health && (health.apiVersion ?? 0) >= 2 && health.capabilities?.videoJobs);
+}
+
+export function buildUpscalerVideoForm(source: Blob, sourceName: string, settings: Settings, quality: "draft" | "high" | "maximum", clientId: string): FormData {
+  const form = new FormData();
+  form.set("file", source, sourceName || "source.mp4");
+  form.set("model", settings.model);
+  form.set("backend", settings.backend);
+  form.set("tile", String(settings.tileSize));
+  form.set("width", String(settings.finalWidth));
+  form.set("height", String(settings.finalHeight));
+  form.set("tta", String(settings.tta));
+  form.set("preserve_aspect_ratio", String(settings.lockAspectRatio));
+  form.set("quality", quality);
+  form.set("client_id", clientId);
+  return form;
 }
 
 async function prepareModel(model: Settings["model"], onProgress: (status: ModelLoadProgress) => void, signal?: AbortSignal): Promise<void> {
@@ -124,16 +145,7 @@ export async function generatePythonUpscaledVideo(options: {
   }
   if (!source.size) throw new Error("Il file video sorgente è vuoto o non è più disponibile. Ricaricalo e riprova.");
   reportUpscalerDiagnostic("source-ready", { sourceName: options.sourceName, bytes: source.size, mimeType: source.type, directFile: Boolean(options.sourceBlob) });
-  const form = new FormData();
-  form.set("file", source, options.sourceName || "source.mp4");
-  form.set("model", options.settings.model);
-  form.set("backend", options.settings.backend);
-  form.set("tile", String(options.settings.tileSize));
-  form.set("width", String(options.settings.finalWidth));
-  form.set("height", String(options.settings.finalHeight));
-  form.set("tta", String(options.settings.tta));
-  form.set("quality", options.quality);
-  form.set("client_id", clientId);
+  const form = buildUpscalerVideoForm(source, options.sourceName, options.settings, options.quality, clientId);
   reportUpscalerDiagnostic("upload-start", { bytes: source.size, endpoint: "/upscale/video/jobs" });
   let status: PythonVideoUpscaleStatus | undefined;
   const cancelRemote = () => {

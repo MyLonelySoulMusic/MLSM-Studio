@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type SyntheticEvent } from "react";
 import type { RhythmBallProject } from "@rbs/project-schema";
-import { createUpscalerFrameRenderer } from "../services/upscaler-renderer";
+import { createUpscalerFrameRenderer, resolveUpscalerPreviewSize, resolveUpscalerTarget } from "../services/upscaler-renderer";
 import { generateAiUpscalerPreview, type ModelLoadProgress } from "../services/upscaler-ai";
 import { upscalerModels } from "../services/upscaler-runtime";
 import { exportUpscaledVideo, type UpscalerVideoExportProgress } from "../services/upscaler-video-exporter";
@@ -25,10 +25,39 @@ function formatRemaining(milliseconds: number | undefined): string {
 export function UpscalerPreview({ settings, fullscreen = false }: { settings: Settings; fullscreen?: boolean }) {
   const canvas = useRef<HTMLCanvasElement>(null); const scrollHost = useRef<HTMLDivElement>(null); const video = useRef<HTMLVideoElement>(null); const image = useRef<HTMLImageElement | null>(null);
   const panStart = useRef<{ pointerId: number; x: number; y: number; left: number; top: number } | null>(null);
+  const sourceToken = useRef(""); const latestSettings = useRef(settings);
+  latestSettings.current = settings;
   const aiPreview = useRef<HTMLCanvasElement | null>(null); const previewController = useRef<AbortController | null>(null); const exportController = useRef<AbortController | null>(null); const exportAction = useRef<() => void>(() => undefined); const projectName = useProjectStore((state) => state.project.project.name); const update = useProjectStore((state) => state.updateUpscaler);
   const [ready, setReady] = useState(false); const [playing, setPlaying] = useState(false); const [time, setTime] = useState(0); const [exporting, setExporting] = useState(false); const [videoProgress, setVideoProgress] = useState<UpscalerVideoExportProgress | null>(null); const [error, setError] = useState(""); const [previewGenerated, setPreviewGenerated] = useState(false); const [generatingPreview, setGeneratingPreview] = useState(false); const [modelProgress, setModelProgress] = useState<ModelLoadProgress | null>(null); const [previewRevision, setPreviewRevision] = useState(0); const [detailZoom, setDetailZoom] = useState(1); const [panning, setPanning] = useState(false);
-  const previewSize = useMemo(() => { const ratio = settings.finalWidth / Math.max(1, settings.finalHeight); return ratio >= 1 ? { width: 1400, height: Math.max(2, Math.round(1400 / ratio)) } : { width: Math.max(2, Math.round(1400 * ratio)), height: 1400 }; }, [settings.finalHeight, settings.finalWidth]);
+  const previewSize = useMemo(() => resolveUpscalerPreviewSize(settings.finalWidth, settings.finalHeight), [settings.finalHeight, settings.finalWidth]);
+  const handleVideoMetadata = useCallback((event: SyntheticEvent<HTMLVideoElement>) => {
+    const item = event.currentTarget; const current = latestSettings.current;
+    const expectedSource = sourceToken.current;
+    const loadedSource = item.currentSrc || item.src;
+    // A video element can dispatch a late metadata event for the previous blob
+    // after React has already switched to a new source. Never let that event
+    // overwrite the dimensions belonging to the current source.
+    if (item !== video.current || !expectedSource || !loadedSource || (loadedSource !== expectedSource && loadedSource !== new URL(expectedSource, document.baseURI).href)) return;
+    const sourceWidth = Math.round(item.videoWidth); const sourceHeight = Math.round(item.videoHeight);
+    const durationSeconds = Number.isFinite(item.duration) && item.duration > 0 ? item.duration : 0;
+    const patch: Partial<Settings> = { durationSeconds };
+    if (sourceWidth > 0 && sourceHeight > 0) {
+      patch.sourceWidth = sourceWidth; patch.sourceHeight = sourceHeight;
+      if (current.lockAspectRatio) {
+        // Keep the user-selected width as the authoritative axis. If an older
+        // project has no usable source metadata, fall back to its explicit scale.
+        const preferredWidth = current.finalWidth > 0 ? current.finalWidth : sourceWidth * current.scale;
+        const preferredScale = preferredWidth > 0 && sourceWidth > 0 ? preferredWidth / sourceWidth : current.scale;
+        const target = resolveUpscalerTarget(sourceWidth, sourceHeight, preferredScale);
+        patch.finalWidth = target.width; patch.finalHeight = target.height; patch.scale = target.width / sourceWidth;
+      }
+    }
+    const changed = patch.sourceWidth !== current.sourceWidth || patch.sourceHeight !== current.sourceHeight || patch.durationSeconds !== current.durationSeconds || patch.finalWidth !== current.finalWidth || patch.finalHeight !== current.finalHeight || patch.scale !== current.scale;
+    if (changed) update(patch);
+    setReady(true);
+  }, [update]);
   useEffect(() => {
+    sourceToken.current = settings.sourceUrl ?? "";
     previewController.current?.abort(); aiPreview.current = null; setReady(false); setPlaying(false); setPreviewGenerated(false); setModelProgress(null); image.current = null; const item = video.current;
     if (!settings.sourceUrl) return;
     if (settings.sourceKind === "image") { let active = true; void loadImage(settings.sourceUrl).then((loaded) => { if (active) { image.current = loaded; setReady(true); } }).catch((reason: unknown) => { if (active) setError(reason instanceof Error ? reason.message : String(reason)); }); return () => { active = false; }; }
@@ -89,9 +118,9 @@ export function UpscalerPreview({ settings, fullscreen = false }: { settings: Se
   const resetZoom = () => { setDetailZoom(1); const host = scrollHost.current; if (host) { host.scrollLeft = 0; host.scrollTop = 0; } };
   const endPan = (element: HTMLDivElement, pointerId: number) => { if (typeof element.hasPointerCapture === "function" && element.hasPointerCapture(pointerId)) element.releasePointerCapture(pointerId); panStart.current = null; setPanning(false); };
   return <div className="upscaler-preview">
-    <video ref={video} playsInline preload="metadata" onLoadedData={() => setReady(true)} onLoadedMetadata={() => setReady(true)} onTimeUpdate={(event) => setTime(event.currentTarget.currentTime)} onEnded={() => setPlaying(false)} />
-    {settings.sourceUrl ? <div ref={scrollHost} className={`upscaler-canvas-scroll${detailZoom > 1 ? " is-zoomed" : ""}${panning ? " is-panning" : ""}`} title={detailZoom > 1 ? "Trascina l’immagine per esplorare i dettagli" : undefined} onPointerDown={(event) => { if (detailZoom <= 1 || event.button !== 0) return; if (typeof event.currentTarget.setPointerCapture === "function") event.currentTarget.setPointerCapture(event.pointerId); panStart.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, left: event.currentTarget.scrollLeft, top: event.currentTarget.scrollTop }; setPanning(true); }} onPointerMove={(event) => { const start = panStart.current; if (!start || start.pointerId !== event.pointerId) return; event.currentTarget.scrollLeft = start.left - (event.clientX - start.x); event.currentTarget.scrollTop = start.top - (event.clientY - start.y); }} onPointerUp={(event) => endPan(event.currentTarget, event.pointerId)} onPointerCancel={(event) => endPan(event.currentTarget, event.pointerId)}><canvas ref={canvas} aria-label="Preview Upscaler" draggable={false} style={{ width: `${detailZoom * 100}%`, height: `${detailZoom * 100}%` }} /></div> : <div className="static-watermark-empty"><strong>Carica una foto o un video</strong><span>La preview mostrerà originale e versione migliorata alla stessa risoluzione finale.</span></div>}
-    {ready ? <div className="upscaler-preview-badges"><span>{previewGenerated ? (settings.comparisonMode === "split" ? "ORIGINALE  |  MIGLIORATO" : settings.comparisonMode.toUpperCase()) : "ORIGINALE · ANTEPRIMA NON GENERATA"}</span><span>{settings.finalWidth} × {settings.finalHeight}</span></div> : null}
+    <video key={settings.sourceUrl ?? "empty"} ref={video} playsInline preload="metadata" onLoadedData={(event) => { const source = event.currentTarget.currentSrc || event.currentTarget.src; if (event.currentTarget === video.current && sourceToken.current && (source === sourceToken.current || source === new URL(sourceToken.current, document.baseURI).href)) setReady(true); }} onLoadedMetadata={handleVideoMetadata} onTimeUpdate={(event) => setTime(event.currentTarget.currentTime)} onEnded={() => setPlaying(false)} />
+    {settings.sourceUrl ? <div ref={scrollHost} className={`upscaler-canvas-scroll${detailZoom > 1 ? " is-zoomed" : ""}${panning ? " is-panning" : ""}`} title={detailZoom > 1 ? "Trascina l’immagine per esplorare i dettagli" : undefined} onPointerDown={(event) => { if (detailZoom <= 1 || event.button !== 0) return; if (typeof event.currentTarget.setPointerCapture === "function") event.currentTarget.setPointerCapture(event.pointerId); panStart.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, left: event.currentTarget.scrollLeft, top: event.currentTarget.scrollTop }; setPanning(true); }} onPointerMove={(event) => { const start = panStart.current; if (!start || start.pointerId !== event.pointerId) return; event.currentTarget.scrollLeft = start.left - (event.clientX - start.x); event.currentTarget.scrollTop = start.top - (event.clientY - start.y); }} onPointerUp={(event) => endPan(event.currentTarget, event.pointerId)} onPointerCancel={(event) => endPan(event.currentTarget, event.pointerId)}><canvas ref={canvas} aria-label="Preview Upscaler" draggable={false} style={detailZoom > 1 ? { width: `${previewSize.width * detailZoom}px`, height: "auto" } : { width: "auto", height: "auto", maxWidth: "100%", maxHeight: "100%" }} /></div> : <div className="static-watermark-empty"><strong>Carica una foto o un video</strong><span>La preview mostrerà originale e versione migliorata alla stessa risoluzione finale.</span></div>}
+    {ready ? <div className="upscaler-preview-badges"><span>{previewGenerated ? (settings.comparisonMode === "split" ? "ORIGINALE  |  MIGLIORATO" : settings.comparisonMode.toUpperCase()) : "ORIGINALE · ANTEPRIMA NON GENERATA"}</span><span>Originale {settings.sourceWidth || "—"} × {settings.sourceHeight || "—"}</span><span>Output {settings.finalWidth} × {settings.finalHeight}</span></div> : null}
     {ready && settings.sourceKind === "video" && !exporting && !generatingPreview ? <div className="upscaler-video-actions" role="group" aria-label="Azioni upscaling video">
       <div className="upscaler-video-actions-copy"><strong>Upscaling video</strong><span>Elabora tutto il filmato oppure controlla prima il frame corrente.</span></div>
       <button className="upscaler-video-primary-action" type="button" onClick={() => void exportVideo()}>Avvia upscaling video completo</button>
@@ -108,7 +137,7 @@ export function UpscalerPreview({ settings, fullscreen = false }: { settings: Se
     {exporting ? <div className="upscaler-video-frame-progress" role="status" aria-live="polite">
       <header><strong>{videoProgress?.phaseLabel ?? "Preparazione job video locale"}</strong><span>{Math.round((videoProgress?.progress ?? 0) * 100)}%</span><button type="button" onClick={() => exportController.current?.abort()}>Annulla</button></header>
       <progress max="1" value={videoProgress?.progress ?? 0} />
-      <div className="upscaler-frame-counters"><span>Frame completati <b>{videoProgress?.currentFrame ?? 0}</b> / <b>{videoProgress?.totalFrames || "—"}</b></span><span>{formatRemaining(videoProgress?.estimatedRemainingMs)}</span></div>
+      <div className="upscaler-frame-counters"><span>Frame completati <b>{videoProgress?.currentFrame ?? 0}</b> / <b>{videoProgress?.totalFrames || "—"}</b></span><span>{videoProgress?.width && videoProgress?.height ? `Output ${videoProgress.width} × ${videoProgress.height} · ` : ""}{formatRemaining(videoProgress?.estimatedRemainingMs)}</span></div>
       {videoProgress?.originalFramesDirectory ? <p><strong>Frame originali:</strong><code>{videoProgress.originalFramesDirectory}</code></p> : videoProgress?.tempDirectory ? <p><strong>Cartella temp:</strong><code>{videoProgress.tempDirectory}</code></p> : null}
       <small>Ogni frame originale viene salvato prima dell’upscaling; il video viene ricomposto soltanto al termine del conteggio completo.</small>
     </div> : null}

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ChangeEvent } from "react";
 import { useProjectStore } from "../store/project-store";
 import { backendLabel, detectUpscalerHardware, effectiveUpscalerBackend, upscalerModels, type UpscalerHardware } from "../services/upscaler-runtime";
-import { fitUpscalerPreset, resolvedUpscalerDimensions } from "../services/upscaler-renderer";
+import { fitUpscalerPreset, resolveUpscalerTarget, resolvedUpscalerDimensions } from "../services/upscaler-renderer";
 import { registerUpscalerSourceFile } from "../services/upscaler-source-file";
 
 function mediaMetadata(file: File, url: string): Promise<{ kind: "image" | "video"; width: number; height: number; duration: number }> {
@@ -28,7 +28,8 @@ export function UpscalerPanel() {
     try { metadata = await mediaMetadata(file, url); } catch (error) { URL.revokeObjectURL(url); throw error; }
     if (settings.sourceUrl?.startsWith("blob:")) URL.revokeObjectURL(settings.sourceUrl);
     registerUpscalerSourceFile(url, file);
-    const scale = selectedModel.nativeScale; const width = Math.min(16384, Math.max(64, Math.round(metadata.width * scale))); const height = Math.min(16384, Math.max(64, Math.round(metadata.height * scale)));
+    const scale = selectedModel.nativeScale; const dimensions = resolveUpscalerTarget(metadata.width, metadata.height, scale);
+    const { width, height } = dimensions;
     update({ sourceUrl: url, sourceName: file.name, sourceKind: metadata.kind, sourceWidth: metadata.width, sourceHeight: metadata.height, durationSeconds: metadata.duration, scale, finalWidth: width, finalHeight: height });
   };
   const setResolution = (key: "width" | "height", value: number) => {
@@ -37,7 +38,7 @@ export function UpscalerPanel() {
   };
   const selectModel = (modelId: typeof settings.model) => {
     const model = upscalerModels.find((item) => item.id === modelId) ?? selectedModel;
-    const dimensions = settings.sourceWidth && settings.sourceHeight ? { finalWidth: Math.min(16384, settings.sourceWidth * model.nativeScale), finalHeight: Math.min(16384, settings.sourceHeight * model.nativeScale) } : {};
+    const dimensions = settings.sourceWidth && settings.sourceHeight ? (() => { const target = resolveUpscalerTarget(settings.sourceWidth, settings.sourceHeight, model.nativeScale); return { finalWidth: target.width, finalHeight: target.height }; })() : {};
     update({ model: model.id, scale: model.nativeScale, ...dimensions });
   };
   const selectPreset = (landscapeWidth: number, landscapeHeight: number) => {

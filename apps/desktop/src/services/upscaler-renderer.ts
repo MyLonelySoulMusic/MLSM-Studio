@@ -2,14 +2,55 @@ import type { RhythmBallProject } from "@rbs/project-schema";
 
 export type UpscalerSettings = RhythmBallProject["animation"]["upscaler"];
 
+export function formatUpscalerViewportFooter(settings: Pick<UpscalerSettings, "sourceWidth" | "sourceHeight" | "finalWidth" | "finalHeight">): string {
+  return `● Upscaler · Originale ${settings.sourceWidth || "—"} × ${settings.sourceHeight || "—"} · Output ${settings.finalWidth} × ${settings.finalHeight}`;
+}
+
+export function resolveUpscalerPreviewSize(width: number, height: number, maxDimension = 1400): { width: number; height: number } {
+  const ratio = safePositive(width, 1) / safePositive(height, 1);
+  const edge = Math.max(2, Math.round(safePositive(maxDimension, 1400)));
+  return ratio >= 1
+    ? { width: edge, height: Math.max(2, Math.round(edge / ratio)) }
+    : { width: Math.max(2, Math.round(edge * ratio)), height: edge };
+}
+
 function clamp(value: number, minimum: number, maximum: number): number { return Math.max(minimum, Math.min(maximum, value)); }
 
-export function resolvedUpscalerDimensions(settings: Pick<UpscalerSettings, "sourceWidth" | "sourceHeight" | "finalWidth" | "finalHeight" | "lockAspectRatio">, changed: "width" | "height" = "width"): { width: number; height: number } {
-  let width = Math.round(clamp(settings.finalWidth, 64, 16384)); let height = Math.round(clamp(settings.finalHeight, 64, 16384));
+export const UPSCALER_MIN_DIMENSION = 64;
+export const UPSCALER_MAX_DIMENSION = 16384;
+
+function safePositive(value: number, fallback: number): number {
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function encoderDimension(value: number): number {
+  const safe = safePositive(value, UPSCALER_MIN_DIMENSION);
+  return clamp(Math.round(safe / 2) * 2, UPSCALER_MIN_DIMENSION, UPSCALER_MAX_DIMENSION);
+}
+
+/**
+ * Resolves a source size and requested scale to an encoder-safe target.
+ * Both limits are applied to the same scale factor so the source ratio is
+ * never changed while fitting the output in the supported range.
+ */
+export function resolveUpscalerTarget(sourceWidth: number, sourceHeight: number, scale: number): { width: number; height: number } {
+  const width = safePositive(sourceWidth, 0); const height = safePositive(sourceHeight, 0);
+  if (!width || !height) return { width: UPSCALER_MIN_DIMENSION, height: UPSCALER_MIN_DIMENSION };
+  const requestedScale = safePositive(scale, 1);
+  const maximumScale = Math.min(UPSCALER_MAX_DIMENSION / width, UPSCALER_MAX_DIMENSION / height);
+  const minimumScale = Math.max(UPSCALER_MIN_DIMENSION / width, UPSCALER_MIN_DIMENSION / height);
+  // Extremely wide/tall sources can make the lower and upper bounds overlap
+  // impossibly. In that case the maximum bound wins and preserves the ratio.
+  const resolvedScale = maximumScale < minimumScale ? maximumScale : clamp(requestedScale, minimumScale, maximumScale);
+  return { width: encoderDimension(width * resolvedScale), height: encoderDimension(height * resolvedScale) };
+}
+
+export function resolvedUpscalerDimensions(settings: Pick<UpscalerSettings, "sourceWidth" | "sourceHeight" | "finalWidth" | "finalHeight" | "lockAspectRatio"> & Partial<Pick<UpscalerSettings, "scale">>, changed: "width" | "height" = "width"): { width: number; height: number } {
+  const width = encoderDimension(settings.finalWidth); const height = encoderDimension(settings.finalHeight);
   if (!settings.lockAspectRatio || !(settings.sourceWidth > 0 && settings.sourceHeight > 0)) return { width, height };
-  const ratio = settings.sourceWidth / settings.sourceHeight;
-  if (changed === "width") height = Math.round(clamp(width / ratio, 64, 16384)); else width = Math.round(clamp(height * ratio, 64, 16384));
-  return { width, height };
+  const preferred = changed === "width" ? settings.finalWidth : settings.finalHeight;
+  const requestedScale = Number.isFinite(preferred) && preferred > 0 ? (changed === "width" ? width / settings.sourceWidth : height / settings.sourceHeight) : safePositive(settings.scale ?? 1, 1);
+  return resolveUpscalerTarget(settings.sourceWidth, settings.sourceHeight, requestedScale);
 }
 
 export function fitUpscalerPreset(sourceWidth: number, sourceHeight: number, landscapeWidth: number, landscapeHeight: number): { width: number; height: number } {
@@ -17,7 +58,7 @@ export function fitUpscalerPreset(sourceWidth: number, sourceHeight: number, lan
   const portrait = safeSourceHeight > safeSourceWidth;
   const boundWidth = portrait ? landscapeHeight : landscapeWidth; const boundHeight = portrait ? landscapeWidth : landscapeHeight;
   const factor = Math.min(boundWidth / safeSourceWidth, boundHeight / safeSourceHeight);
-  const even = (value: number) => Math.max(64, Math.min(16384, Math.round(value / 2) * 2));
+  const even = (value: number) => encoderDimension(value);
   return { width: even(safeSourceWidth * factor), height: even(safeSourceHeight * factor) };
 }
 
