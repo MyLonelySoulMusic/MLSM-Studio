@@ -19,7 +19,7 @@ export interface BackgroundAutoRenderOptions {
 }
 export interface BackgroundAutoCoverTransform { scale: number; offsetX: number; offsetY: number; drawWidth: number; drawHeight: number }
 export interface BackgroundAutoCanvasBox { x: number; y: number; width: number; height: number; centerX: number; centerY: number }
-export interface ResolvedBackgroundAutoEffect { effect: BackgroundAutoSettings["effects"][number]; detection: BackgroundAutoSettings["detections"][number]; effectIndex: number; detectionIndex: number; palette: readonly string[]; color: string }
+export interface ResolvedBackgroundAutoEffect { effect: BackgroundAutoSettings["effects"][number]; detection: BackgroundAutoSettings["detections"][number] | null; effectIndex: number; detectionIndex: number; palette: readonly string[]; color: string }
 export interface BackgroundAutoOutputDimensions { width: number; height: number }
 
 const BACKGROUND_AUTO_MIN_DIMENSION = 64;
@@ -46,7 +46,7 @@ export function backgroundAutoContainTransform(sourceWidth: number, sourceHeight
 }
 
 function clampEvenDimension(value: number): number {
-  if (!Number.isFinite(value)) throw new Error("Background Auto resolution is invalid.");
+  if (!Number.isFinite(value)) throw new Error("Circular Spectrum Auto Detector resolution is invalid.");
   const rounded = Math.round(value / 2) * 2;
   return Math.max(BACKGROUND_AUTO_MIN_DIMENSION, Math.min(BACKGROUND_AUTO_MAX_DIMENSION, rounded));
 }
@@ -74,8 +74,8 @@ export function backgroundAutoRatioLabel(sourceWidth: number, sourceHeight: numb
  * this same ratio, while direct callers cannot accidentally reintroduce a
  * global 16:9 canvas for a portrait source. */
 export function backgroundAutoOutputDimensions(sourceWidth: number, sourceHeight: number, requestedWidth: number, requestedHeight: number): BackgroundAutoOutputDimensions {
-  if (!Number.isInteger(sourceWidth) || !Number.isInteger(sourceHeight) || sourceWidth <= 0 || sourceHeight <= 0) throw new Error("Background Auto source dimensions must be positive.");
-  if (!Number.isFinite(requestedWidth) || !Number.isFinite(requestedHeight) || requestedWidth <= 0 || requestedHeight <= 0) throw new Error("Background Auto resolution must be positive.");
+  if (!Number.isInteger(sourceWidth) || !Number.isInteger(sourceHeight) || sourceWidth <= 0 || sourceHeight <= 0) throw new Error("Circular Spectrum Auto Detector source dimensions must be positive.");
+  if (!Number.isFinite(requestedWidth) || !Number.isFinite(requestedHeight) || requestedWidth <= 0 || requestedHeight <= 0) throw new Error("Circular Spectrum Auto Detector resolution must be positive.");
   const width = clampEvenDimension(requestedWidth); const height = clampEvenDimension(requestedHeight);
   if (!preservesBackgroundAutoScale(sourceWidth, sourceHeight, width, height)) throw new Error(`Resolution ${width}×${height} does not preserve the ${backgroundAutoRatioLabel(sourceWidth, sourceHeight)} source ratio.`);
   return { width, height };
@@ -118,6 +118,7 @@ export function backgroundAutoConfigurationError(settings: BackgroundAutoSetting
   const detections = new Map(settings.detections.map((detection) => [detection.id, detection]));
   for (const effect of settings.effects) {
     if (!effect.enabled) continue;
+    if (effect.placementMode === "manual") continue;
     const detection = effect.detectionId ? detections.get(effect.detectionId) : undefined;
     if (!detection) return `The ${effect.label} effect is not associated with a detected object.`;
   }
@@ -128,10 +129,10 @@ export function resolveBackgroundAutoEffects(settings: BackgroundAutoSettings): 
   return settings.effects.flatMap((effect, effectIndex) => {
     if (!effect.enabled) return [];
     const detectionIndex = settings.detections.findIndex((candidate) => candidate.id === effect.detectionId);
-    const detection = settings.detections[detectionIndex];
-    if (!detection) return [];
-    const palette = effect.paletteMode === "auto" ? detectionPalette(settings, detection) : effect.palette;
-    return [{ effect, detection, effectIndex, detectionIndex, palette, color: effect.paletteMode === "auto" ? colorAt(palette, effectIndex) : effect.color }];
+    const detection = settings.detections[detectionIndex] ?? null;
+    if (!detection && effect.placementMode !== "manual") return [];
+    const palette = detection && effect.paletteMode === "auto" ? detectionPalette(settings, detection) : effect.palette;
+    return [{ effect, detection, effectIndex, detectionIndex: detectionIndex < 0 ? effectIndex : detectionIndex, palette, color: effect.paletteMode === "auto" ? colorAt(palette, effectIndex) : effect.color }];
   });
 }
 
@@ -240,7 +241,13 @@ export function renderBackgroundAutoFrame(options: BackgroundAutoRenderOptions):
     const leftPulse = Math.max(0, Math.min(1, options.stereoLeftPulse ?? pulse));
     const rightPulse = Math.max(0, Math.min(1, options.stereoRightPulse ?? pulse));
     resolveBackgroundAutoEffects(settings).forEach(({ effect, detection, effectIndex, detectionIndex, palette: effectPalette, color: effectColor }) => {
-      const box = mapBackgroundAutoBoxToCanvas(detection.bbox, transform);
+      const box = detection
+        ? mapBackgroundAutoBoxToCanvas(detection.bbox, transform)
+        : (() => {
+            const diameter = Math.max(18, Math.min(width, height) * (effect.diameter ?? .42));
+            const centerX = width * (effect.centerX ?? .5); const centerY = height * (effect.centerY ?? .5);
+            return { x: centerX - diameter / 2, y: centerY - diameter / 2, width: diameter, height: diameter, centerX, centerY };
+          })();
       const centerX = box.centerX; const centerY = box.centerY;
       const baseRadius = Math.max(18, Math.max(box.width, box.height) * .38 * effect.scale);
       // Rotation speed is expressed in revolutions per second. The static
@@ -260,11 +267,15 @@ export function renderBackgroundAutoFrame(options: BackgroundAutoRenderOptions):
       context.save();
       context.translate(centerX, centerY); context.rotate(rotation); context.globalCompositeOperation = "source-over";
       context.globalAlpha = effectOpacity;
-      context.beginPath(); context.arc(0, 0, baseRadius, 0, Math.PI * 2); context.strokeStyle = effectColor; context.globalAlpha = effectOpacity; context.lineWidth = Math.max(1, width / 500); context.stroke();
+      if (effect.radialSpectrumEnabled ?? true) {
+        context.beginPath(); context.arc(0, 0, baseRadius, 0, Math.PI * 2); context.strokeStyle = effectColor; context.globalAlpha = effectOpacity; context.lineWidth = Math.max(1, width / 500); context.stroke();
+      }
       bands.forEach((value, bandIndex) => {
         const amplitude = Math.max(0, Math.min(1, Number(value) || 0)) * effect.intensity * (.74 + pulse * .5); const angle = bandIndex / bands.length * Math.PI * 2; const radius = baseRadius + amplitude * baseRadius * .52;
         const x = Math.cos(angle) * radius; const y = Math.sin(angle) * radius; peaks.push({ x, y, value: amplitude, index: bandIndex });
-        context.strokeStyle = colorAt(effectPalette, bandIndex); context.globalAlpha = effectOpacity * (.38 + Math.min(.58, amplitude)); context.lineWidth = Math.max(1.2, width / 360 * (1 + amplitude * 1.8)); context.beginPath(); context.moveTo(Math.cos(angle) * baseRadius, Math.sin(angle) * baseRadius); context.lineTo(x, y); context.stroke();
+        if (effect.radialSpectrumEnabled ?? true) {
+          context.strokeStyle = colorAt(effectPalette, bandIndex); context.globalAlpha = effectOpacity * (.38 + Math.min(.58, amplitude)); context.lineWidth = Math.max(1.2, width / 360 * (1 + amplitude * 1.8)); context.beginPath(); context.moveTo(Math.cos(angle) * baseRadius, Math.sin(angle) * baseRadius); context.lineTo(x, y); context.stroke();
+        }
       });
       if (effect.collisionParticles) {
         peaks.filter((peak) => peak.value > .64).slice(0, 16).forEach((peak, particleIndex) => {
@@ -287,6 +298,9 @@ export function renderBackgroundAutoFrame(options: BackgroundAutoRenderOptions):
         }
         if (subtitlesEnabled && options.subtitleCues?.length && options.proSubtitlesSettings) {
           const cue = activeBackgroundAutoSubtitleCue(options.subtitleCues, options.timeSeconds);
+          // The regional subtitle compositor owns the complete alpha envelope.
+          // Reset the parent alpha so the per-effect value is applied once.
+          context.globalAlpha = 1;
           if (cue) renderBackgroundAutoSubtitle({ context, cue, settings: options.proSubtitlesSettings, palette: effectPalette, centerX: 0, centerY: 0, radius: baseRadius, timeSeconds: options.timeSeconds, opacity: effectOpacity });
         }
       } finally {

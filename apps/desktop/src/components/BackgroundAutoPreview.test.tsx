@@ -25,7 +25,7 @@ describe("BackgroundAutoPreview", () => {
   it("usa il rapporto sorgente nel frame e ignora il caricamento stale", () => {
     const project = createProject(); const settings = { ...project.animation.backgroundAuto, imageUrl: "old", sourceWidth: 1080, sourceHeight: 1920 };
     const onSourceDimensions = vi.fn(); const view = render(<BackgroundAutoPreview settings={settings} timeSeconds={0} durationSeconds={10} playing={false} spectrumBands={[]} audioPulse={0} projectSeed={1} onSourceDimensions={onSourceDimensions} />);
-    const frame = screen.getByLabelText("Background Auto Animation preview").querySelector(".preview-frame");
+    const frame = screen.getByLabelText("Circular Spectrum Auto Detector preview").querySelector(".preview-frame");
     expect(frame).toHaveStyle({ aspectRatio: "1080 / 1920" });
     view.rerender(<BackgroundAutoPreview settings={{ ...settings, imageUrl: "new", sourceWidth: 0, sourceHeight: 0 }} timeSeconds={0} durationSeconds={10} playing={false} spectrumBands={[]} audioPulse={0} projectSeed={1} onSourceDimensions={onSourceDimensions} />);
     act(() => { images[0]!.naturalWidth = 1920; images[0]!.naturalHeight = 1080; images[0]!.onload?.(); });

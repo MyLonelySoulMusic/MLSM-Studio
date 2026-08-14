@@ -28,9 +28,10 @@ import {
   type VideoEditorClip,
   type VideoEditorSettings
 } from "./video-editor";
-import { createVideoEditorFrameRenderer, type VideoEditorFrameSource } from "./video-editor-renderer";
+import { createVideoEditorFrameRenderer, videoEditorSettingsAtAutomationFrame, type VideoEditorFrameSource } from "./video-editor-renderer";
 import { videoEditorSessionFile } from "./video-editor-import";
-import { videoEditorInterpolate, videoEditorInterpolationCommand, videoEditorInterpolationHealth, type VideoEditorInterpolationMethod } from "./video-editor-interpolation-client";
+import { videoEditorInterpolateJob, videoEditorInterpolationCommand, videoEditorInterpolationHealth, type VideoEditorInterpolationJobStatus, type VideoEditorInterpolationMethod } from "./video-editor-interpolation-client";
+import { videoEditorClipPlaybackRateAtLocalSeconds } from "./video-editor-speed";
 
 export interface VideoEditorOfflineExportSettings {
   width: number;
@@ -77,6 +78,38 @@ const MIX_SAMPLE_RATE = 48_000;
 const MIX_CHANNELS = 2;
 /** Passo dell’inviluppo audio: 200 punti al secondo rendono ogni dissolvenza continua all’ascolto. */
 const ENVELOPE_STEP_SECONDS = .005;
+const INTERPOLATION_FRAME_TOLERANCE = 1;
+const INTERPOLATION_FPS_RELATIVE_TOLERANCE = .01;
+const INTERPOLATION_DURATION_TOLERANCE_SECONDS = .05;
+
+export interface VideoEditorAudioRatePoint { timeSeconds: number; rate: number }
+
+/** Piecewise-constant playback-rate plan. Each output frame is sampled at its
+ * midpoint, exactly like the canonical source-time integration used by video. */
+export function videoEditorAudioRateAutomation(clip: VideoEditorClip, settings: VideoEditorSettings, clipEnd: number): VideoEditorAudioRatePoint[] {
+  const start = Math.max(0, clip.startSeconds);
+  const end = Math.max(start, clipEnd);
+  const frameRate = settings.timebase.fpsNumerator / settings.timebase.fpsDenominator;
+  const points: VideoEditorAudioRatePoint[] = [];
+  const durationFrames = Math.max(0, (end - start) * frameRate);
+  if (durationFrames <= 0) return points;
+  points.push({ timeSeconds: start, rate: videoEditorClipPlaybackRateAtLocalSeconds(clip, 0, settings.timebase) });
+  const origin = clip.speed?.sampleOriginFrame ?? 0;
+  for (let frame = Math.floor(origin + 1e-9) + 1 - origin; frame < durationFrames - 1e-12; frame += 1) {
+    const timeSeconds = start + frame / frameRate;
+    points.push({ timeSeconds, rate: videoEditorClipPlaybackRateAtLocalSeconds(clip, frame / frameRate, settings.timebase) });
+  }
+  return points;
+}
+
+/** Integral of the held audio-rate plan, used to prove parity with the video
+ * source mapping and to cover a final partial project frame without overshoot. */
+export function videoEditorAudioConsumedSourceSeconds(points: readonly VideoEditorAudioRatePoint[], clipEnd: number): number {
+  return points.reduce((total, point, index) => {
+    const nextBoundary = points[index + 1]?.timeSeconds ?? clipEnd;
+    return total + point.rate * Math.max(0, nextBoundary - point.timeSeconds);
+  }, 0);
+}
 
 function safeName(value: string): string {
   return value.normalize("NFKD").replace(/[^a-zA-Z0-9-_]+/g, "-").replace(/^-+|-+$/g, "") || "mlsm-studio";
@@ -98,6 +131,55 @@ export function videoEditorOfflineFrameTiming(frameIndex: number, durationSecond
 
 export function assertVideoEditorFrameIntegrity(expected: number, encoded: number): void {
   if (expected !== encoded) throw new Error(`Controllo anti-drop fallito: attesi ${expected} frame, codificati ${encoded}. Il file incompleto non è stato consegnato.`);
+}
+
+export function expectedVideoEditorInterpolationFrameCount(sourceFrames: number, sourceFps: number, targetFps: number): number {
+  if (!Number.isInteger(sourceFrames) || sourceFrames < 3) throw new Error("Servono almeno tre frame sorgente per verificare l’interpolazione.");
+  if (!Number.isFinite(sourceFps) || sourceFps <= 0 || !Number.isFinite(targetFps) || targetFps <= sourceFps) throw new Error("Frame rate non validi per la verifica dell’interpolazione.");
+  return Math.floor((sourceFrames - 2) * targetFps / sourceFps) + 1;
+}
+
+export function assertVideoEditorInterpolationIntegrity(input: {
+  sourceFrames: number;
+  sourceFps: number;
+  sourceDuration: number;
+  outputFrames: number;
+  outputFps: number;
+  outputDuration: number;
+  targetFps: number;
+}): void {
+  const expectedFrames = expectedVideoEditorInterpolationFrameCount(input.sourceFrames, input.sourceFps, input.targetFps);
+  const fpsTolerance = Math.max(.05, input.targetFps * INTERPOLATION_FPS_RELATIVE_TOLERANCE);
+  if (!Number.isFinite(input.outputFps) || Math.abs(input.outputFps - input.targetFps) > fpsTolerance) throw new Error(`Frame rate interpolato non valido: ottenuti ${input.outputFps} fps, target ${input.targetFps} fps.`);
+  if (!Number.isInteger(input.outputFrames) || input.outputFrames < expectedFrames - INTERPOLATION_FRAME_TOLERANCE) throw new Error(`Conteggio interpolato incompleto: ottenuti ${input.outputFrames} frame, attesi almeno ${expectedFrames - INTERPOLATION_FRAME_TOLERANCE}.`);
+  if (!Number.isFinite(input.outputDuration) || input.outputDuration <= 0) throw new Error("Durata del risultato interpolato non valida.");
+  const durationTolerance = Math.max(INTERPOLATION_DURATION_TOLERANCE_SECONDS, 2 / input.targetFps);
+  const expectedDuration = expectedFrames / input.targetFps;
+  if (input.outputDuration + durationTolerance < expectedDuration) throw new Error(`Durata interpolata troncata: ottenuti ${input.outputDuration} s, attesi circa ${expectedDuration} s.`);
+  const minimumFromSource = Math.max(0, input.sourceDuration - 2 / input.sourceFps);
+  if (input.outputDuration + durationTolerance < minimumFromSource) throw new Error(`Durata interpolata troncata rispetto alla sorgente: ottenuti ${input.outputDuration} s, sorgente ${input.sourceDuration} s.`);
+}
+
+export function videoEditorInterpolationExportProgress(status: VideoEditorInterpolationJobStatus & { uploadProgress?: number; downloadProgress?: number }): ExportProgress {
+  const phase = status.phase === "uploading" ? "interpolation-upload"
+    : status.phase === "downloading" ? "interpolation-download"
+      : status.phase === "interpolating" ? "interpolation"
+        : status.phase;
+  const stageProgress = status.stageProgress === null ? null : status.stageProgress ?? status.progress;
+  return {
+    currentFrame: status.currentFrame ?? 0,
+    totalFrames: status.totalFrames ?? 0,
+    progress: stageProgress ?? 0,
+    phase,
+    stageProgress,
+    stageCurrentFrame: status.currentFrame ?? 0,
+    stageTotalFrames: status.totalFrames ?? 0,
+    ...(status.processedBytes !== undefined || status.bytesProcessed !== undefined ? { processedBytes: status.processedBytes ?? status.bytesProcessed } : {}),
+    ...(status.totalBytes !== undefined ? { totalBytes: status.totalBytes } : {}),
+    indeterminate: status.indeterminate === true || stageProgress === null,
+    elapsedMs: (status.elapsedSeconds ?? 0) * 1_000,
+    estimatedRemainingMs: (status.estimatedRemainingSeconds ?? 0) * 1_000
+  };
 }
 
 function abortError(): DOMException { return new DOMException("Esportazione annullata", "AbortError"); }
@@ -184,15 +266,15 @@ function downloadBlob(blob: Blob, fileName: string): void {
   window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }
 
-async function audit(blob: Blob, requireAudio: boolean, signal: AbortSignal): Promise<{ videoFrames: number; audioPackets: number }> {
+async function audit(blob: Blob, requireAudio: boolean, signal: AbortSignal): Promise<{ videoFrames: number; videoFps: number; videoDuration: number; audioPackets: number }> {
   const input = new Input({ formats: ALL_FORMATS, source: new BlobSource(blob, { maxCacheSize: 8 * 1024 ** 2 }) });
   try {
     throwIfAborted(signal);
     const [video, audio] = await Promise.all([input.getPrimaryVideoTrack(), input.getPrimaryAudioTrack()]);
     if (!video) throw new Error("Il file finalizzato non contiene la traccia video.");
     if (requireAudio && !audio) throw new Error("Il file finalizzato non contiene la traccia audio del montaggio.");
-    const [videoStats, audioStats] = await Promise.all([video.computePacketStats(Infinity, { skipLiveWait: true }), audio?.computePacketStats(Infinity, { skipLiveWait: true })]);
-    return { videoFrames: videoStats.packetCount, audioPackets: audioStats?.packetCount ?? 0 };
+    const [videoStats, videoDuration, audioStats] = await Promise.all([video.computePacketStats(Infinity, { skipLiveWait: true }), video.computeDuration({ skipLiveWait: true }), audio?.computePacketStats(Infinity, { skipLiveWait: true })]);
+    return { videoFrames: videoStats.packetCount, videoFps: videoStats.averagePacketRate, videoDuration, audioPackets: audioStats?.packetCount ?? 0 };
   } finally { input.dispose(); }
 }
 
@@ -249,7 +331,6 @@ export async function renderVideoEditorAudioMix(settings: VideoEditorSettings, d
     return !clip.muted && !track?.muted && clip.startSeconds < durationSeconds;
   });
   if (!audible.length) return null;
-
   const context = new OfflineAudioContext({ numberOfChannels: MIX_CHANNELS, length: Math.max(1, Math.ceil(durationSeconds * MIX_SAMPLE_RATE)), sampleRate: MIX_SAMPLE_RATE });
   const decoded = new Map<string, AudioBuffer | null>();
   let scheduled = 0;
@@ -271,20 +352,29 @@ export async function renderVideoEditorAudioMix(settings: VideoEditorSettings, d
     if (!buffer) continue;
     const offset = Math.max(0, clip.sourceInSeconds);
     const clipEnd = Math.min(durationSeconds, videoEditorClipEnd(clip));
-    const playDuration = Math.max(0, Math.min(clip.durationSeconds, buffer.duration - offset, durationSeconds - clip.startSeconds));
-    if (playDuration <= 0) continue;
+    const playDuration = Math.max(0, Math.min(clip.durationSeconds, durationSeconds - clip.startSeconds));
+    if (playDuration <= 0 || offset >= buffer.duration) continue;
     const track = settings.tracks.find((item) => item.id === clip.trackId) ?? null;
     const source = context.createBufferSource();
     source.buffer = buffer;
+    const rateAutomation = videoEditorAudioRateAutomation(clip, settings, clipEnd);
+    for (const point of rateAutomation) source.playbackRate.setValueAtTime(point.rate, point.timeSeconds);
     const gain = context.createGain();
     source.connect(gain);
     gain.connect(context.destination);
-    gain.gain.setValueAtTime(videoEditorClipGain(clip, track, clip.startSeconds), Math.max(0, clip.startSeconds));
+    const gainAt = (time: number): number => {
+      const snapshot = videoEditorSettingsAtAutomationFrame(settings, time);
+      const currentClip = snapshot.clips.find((item) => item.id === clip.id) ?? clip;
+      const currentTrack = snapshot.tracks.find((item) => item.id === clip.trackId) ?? track;
+      return videoEditorClipGain(currentClip, currentTrack, time);
+    };
+    gain.gain.setValueAtTime(gainAt(clip.startSeconds), Math.max(0, clip.startSeconds));
     for (let time = clip.startSeconds + ENVELOPE_STEP_SECONDS; time < clipEnd; time += ENVELOPE_STEP_SECONDS) {
-      gain.gain.linearRampToValueAtTime(videoEditorClipGain(clip, track, time), time);
+      gain.gain.linearRampToValueAtTime(gainAt(time), time);
     }
-    gain.gain.linearRampToValueAtTime(videoEditorClipGain(clip, track, clipEnd), Math.max(0, clipEnd));
-    source.start(Math.max(0, clip.startSeconds), offset, playDuration);
+    gain.gain.linearRampToValueAtTime(gainAt(clipEnd), Math.max(0, clipEnd));
+    source.start(Math.max(0, clip.startSeconds), offset);
+    source.stop(Math.max(0, clip.startSeconds) + playDuration);
     scheduled += 1;
   }
   throwIfAborted(signal);
@@ -398,7 +488,7 @@ export async function exportVideoEditorOfflineVideo(settings: VideoEditorOffline
         await waitWithTimeout(videoSource.add(timing.timestampSeconds, timing.durationSeconds), 120_000, `L’encoder è fermo sul frame ${frameIndex + 1}; l’export è stato annullato senza consegnare un file incompleto.`, signal);
         encodedFrames += 1;
         const elapsedMs = performance.now() - startedAt;
-        onProgress({ currentFrame: encodedFrames, totalFrames, progress: encodedFrames / totalFrames, elapsedMs, estimatedRemainingMs: encodedFrames === totalFrames ? 0 : elapsedMs / encodedFrames * (totalFrames - encodedFrames) });
+        onProgress({ currentFrame: encodedFrames, totalFrames, progress: encodedFrames / totalFrames, phase: "rendering", phaseLabel: "Rendering del montaggio", stageProgress: encodedFrames / totalFrames, stageCurrentFrame: encodedFrames, stageTotalFrames: totalFrames, elapsedMs, estimatedRemainingMs: encodedFrames === totalFrames ? 0 : elapsedMs / encodedFrames * (totalFrames - encodedFrames) });
       }
       videoSource.close();
       assertVideoEditorFrameIntegrity(totalFrames, encodedFrames);
@@ -410,6 +500,7 @@ export async function exportVideoEditorOfflineVideo(settings: VideoEditorOffline
       const finalAudit = await audit(blob, Boolean(mix), signal);
       assertVideoEditorFrameIntegrity(totalFrames, finalAudit.videoFrames);
       if (mix && finalAudit.audioPackets <= 0) throw new Error("Controllo audio fallito: nessun pacchetto nel file finale.");
+      onProgress({ currentFrame: totalFrames, totalFrames, progress: 1, phase: "verifying", phaseLabel: "Verifica del render base completata", stageProgress: 1, stageCurrentFrame: totalFrames, stageTotalFrames: totalFrames, elapsedMs: performance.now() - startedAt, estimatedRemainingMs: 0 });
 
       // L’aumento reale del frame rate è l’ultimo passaggio e agisce su un file già
       // verificato: se il servizio locale manca, il montaggio è comunque consegnato.
@@ -418,19 +509,29 @@ export async function exportVideoEditorOfflineVideo(settings: VideoEditorOffline
       let delivered: Blob | null = null;
       let deliveredName = fileName;
       if (settings.interpolationEnabled && settings.interpolationTargetFps > settings.fps) {
+        // Reset the visible stage deliberately: the first bar is complete, while
+        // interpolation is a separate operation whose progress starts at zero.
+        onProgress({ currentFrame: 0, totalFrames: 0, progress: 0, phase: "interpolation", phaseLabel: "Preparazione interpolazione fotogrammi", stageProgress: 0, stageCurrentFrame: 0, stageTotalFrames: 0, elapsedMs: performance.now() - startedAt, estimatedRemainingMs: 0 });
         const health = await videoEditorInterpolationHealth();
-        if (!health?.available) interpolationNote = `Servizio di interpolazione non raggiungibile: file consegnato a ${settings.fps} fps. Avvia "${videoEditorInterpolationCommand}" in un secondo terminale e riprova.`;
+        if (!health?.available || health.jobs === false) interpolationNote = `Servizio di interpolazione non raggiungibile: file consegnato a ${settings.fps} fps. Avvia "${videoEditorInterpolationCommand}" in un secondo terminale e riprova.`;
         else if (settings.interpolationMethod === "rife" && !health.rife) interpolationNote = `Modello RIFE non disponibile sul servizio locale: file consegnato a ${settings.fps} fps.`;
         else if (settings.interpolationMethod !== "rife" && !health.ffmpeg) interpolationNote = `ffmpeg non disponibile sul servizio locale: file consegnato a ${settings.fps} fps.`;
         else {
           try {
-            const result = await videoEditorInterpolate({ blob, fileName, sourceFps: settings.fps, targetFps: settings.interpolationTargetFps, method: settings.interpolationMethod, signal });
+            const result = await videoEditorInterpolateJob({ blob, fileName, sourceFps: settings.fps, targetFps: settings.interpolationTargetFps, method: settings.interpolationMethod, signal, onStatus: (status) => {
+              onProgress(videoEditorInterpolationExportProgress(status));
+            } });
             const audited = await audit(result.blob, Boolean(mix), signal);
-            if (audited.videoFrames <= finalAudit.videoFrames) throw new Error("il file restituito non contiene fotogrammi aggiuntivi");
+            assertVideoEditorInterpolationIntegrity({
+              sourceFrames: finalAudit.videoFrames, sourceFps: settings.fps, sourceDuration: finalAudit.videoDuration,
+              outputFrames: audited.videoFrames, outputFps: audited.videoFps, outputDuration: audited.videoDuration,
+              targetFps: settings.interpolationTargetFps
+            });
             delivered = result.blob;
-            deliveredName = fileName.replace(/-\d+fps\.mp4$/, `-${result.targetFps}fps.mp4`);
-            interpolatedFps = result.targetFps;
-            interpolationNote = `Frame rate portato a ${result.targetFps} fps con ${result.backend}: ${audited.videoFrames} fotogrammi verificati.`;
+            const resultTargetFps = settings.interpolationTargetFps;
+            deliveredName = fileName.replace(/-\d+fps\.mp4$/, `-${resultTargetFps}fps.mp4`);
+            interpolatedFps = resultTargetFps;
+            interpolationNote = `Frame rate portato a ${resultTargetFps} fps con ${result.status.backend ?? "servizio locale"}: ${audited.videoFrames} fotogrammi verificati.`;
           } catch (error) {
             if (error instanceof DOMException && error.name === "AbortError") throw error;
             interpolationNote = `Interpolazione non riuscita (${error instanceof Error ? error.message : "errore sconosciuto"}): file consegnato a ${settings.fps} fps.`;

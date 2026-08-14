@@ -12,6 +12,9 @@ export interface UpscalerVideoExportSettings {
   sourceVideoUrl: string;
   sourceVideoFile?: File | null;
   upscalerSettings: UpscalerSettings;
+  suppressDownload?: boolean;
+  sourceStartSeconds?: number;
+  sourceDurationSeconds?: number;
 }
 
 export interface UpscalerVideoExportResult {
@@ -23,10 +26,10 @@ export interface UpscalerVideoExportResult {
   audioPacketCount: number;
   tempDirectory: string;
   originalFramesDirectory: string;
+  blob?: Blob;
 }
 
 export interface UpscalerVideoExportProgress extends ExportProgress {
-  phase?: string;
   phaseLabel?: string;
   tempDirectory?: string;
   originalFramesDirectory?: string;
@@ -67,7 +70,13 @@ export async function exportUpscaledVideo(
     sourceUrl: settings.sourceVideoUrl,
     ...(settings.sourceVideoFile ? { sourceBlob: settings.sourceVideoFile } : {}),
     sourceName: settings.upscalerSettings.sourceName,
-    settings: { ...settings.upscalerSettings, finalWidth: width, finalHeight: height },
+    settings: {
+      ...settings.upscalerSettings,
+      finalWidth: width,
+      finalHeight: height,
+      ...(settings.sourceStartSeconds !== undefined ? { sourceStartSeconds: settings.sourceStartSeconds } : {}),
+      ...(settings.sourceDurationSeconds !== undefined ? { sourceDurationSeconds: settings.sourceDurationSeconds } : {})
+    },
     quality: settings.quality,
     signal,
     onStatus: (status) => onProgress({
@@ -91,7 +100,7 @@ export async function exportUpscaledVideo(
   const effectiveWidth = result.status.effectiveWidth ?? width;
   const effectiveHeight = result.status.effectiveHeight ?? height;
   const fileName = `${safeName(settings.projectName)}-upscaled-${effectiveWidth}x${effectiveHeight}.mp4`;
-  downloadVideoBlob(result.blob, fileName);
+  if (!settings.suppressDownload) downloadVideoBlob(result.blob, fileName);
   return {
     fileName,
     width: effectiveWidth,
@@ -101,5 +110,12 @@ export async function exportUpscaledVideo(
     audioPacketCount: 0,
     tempDirectory: result.status.tempDirectory,
     originalFramesDirectory: result.status.originalFramesDirectory
+    , blob: result.blob
   };
+}
+
+export async function processUpscaledVideo(settings: UpscalerVideoExportSettings, signal: AbortSignal, onProgress: (progress: UpscalerVideoExportProgress) => void): Promise<UpscalerVideoExportResult & { blob: Blob }> {
+  const result = await exportUpscaledVideo({ ...settings, suppressDownload: true }, signal, onProgress);
+  if (!result.blob) throw new Error("Upscaler non ha prodotto un artifact video.");
+  return result as UpscalerVideoExportResult & { blob: Blob };
 }

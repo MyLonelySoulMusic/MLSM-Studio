@@ -7,6 +7,9 @@ const audioPattern = /\.(?:mp3|wav|m4a|aac|flac|ogg|opus)$/i;
 /** Estensioni e MIME accettati dal pool media, pronti per l’attributo `accept`. */
 export const videoEditorAcceptedFiles = "video/*,image/*,audio/*,.mp4,.webm,.mov,.m4v,.mkv,.avi,.png,.jpg,.jpeg,.webp,.avif,.gif,.bmp,.mp3,.wav,.m4a,.aac,.flac,.ogg,.opus";
 export const videoEditorAssetDragType = "application/x-mlsm-video-editor-asset";
+/** Tipo secondario del drag: consente alla timeline di rifiutare subito un
+ * media sulla corsia sbagliata senza affidarsi a fallback impliciti. */
+export const videoEditorAssetKindDragType = "application/x-mlsm-video-editor-asset-kind";
 
 export function videoEditorAssetKind(file: File): VideoEditorAsset["kind"] | null {
   if (file.type.startsWith("video/") || videoPattern.test(file.name)) return "video";

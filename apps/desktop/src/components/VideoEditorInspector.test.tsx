@@ -1,6 +1,7 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useProjectStore } from "../store/project-store";
+import { videoEditorSampledSpeedAtFrame, videoEditorSpeedAtFrame, videoEditorSplitSpeed } from "../services/video-editor-speed";
 import { VideoEditorInspector } from "./VideoEditorInspector";
 
 const asset = {
@@ -59,5 +60,67 @@ describe("VideoEditorInspector · tracce bloccate", () => {
     expect(screen.getByLabelText("Durata effetto")).toBeDisabled();
     expect(screen.getByLabelText("Intensità effetto")).toBeDisabled();
     expect(screen.getByRole("button", { name: "Elimina effetto dalla timeline" })).toBeDisabled();
+  });
+
+  it("edita e persiste la Bézier normalizzata del segmento sinistra-destra", () => {
+    const clipId = useProjectStore.getState().addVideoEditorClip(asset.id, { trackId: "video-editor-track-main" })!;
+    useProjectStore.getState().selectVideoEditorClip(clipId);
+    const target = { kind: "clip" as const, clipId, property: "adjustments.exposure" };
+    useProjectStore.getState().upsertVideoEditorKeyframe(target, { id: "left", frame: 0, value: 0, curve: "linear" });
+    useProjectStore.getState().upsertVideoEditorKeyframe(target, { id: "right", frame: 60, value: 1, curve: "custom", bezier: { x1: .1, y1: .2, x2: .8, y2: .9 } });
+    render(<VideoEditorInspector />);
+
+    expect(screen.getByLabelText("Curva adjustments.exposure segmento 0-60")).toHaveValue("custom");
+    fireEvent.change(screen.getByLabelText("Bézier adjustments.exposure 0-60 x1"), { target: { value: ".25" } });
+    const lane = useProjectStore.getState().project.animation.videoEditor.automationLanes.find((candidate) => candidate.id);
+    expect(lane?.keyframes.find((point) => point.id === "right")?.bezier).toEqual({ x1: .25, y1: .2, x2: .8, y2: .9 });
+  });
+
+  it("rende lineare un segmento speed suddiviso senza lasciare attiva la vecchia esponenziale", () => {
+    const clipId = useProjectStore.getState().addVideoEditorClip(asset.id, { trackId: "video-editor-track-main" })!;
+    const exponential = { mode: "ramp" as const, constant: 1, preservePitch: false, points: [
+      { id: "left", frame: 0, speed: 1, curve: "linear" as const },
+      { id: "right", frame: 60, speed: 3, curve: "exponential" as const }
+    ] };
+    const [, splitRight] = videoEditorSplitSpeed(exponential, 30.8);
+    useProjectStore.getState().updateVideoEditorClip(clipId, { speed: splitRight });
+    useProjectStore.getState().selectVideoEditorClip(clipId);
+    render(<VideoEditorInspector />);
+
+    const rightFrame = splitRight!.points[1]!.frame;
+    const selector = screen.getByLabelText(`Curva velocità segmento 0-${rightFrame}`);
+    expect(selector).toHaveValue("exponential");
+    expect(splitRight?.points[1]?.segment).toBeDefined();
+    expect(splitRight?.leadingRate).toBeDefined();
+    fireEvent.change(selector, { target: { value: "linear" } });
+
+    const clip = useProjectStore.getState().project.animation.videoEditor.clips.find((candidate) => candidate.id === clipId)!;
+    const point = clip.speed?.points.find((candidate) => candidate.id === "right");
+    expect(point).toEqual({ id: "right", frame: rightFrame, speed: 3, curve: "linear" });
+    expect(clip.speed?.sampleOriginFrame).toBeCloseTo(30.8, 12);
+    expect(clip.speed).not.toHaveProperty("leadingRate");
+    const first = clip.speed!.points.find((candidate) => candidate.frame === 0)!;
+    expect(videoEditorSpeedAtFrame(clip.speed, rightFrame / 2)).toBeCloseTo((first.speed + point!.speed) / 2, 12);
+    expect(videoEditorSpeedAtFrame(clip.speed, rightFrame / 2)).not.toBeCloseTo(videoEditorSpeedAtFrame(splitRight, rightFrame / 2), 6);
+    expect(videoEditorSampledSpeedAtFrame(clip.speed, 0)).toBeCloseTo(first.speed, 12);
+  });
+
+  it("mostra i controlli immagine senza velocità o attacco sorgente", () => {
+    useProjectStore.getState().newProject();
+    const image = { ...asset, id: "inspector-still", name: "overlay.webp", kind: "image" as const, durationSeconds: 0, hasAudio: false };
+    useProjectStore.getState().addVideoEditorAssets([image]);
+    const clipId = useProjectStore.getState().addVideoEditorClip(image.id, { trackId: "video-editor-track-main" })!;
+    useProjectStore.getState().selectVideoEditorClip(clipId);
+    render(<VideoEditorInspector />);
+
+    expect(screen.getByLabelText("Durata clip")).toHaveValue("4");
+    expect(screen.getByText(/Fermo immagine/)).toBeInTheDocument();
+    expect(screen.getByLabelText("Adattamento clip")).toHaveValue("contain");
+    expect(screen.getByLabelText("Posizione orizzontale clip")).toBeInTheDocument();
+    expect(screen.getByLabelText("Scala clip")).toBeInTheDocument();
+    expect(screen.getByLabelText("Rotazione clip")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Velocità clip")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Preserva altezza audio")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Attacco nella sorgente")).not.toBeInTheDocument();
   });
 });

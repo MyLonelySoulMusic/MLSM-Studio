@@ -195,6 +195,27 @@ describe("project schema invariants", () => {
     expect(settings.tracks.map((track) => track.name)).toEqual(["Livello video 2", "Livello video 1", "Audio 1"]);
   });
 
+  it("persiste le curve Bézier normalizzate per automazioni e velocità", () => {
+    const project = createProject();
+    const asset = { id: "curve-media", name: "curve.mp4", kind: "video", url: "blob:curve", durationSeconds: 4, width: 1920, height: 1080, hasAudio: true, bpm: null, beats: [], downbeats: [], waveform: [] };
+    // Fractional point positions are produced when a legacy clip is trimmed at a
+    // sub-frame boundary; persisting them preserves the rebased speed phase.
+    const clip = { id: "curve-clip", assetId: asset.id, trackId: "video-editor-track-main", startSeconds: 0, durationSeconds: 2, sourceInSeconds: 0, fadeInSeconds: 0, fadeOutSeconds: 0, fadeCurve: "smooth", audioFadeInSeconds: 0, audioFadeOutSeconds: 0, blendMode: "normal", blendIntensity: 1, speed: { mode: "ramp", constant: 1, preservePitch: false, points: [{ id: "s0", frame: 0, speed: 1, curve: "linear" }, { id: "s1", frame: 59.4, speed: 2, curve: "custom", bezier: { x1: .1, y1: .2, x2: .8, y2: .9 } }] }, adjustments: { exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, saturation: 0, vibrance: 0, temperature: 0, tint: 0, hue: 0, sharpness: 0, denoise: 0, opacity: 1 }, fit: "cover", muted: false, volume: 1 };
+    const automationLanes = [{ id: "lane", target: { kind: "clip", clipId: clip.id, property: "adjustments.exposure" }, enabled: true, keyframes: [{ id: "k0", frame: 0, value: 0, curve: "linear" }, { id: "k1", frame: 60, value: 1, curve: "custom", bezier: { x1: .15, y1: .05, x2: .7, y2: .95 } }] }];
+    const parsed = parseProject({ ...project, animation: { ...project.animation, videoEditor: { ...project.animation.videoEditor, assets: [asset], clips: [clip], automationLanes } } }).animation.videoEditor;
+    expect(parsed.clips[0]?.speed?.points[1]?.bezier).toEqual({ x1: .1, y1: .2, x2: .8, y2: .9 });
+    expect(parsed.clips[0]?.speed?.points[1]?.frame).toBe(59.4);
+    expect(parsed.automationLanes[0]?.keyframes[1]?.bezier).toEqual({ x1: .15, y1: .05, x2: .7, y2: .95 });
+  });
+
+  it("persiste la fase e i segmenti analitici prodotti da trim sub-frame", () => {
+    const project = createProject();
+    const asset = { id: "segment-media", name: "segment.mp4", kind: "video", url: "blob:segment", durationSeconds: 4, width: 1920, height: 1080, hasAudio: true, bpm: null, beats: [], downbeats: [], waveform: [] };
+    const clip = { id: "segment-clip", assetId: asset.id, trackId: "video-editor-track-main", startSeconds: .01, durationSeconds: 1.01, sourceInSeconds: 0, fadeInSeconds: 0, fadeOutSeconds: 0, fadeCurve: "smooth", audioFadeInSeconds: 0, audioFadeOutSeconds: 0, blendMode: "normal", blendIntensity: 1, speed: { mode: "ramp", constant: 1, preservePitch: false, sampleOriginFrame: 12.4, leadingRate: 1.25, trailingRate: 1.75, points: [{ id: "s0", frame: 0, speed: 1.2, curve: "linear" }, { id: "s1", frame: 47.6, speed: 2, curve: "exponential", segment: { curve: "exponential", fromProgress: .2, toProgress: .8 } }] }, adjustments: { exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, saturation: 0, vibrance: 0, temperature: 0, tint: 0, hue: 0, sharpness: 0, denoise: 0, opacity: 1 }, fit: "cover", muted: false, volume: 1 };
+    const parsed = parseProject({ ...project, animation: { ...project.animation, videoEditor: { ...project.animation.videoEditor, assets: [asset], clips: [clip] } } }).animation.videoEditor;
+    expect(parsed.clips[0]?.speed).toMatchObject({ sampleOriginFrame: 12.4, leadingRate: 1.25, trailingRate: 1.75, points: [{ frame: 0 }, { frame: 47.6, segment: { curve: "exponential", fromProgress: .2, toProgress: .8 } }] });
+  });
+
   it("migra soltanto i vecchi nomi principale e overlay conservando ID e nomi personalizzati", () => {
     const project = createProject();
     const tracks = project.animation.videoEditor.tracks.map((track, index) => ({

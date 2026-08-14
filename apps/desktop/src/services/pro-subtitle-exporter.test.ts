@@ -279,12 +279,26 @@ import {
   createProSubtitleExportCapabilities,
   estimateProSubtitleBufferBytes,
   exportProSubtitleVideo,
+  rebaseProSubtitleCues,
   probeProSubtitleExportCapabilities,
   proSubtitleFrameCount,
   proSubtitleFrameTiming,
   resolveProSubtitleExportPlan,
   type ProSubtitleExportSettings
 } from "./pro-subtitle-exporter";
+
+describe("Video Editor ProSubs range helpers", () => {
+  it("rebases and clips cues to the selected source fragment", () => {
+    const rebased = rebaseProSubtitleCues([
+      { id: "a", startSeconds: 3, endSeconds: 5, text: "prima", confidence: 1, verified: true, manual: true },
+      { id: "b", startSeconds: 5.5, endSeconds: 8, text: "seconda", confidence: 1, verified: true, manual: true }
+    ], 4, 3);
+    expect(rebased).toEqual([
+      { id: "a", startSeconds: 0, endSeconds: 1, text: "prima", confidence: 1, verified: true, manual: true },
+      { id: "b", startSeconds: 1.5, endSeconds: 3, text: "seconda", confidence: 1, verified: true, manual: true }
+    ]);
+  });
+});
 
 function baseSettings(
   overrides: Partial<ProSubtitleExportSettings> = {}

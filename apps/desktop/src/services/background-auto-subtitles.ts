@@ -1,5 +1,6 @@
 import type { RhythmBallProject } from "@rbs/project-schema";
 import { subtitleFontWeight } from "./subtitle-fonts";
+import { renderProSubtitleFrame, resolveProSubtitleCueStyle } from "./pro-subtitles";
 
 /**
  * Background Auto subtitles intentionally have their own small compositor.
@@ -116,6 +117,12 @@ function fitBackgroundAutoSubtitle(
   return { font, fontSize, lines, lineHeight };
 }
 
+function supportsCanonicalProSubtitleRenderer(context: CanvasRenderingContext2D): boolean {
+  const candidate = context as unknown as Record<string, unknown>;
+  return ["save", "restore", "translate", "rotate", "scale", "measureText", "fillText", "beginPath", "rect", "clip"]
+    .every((method) => typeof candidate[method] === "function");
+}
+
 /** Draws one active cue. Returns false for inactive or empty cues. */
 export function renderBackgroundAutoSubtitle(options: BackgroundAutoSubtitleRenderOptions): boolean {
   const { context, cue, settings, palette, centerX, centerY, radius, timeSeconds } = options;
@@ -131,6 +138,41 @@ export function renderBackgroundAutoSubtitle(options: BackgroundAutoSubtitleRend
   const alpha = clamp((style.opacity ?? settings.opacity) * options.opacity * fadeIn * fadeOut, 0, 1);
   if (alpha <= .001) return false;
 
+  // Reuse the canonical Pro Subtitles typesetter/animation resolver for the
+  // regional composition. A translated circular clip keeps the composition
+  // local to the detected/manual circle while preserving exact cue timing,
+  // typography and animation semantics used by the normal Pro renderer.
+  const canonicalStyle = resolveProSubtitleCueStyle(cue, settings);
+  const regionalStyle = {
+    ...canonicalStyle,
+    positionX: 50,
+    positionY: 50,
+    opacity: alpha,
+    positionAutomatic: false,
+    opacityAutomatic: false,
+    wordStyles: canonicalStyle.wordStyles.map((word, index) => ({
+      ...word,
+      color: palette[(index + hash(cue.id)) % Math.max(1, palette.length)] ?? palette[0] ?? word.color
+    }))
+  };
+  if (supportsCanonicalProSubtitleRenderer(context)) {
+    context.save();
+    try {
+      context.beginPath(); context.arc(centerX, centerY, Math.max(1, radius * .92), 0, Math.PI * 2);
+      context.clip();
+      context.translate(centerX - radius, centerY - radius);
+      renderProSubtitleFrame(context, cue, regionalStyle, settings, { timeSeconds, width: radius * 2, height: radius * 2, clear: false });
+      return true;
+    } finally {
+      // Canonical rendering failures are deliberately not swallowed. Only an
+      // explicit capability miss selects the compatibility compositor below.
+      context.restore();
+    }
+  }
+
+  // Lightweight Canvas mocks and older embedded canvases may not expose every
+  // primitive required by Pro Subtitles. That explicit capability miss alone
+  // selects this deterministic compatibility compositor.
   const layout = fitBackgroundAutoSubtitle(context, cueWords, style.fontFamily, Number(style.fontSize) || settings.defaultFontSize, radius);
   const { font, fontSize, lines, lineHeight } = layout;
   const positionX = clamp(Number(style.positionX) || 50, 0, 100);

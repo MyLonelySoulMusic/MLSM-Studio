@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAudioStore } from "./store/audio-store";
 import { useSceneStore } from "./store/scene-store";
@@ -6,6 +7,7 @@ import { useProjectStore } from "./store/project-store";
 const viewportMock = vi.hoisted(() => ({
   props: null as { subtitles?: { enabled?: boolean } } | null
 }));
+const videoEditorPreviewMock = vi.hoisted(() => ({ mounts: 0 }));
 vi.mock("./components/Viewport", () => ({
   Viewport: (props: { subtitles?: { enabled?: boolean } }) => {
     viewportMock.props = props;
@@ -15,6 +17,12 @@ vi.mock("./components/Viewport", () => ({
 vi.mock("./components/PortraitLandscapePreview", () => ({
   PortraitLandscapePreview: () => <main aria-label="Vista From 9:16 to 16:9" />
 }));
+vi.mock("./components/VideoEditorPreview", () => ({
+  VideoEditorPreview: () => {
+    useEffect(() => { videoEditorPreviewMock.mounts += 1; }, []);
+    return <main aria-label="Vista Video Editor mock" />;
+  }
+}));
 import { App } from "./App";
 
 describe("App", () => {
@@ -23,7 +31,7 @@ describe("App", () => {
     const picker = screen.getByRole("combobox", { name: "Modalità animazione" });
     expect(within(picker).queryByRole("option", { name: "New York Streets" })).not.toBeInTheDocument();
   });
-  beforeEach(() => { viewportMock.props = null; useProjectStore.getState().newProject(); localStorage.clear(); });
+  beforeEach(() => { viewportMock.props = null; videoEditorPreviewMock.mounts = 0; useProjectStore.getState().newProject(); localStorage.clear(); });
   afterEach(() => { cleanup(); useAudioStore.getState().reset(); useSceneStore.getState().reset(); });
   it("mostra il layout editor e permette di rinominare il progetto", () => {
     render(<App />);
@@ -250,4 +258,20 @@ describe("App", () => {
     expect(useProjectStore.getState().project.animation.walkingCube.backgroundImageUrl).not.toBe(coverUrl);
   });
   it("mantiene la luce personalizzata disponibile in entrambe le modalità", () => { render(<App />); const enabled = screen.getByRole("checkbox", { name: "Inserisci la luce nella scena" }); fireEvent.click(enabled); fireEvent.change(screen.getByLabelText("Colore luce"), { target: { value: "#33aaff" } }); fireEvent.change(screen.getByLabelText("Intensità luce"), { target: { value: "72" } }); fireEvent.change(screen.getByLabelText("Densità fascio"), { target: { value: ".68" } }); fireEvent.change(screen.getByLabelText("Estensione fascio"), { target: { value: "3" } }); fireEvent.click(screen.getAllByRole("button", { name: "Scegli nella scena" })[0]!); expect(screen.getByRole("checkbox", { name: "Segui la biglia per tutto il percorso" })).toBeChecked(); expect(screen.getByRole("checkbox", { name: "Luce attiva per tutto il video" })).toBeChecked(); expect(useSceneStore.getState().light).toMatchObject({ enabled: true, color: "#33aaff", intensity: 72, beamVisible: true, beamDensity: .68, beamLengthMultiplier: 3, followBall: true, activeUntilSeconds: null }); expect(useSceneStore.getState().lightPickMode).toBe("origin"); const modes = screen.getByRole("complementary", { name: "Modalità animazione" }); fireEvent.change(within(modes).getByRole("combobox", { name: "Modalità animazione" }), { target: { value: "newYorkStreets" } }); expect(screen.getByRole("checkbox", { name: "Inserisci la luce nella scena" })).toBeChecked(); expect(screen.getByLabelText("Colore luce")).toHaveValue("#33aaff"); });
+  it("isola il layout del Video Editor dalla timeline musicale e conserva la preview montata durante il resize", async () => {
+    const musicKey = "dynamic-sound-animation-studio.timeline-height.v1";
+    const videoKey = "dynamic-sound-animation-studio.video-editor.timeline-height.v1";
+    localStorage.setItem(musicKey, "190");
+    localStorage.setItem(videoKey, "240");
+    useProjectStore.getState().setAnimationMode("videoEditor", ["platform"]);
+    render(<App />);
+    expect(screen.getByRole("region", { name: "Timeline Video Editor" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Timeline musicale" })).not.toBeInTheDocument();
+    expect(screen.getByRole("separator", { name: "Ridimensiona altezza timeline" })).toHaveAttribute("aria-valuenow", "240");
+    expect(videoEditorPreviewMock.mounts).toBe(1);
+    fireEvent.keyDown(screen.getByRole("separator", { name: "Ridimensiona altezza timeline" }), { key: "ArrowDown" });
+    await waitFor(() => expect(localStorage.getItem(videoKey)).toBe("220"));
+    expect(localStorage.getItem(musicKey)).toBe("190");
+    expect(videoEditorPreviewMock.mounts).toBe(1);
+  });
 });

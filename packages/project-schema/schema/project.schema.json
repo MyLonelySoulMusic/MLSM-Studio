@@ -170,8 +170,8 @@
       "required": ["id", "type", "label", "enabled", "detectionId", "paletteMode", "color", "palette", "intensity", "scale", "opacity", "collisionParticles", "rotationSpeed"],
       "properties": {
         "id": { "$ref": "#/$defs/nonEmptyString" }, "type": { "const": "circularSpectrum" }, "label": { "const": "Circular Spectrum" }, "enabled": { "type": "boolean" }, "color": { "type": "string" },
-        "detectionId": { "type": ["string", "null"], "minLength": 1 }, "paletteMode": { "enum": ["auto", "manual"] },
-        "palette": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "string" } }, "intensity": { "type": "number", "minimum": 0, "maximum": 3 }, "scale": { "type": "number", "minimum": 0.25, "maximum": 3 }, "opacity": { "type": "number", "minimum": 0, "maximum": 1 }, "collisionParticles": { "type": "boolean" }, "centerSpectrumEnabled": { "type": "boolean" }, "stereoSidesEnabled": { "type": "boolean" }, "subtitlesEnabled": { "type": "boolean" }, "rotationSpeed": { "type": "number", "minimum": 0, "maximum": 1 }
+        "placementMode": { "enum": ["detected", "manual"] }, "detectionId": { "type": ["string", "null"], "minLength": 1 }, "centerX": { "$ref": "#/$defs/unit" }, "centerY": { "$ref": "#/$defs/unit" }, "diameter": { "type": "number", "minimum": 0.05, "maximum": 1 }, "paletteMode": { "enum": ["auto", "manual"] },
+        "palette": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "string" } }, "intensity": { "type": "number", "minimum": 0, "maximum": 3 }, "scale": { "type": "number", "minimum": 0.25, "maximum": 3 }, "opacity": { "type": "number", "minimum": 0, "maximum": 1 }, "collisionParticles": { "type": "boolean" }, "centerSpectrumEnabled": { "type": "boolean" }, "stereoSidesEnabled": { "type": "boolean" }, "subtitlesEnabled": { "type": "boolean" }, "radialSpectrumEnabled": { "type": "boolean" }, "rotationSpeed": { "type": "number", "minimum": 0, "maximum": 1 }
       }
     },
     "exportPreset": {

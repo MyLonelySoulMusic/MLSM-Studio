@@ -1,5 +1,5 @@
 import { createProject } from "@rbs/project-schema";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   backgroundAutoConfigurationError,
   backgroundAutoCoverTransform,
@@ -59,6 +59,13 @@ function recordingCanvas(width: number, height: number): { canvas: HTMLCanvasEle
   return { canvas, context };
 }
 
+function enableCanonicalProSubtitlePrimitives(context: RecordingContext, scale: (x: number, y: number) => void = () => {}): void {
+  Object.assign(context, {
+    scale,
+    rect: () => {}
+  });
+}
+
 function settings() {
   const value = createProject().animation.backgroundAuto;
   value.detections = [
@@ -85,17 +92,28 @@ describe("Background Auto renderer invariants", () => {
   it("risolve ogni istanza soltanto sulla detection associata e separa palette auto/manuale", () => {
     const value = settings(); value.palette = ["#aa0000", "#00bb00", "#0000cc"];
     const resolved = resolveBackgroundAutoEffects(value);
-    expect(resolved.map((item) => [item.effect.id, item.detection.id])).toEqual([["auto-person", "person-a"], ["manual-car", "car-b"]]);
+    expect(resolved.map((item) => [item.effect.id, item.detection?.id])).toEqual([["auto-person", "person-a"], ["manual-car", "car-b"]]);
     expect(resolved[0]?.palette).toEqual(value.palette); expect(resolved[0]?.color).toBe("#aa0000");
     expect(resolved[1]?.palette).toEqual(["#111111", "#222222", "#333333"]); expect(resolved[1]?.color).toBe("#abcdef");
   });
 
   it("accepts explicit effects for every detection regardless of the legacy person flag", () => {
     const value = settings(); value.personAnimationEnabled = true;
-    expect(resolveBackgroundAutoEffects(value).map((item) => item.detection.id)).toEqual(["person-a", "car-b"]);
+    expect(resolveBackgroundAutoEffects(value).map((item) => item.detection?.id)).toEqual(["person-a", "car-b"]);
     expect(backgroundAutoConfigurationError(value)).toBeNull();
     value.detections = value.detections.filter((detection) => !detection.isPerson);
     expect(backgroundAutoConfigurationError(value)).toMatch(/not associated with a detected object/);
+  });
+
+  it("renders an enabled manual circle without detections and validates export configuration", () => {
+    const value = createProject().animation.backgroundAuto;
+    value.detections = [];
+    value.effects = [{ ...value.effects[0]!, enabled: true, placementMode: "manual", detectionId: null, centerX: .25, centerY: .7, diameter: .3 }];
+    expect(backgroundAutoConfigurationError(value)).toBeNull();
+    expect(resolveBackgroundAutoEffects(value)[0]?.detection).toBeNull();
+    const { canvas, context } = recordingCanvas(200, 200);
+    renderBackgroundAutoFrame({ canvas, settings: value, timeSeconds: 0, spectrumBands: [1], audioPulse: 1 });
+    expect(context.strokes.length).toBeGreaterThan(0);
   });
 
   it("normalizza il seed una volta per preview ed export", () => {
@@ -139,6 +157,21 @@ describe("Background Auto renderer invariants", () => {
     expect(visibleContext.strokes.some((stroke) => stroke.alpha > 0)).toBe(true);
     expect(visibleContext.fills.some((fill) => fill.alpha > 0 && fill.alpha < 1)).toBe(true);
     expect(visibleContext.globalAlpha).toBe(1);
+  });
+
+  it("rende le particelle indipendenti dal toggle dello spettro radiale", () => {
+    const value = settings();
+    value.effects = [{ ...value.effects[0]!, radialSpectrumEnabled: false, collisionParticles: true, centerSpectrumEnabled: false, stereoSidesEnabled: false }];
+    const particlesOnly = recordingCanvas(200, 200);
+    renderBackgroundAutoFrame({ canvas: particlesOnly.canvas, settings: value, timeSeconds: .5, spectrumBands: [1, 1, 1], audioPulse: 1 });
+    expect(particlesOnly.context.strokes).toHaveLength(0);
+    expect(particlesOnly.context.fills.length).toBeGreaterThan(1);
+
+    value.effects = [{ ...value.effects[0]!, radialSpectrumEnabled: true, collisionParticles: false, centerSpectrumEnabled: false, stereoSidesEnabled: false }];
+    const radialOnly = recordingCanvas(200, 200);
+    renderBackgroundAutoFrame({ canvas: radialOnly.canvas, settings: value, timeSeconds: .5, spectrumBands: [1, 1, 1], audioPulse: 1 });
+    expect(radialOnly.context.strokes.length).toBeGreaterThan(0);
+    expect(radialOnly.context.fills.every((fill) => fill.alpha === 1)).toBe(true);
   });
 
   it("mantiene distinti i tre colori delle bande senza fusione additive", () => {
@@ -235,6 +268,32 @@ describe("Background Auto renderer invariants", () => {
     expect(inactive.context.text).toHaveLength(0);
   });
 
+  it("usa il renderer Pro canonico quando le primitive sono disponibili", () => {
+    const value = settings();
+    value.effects = [{ ...value.effects[0]!, opacity: .4, radialSpectrumEnabled: false, collisionParticles: false, subtitlesEnabled: true, centerSpectrumEnabled: false, stereoSidesEnabled: false }];
+    const cue = { id: "cue-canonical", startSeconds: 0, endSeconds: 2, text: "Canonical", confidence: 1, verified: true, manual: true } as const;
+    const canonical = recordingCanvas(300, 300);
+    const scale = vi.fn();
+    enableCanonicalProSubtitlePrimitives(canonical.context, scale);
+    renderBackgroundAutoFrame({ canvas: canonical.canvas, settings: value, timeSeconds: 1, spectrumBands: [], audioPulse: 0, subtitleCues: [cue], proSubtitlesSettings: createProject().animation.proSubtitles });
+    expect(scale).toHaveBeenCalled();
+    expect(canonical.context.text.at(-1)?.value).toBe("Canonical");
+    expect(canonical.context.text.at(-1)?.alpha).toBeCloseTo(.4, 8);
+
+    const fallback = recordingCanvas(300, 300);
+    renderBackgroundAutoFrame({ canvas: fallback.canvas, settings: value, timeSeconds: 1, spectrumBands: [], audioPulse: 0, subtitleCues: [cue], proSubtitlesSettings: createProject().animation.proSubtitles });
+    expect(fallback.context.text.at(-1)?.alpha).toBeCloseTo(canonical.context.text.at(-1)!.alpha, 8);
+  });
+
+  it("non nasconde gli errori inattesi del renderer Pro canonico", () => {
+    const value = settings();
+    value.effects = [{ ...value.effects[0]!, radialSpectrumEnabled: false, collisionParticles: false, subtitlesEnabled: true, centerSpectrumEnabled: false, stereoSidesEnabled: false }];
+    const cue = { id: "cue-error", startSeconds: 0, endSeconds: 2, text: "Failure", confidence: 1, verified: true, manual: true } as const;
+    const canonical = recordingCanvas(300, 300);
+    enableCanonicalProSubtitlePrimitives(canonical.context, () => { throw new Error("canonical failure"); });
+    expect(() => renderBackgroundAutoFrame({ canvas: canonical.canvas, settings: value, timeSeconds: 1, spectrumBands: [], audioPulse: 0, subtitleCues: [cue], proSubtitlesSettings: createProject().animation.proSubtitles })).toThrow("canonical failure");
+  });
+
   it("ignora i colori Pro per parola e usa sempre la palette dell'effetto", () => {
     const value = settings();
     value.detections[0] = { ...value.detections[0]!, paletteMode: "manual", palette: ["#110000", "#001100", "#000011"] };
@@ -288,6 +347,7 @@ describe("Background Auto renderer invariants", () => {
     expect(backgroundAutoOutputDimensions(1080, 1920, 2160, 3840)).toEqual({ width: 2160, height: 3840 });
     expect(backgroundAutoResolutionOptions(1080, 1920).map((option) => option.value)).toContain("1080x1920");
     expect(() => backgroundAutoOutputDimensions(1080, 1920, 1920, 1080)).toThrow(/9:16 source ratio/);
+    expect(() => backgroundAutoOutputDimensions(0, 1920, 1920, 1080)).toThrow(/Circular Spectrum Auto Detector/);
   });
 
   it("considera nativo l'arrotondamento pari inevitabile di sorgenti dispari", () => {

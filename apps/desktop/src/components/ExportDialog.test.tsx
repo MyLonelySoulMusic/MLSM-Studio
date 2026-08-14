@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ExportDialog } from "./ExportDialog";
 
 describe("ExportDialog", () => {
-  afterEach(cleanup);
+  afterEach(() => { cleanup(); localStorage.clear(); });
 
   it("indica il rapporto in ogni risoluzione disponibile", () => {
     render(<ExportDialog duration={10} running={false} progress={0} currentFrame={0} totalFrames={0} error={null} onClose={vi.fn()} onCancel={vi.fn()} onStart={vi.fn()} />);
@@ -62,7 +62,7 @@ describe("ExportDialog", () => {
   it("propone soltanto risoluzioni proporzionali alla cover Background Auto", () => {
     const onStart = vi.fn();
     render(<ExportDialog duration={10} running={false} progress={0} currentFrame={0} totalFrames={0} error={null} aspectRatio="16:9" backgroundAuto={{ sourceWidth: 1080, sourceHeight: 1920 }} onClose={vi.fn()} onCancel={vi.fn()} onStart={onStart} />);
-    expect(screen.getByRole("heading", { name: "Export Background Auto Animation" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Export Circular Spectrum Auto Detector" })).toBeInTheDocument();
     const resolutions = screen.getByLabelText("Resolution");
     expect(resolutions).toHaveValue("1080x1920");
     expect(resolutions).toHaveTextContent("1080 × 1920 (9:16 · native)");
@@ -343,7 +343,8 @@ describe("ExportDialog", () => {
       globalThis.fetch = (async () => { throw new TypeError("Failed to fetch"); }) as unknown as typeof fetch;
       render(<ExportDialog {...videoEditorProps} />);
       fireEvent.click(screen.getByLabelText("Attiva interpolazione dei fotogrammi"));
-      await waitFor(() => expect(screen.getByText(/Servizio locale non raggiungibile/)).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByText("Servizio non disponibile")).toBeInTheDocument());
+      expect(screen.getByText(/L’export resta disponibile a 30 fps senza interpolazione/)).toBeInTheDocument();
       expect(screen.getByText("npm run upscaler:server")).toBeInTheDocument();
       expect(screen.getByText("brew install ffmpeg")).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Scegli destinazione e crea video" })).toBeEnabled();
@@ -353,9 +354,10 @@ describe("ExportDialog", () => {
       serviceReturning({ interpolation: { ffmpeg: true, rife: false, device: "mps" } });
       render(<ExportDialog {...videoEditorProps} />);
       fireEvent.click(screen.getByLabelText("Attiva interpolazione dei fotogrammi"));
-      await waitFor(() => expect(screen.getByText(/Servizio pronto · mps/)).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByText("Pronto")).toBeInTheDocument());
       fireEvent.change(screen.getByLabelText("Metodo di interpolazione"), { target: { value: "rife" } });
-      expect(screen.getByText(/pesi RIFE non sono presenti/)).toBeInTheDocument();
+      expect(screen.getByText("Metodo non disponibile")).toBeInTheDocument();
+      expect(screen.getByText(/Pesi RIFE assenti/)).toBeInTheDocument();
     });
 
     it("consegna al chiamante frame rate finale e metodo scelti", async () => {
@@ -381,7 +383,9 @@ describe("ExportDialog", () => {
       serviceReturning({ interpolation: { ffmpeg: true, rife: false, device: "cpu" } });
       const onStart = vi.fn();
       render(<ExportDialog {...videoEditorProps} onStart={onStart} />);
-      expect(screen.getByText(/il file conserva esattamente i 30 fps resi/)).toBeInTheDocument();
+      expect(screen.getByText("Disattivata")).toBeInTheDocument();
+      expect(screen.getByText("Render base: 30 fps · l’aumento viene applicato dopo la verifica.")).toBeInTheDocument();
+      expect(screen.queryByText(/il file conserva esattamente i 30 fps resi/)).not.toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name: "Scegli destinazione e crea video" }));
       expect(onStart).toHaveBeenCalledWith(expect.objectContaining({ videoEditor: { interpolationEnabled: false, interpolationTargetFps: 60, interpolationMethod: "motion" } }));
     });
@@ -392,6 +396,27 @@ describe("ExportDialog", () => {
       render(<ExportDialog duration={10} running={false} progress={0} currentFrame={0} totalFrames={0} error={null} onClose={vi.fn()} onCancel={vi.fn()} onStart={vi.fn()} />);
       expect(fetchMock).not.toHaveBeenCalled();
       expect(screen.queryByLabelText("Attiva interpolazione dei fotogrammi")).not.toBeInTheDocument();
+    });
+
+    it("riavvia la barra sulla seconda fase dopo i 4149 frame base e permette l'annullamento", () => {
+      const onCancel = vi.fn();
+      const common = { ...videoEditorProps, running: true, onCancel };
+      const view = render(<ExportDialog {...common} progress={1} currentFrame={4149} totalFrames={4149} phase="verifying" phaseLabel="Verifica del render base completata" stageProgress={1} stageCurrentFrame={4149} stageTotalFrames={4149} />);
+      expect(screen.getByText("Verifica del render base")).toBeInTheDocument();
+      expect(screen.queryByText("Verifica del render base completata")).not.toBeInTheDocument();
+      view.rerender(<ExportDialog {...common} progress={0} currentFrame={0} totalFrames={0} phase="interpolation" phaseLabel="Interpolazione fotogrammi" stageProgress={0} stageCurrentFrame={0} stageTotalFrames={4149} />);
+      expect(screen.getByRole("region", { name: "Interpolazione fotogrammi" })).toBeInTheDocument();
+      expect(screen.getByRole("progressbar")).toHaveValue(0);
+      fireEvent.click(screen.getByRole("button", { name: "Annulla" }));
+      expect(onCancel).toHaveBeenCalledTimes(1);
+    });
+
+    it("localizza la fase dall’enum e non mostra l’etichetta italiana ricevuta dal server", () => {
+      localStorage.setItem("dynamic-sound-animation-studio.ui.v1", JSON.stringify({ language: "en", theme: "day" }));
+      render(<ExportDialog {...videoEditorProps} running progress={.25} currentFrame={30} totalFrames={117} phase="interpolation" phaseLabel="Interpolazione dei fotogrammi" stageProgress={.25} stageCurrentFrame={30} stageTotalFrames={117} />);
+      expect(screen.getByRole("region", { name: "Interpolating frames" })).toBeInTheDocument();
+      expect(screen.getByText("Interpolating frames")).toBeInTheDocument();
+      expect(screen.queryByText("Interpolazione dei fotogrammi")).not.toBeInTheDocument();
     });
   });
 });

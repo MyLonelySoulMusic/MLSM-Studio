@@ -63,6 +63,13 @@ function videoAsset(id: string): VideoEditorAsset {
   };
 }
 
+function imageAsset(id: string, width = 100, height = 100): VideoEditorAsset {
+  return {
+    ...videoAsset(id), name: `${id}.png`, kind: "image", durationSeconds: 0,
+    width, height, hasAudio: false
+  };
+}
+
 function videoClip(id: string, assetId: string, trackId: string, startSeconds: number, durationSeconds: number): VideoEditorClip {
   return {
     id, assetId, trackId, startSeconds, durationSeconds, sourceInSeconds: 0,
@@ -325,7 +332,7 @@ describe("Video Editor · stack DOM aderente alla timeline", () => {
     expect([...pool.present(settings, 1)]).toEqual(["clip-main", "clip-overlay"]);
     const byId = new Map(fakes.map(({ video }) => [video.dataset.clipId, video]));
     expect(byId.get("clip-main")?.style.zIndex).toBe("1");
-    expect(byId.get("clip-overlay")?.style.zIndex).toBe("3");
+    expect(byId.get("clip-overlay")?.style.zIndex).toBe("4");
     expect(byId.get("clip-main")?.style.visibility).toBe("visible");
     expect(byId.get("clip-overlay")?.style.visibility).toBe("visible");
     pool.dispose();
@@ -402,7 +409,185 @@ describe("Video Editor · stack DOM aderente alla timeline", () => {
     const presentedImage = monitor.querySelector<HTMLImageElement>('img[data-clip-id="image-clip"]');
     expect(presentedImage).not.toBeNull();
     expect(presentedImage).toHaveClass("video-editor-presented-image");
-    expect(presentedImage?.style.zIndex).toBe("3");
+    expect(presentedImage?.style.zIndex).toBe("4");
+    pool.dispose();
+  });
+
+  it("assegna slot z deterministici: livello inferiore completo, ombra superiore, media e overlay superiori", () => {
+    installFakeVideos();
+    const lower = imageAsset("lower-layer");
+    const upper = imageAsset("upper-layer");
+    const lowerClip = videoClip("lower-clip", lower.id, "video-editor-track-main", 0, 4);
+    const upperClip = videoClip("upper-clip", upper.id, "video-editor-track-overlay", 0, 4);
+    upperClip.imageShadow = { enabled: true, style: "drop", color: "#112233", opacity: .6, blur: .02, distance: .1, angle: 0 };
+    const settings: VideoEditorSettings = {
+      ...createProject("Ordine ombre").animation.videoEditor,
+      assets: [lower, upper], clips: [lowerClip, upperClip],
+      effectClips: [
+        { id: "lower-leak", effectId: "light-leak", target: { kind: "clip", clipId: lowerClip.id }, startSeconds: 0, durationSeconds: 3, enabled: true, mix: 1, parameters: { amount: .7 } },
+        { id: "upper-leak", effectId: "light-leak", target: { kind: "clip", clipId: upperClip.id }, startSeconds: 0, durationSeconds: 3, enabled: true, mix: 1, parameters: { amount: .7 } }
+      ]
+    };
+    const pool = new VideoEditorMediaPool(vi.fn());
+    const monitor = document.createElement("div");
+    pool.attach(monitor);
+    pool.sync(settings);
+    expect([...pool.present(settings, 1)]).toEqual([lowerClip.id, upperClip.id]);
+
+    const z = (selector: string) => Number(monitor.querySelector<HTMLElement>(selector)?.style.zIndex);
+    expect(z(`.video-editor-image-shadow-caster[data-clip-id="${lowerClip.id}"]`)).toBe(0);
+    expect(z(`.video-editor-presented-image[data-clip-id="${lowerClip.id}"]`)).toBe(1);
+    expect(z(`.video-editor-layer-effect-overlay[data-clip-id="${lowerClip.id}"]`)).toBe(2);
+    expect(z(`.video-editor-image-shadow-caster[data-clip-id="${upperClip.id}"]`)).toBe(3);
+    expect(z(`.video-editor-presented-image[data-clip-id="${upperClip.id}"]`)).toBe(4);
+    expect(z(`.video-editor-layer-effect-overlay[data-clip-id="${upperClip.id}"]`)).toBe(5);
+    expect(z(`.video-editor-layer-effect-overlay[data-clip-id="${lowerClip.id}"]`))
+      .toBeLessThan(z(`.video-editor-image-shadow-caster[data-clip-id="${upperClip.id}"]`));
+    pool.dispose();
+  });
+
+  it("riusa l'albero SVG, aggiorna i vettori live e non ricrea gli otto stop dell'ombra lunga", () => {
+    installFakeVideos();
+    const image = imageAsset("stable-shadow", 100, 200);
+    const clip = videoClip("stable-shadow-clip", image.id, "video-editor-track-overlay", 0, 4);
+    clip.imageShadow = { enabled: true, style: "long", color: "#123456", opacity: .65, blur: .02, distance: .08, angle: 0 };
+    const settings: VideoEditorSettings = {
+      ...createProject("Ombra SVG stabile").animation.videoEditor,
+      outputWidth: 200, outputHeight: 100, assets: [image], clips: [clip]
+    };
+    const pool = new VideoEditorMediaPool(vi.fn());
+    const monitor = document.createElement("div");
+    let bounds = { width: 200, height: 100 };
+    monitor.getBoundingClientRect = () => ({ ...bounds } as DOMRect);
+    pool.attach(monitor);
+    pool.sync(settings);
+    pool.present(settings, 1);
+
+    const filter = monitor.querySelector<SVGFilterElement>("filter")!;
+    const firstOffsets = [...filter.querySelectorAll<SVGElement>("feOffset")];
+    expect(firstOffsets).toHaveLength(8);
+    expect(firstOffsets.map((node) => Number(node.getAttribute("dx")))).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(firstOffsets.every((node) => Number(node.getAttribute("dy")) === 0)).toBe(true);
+    const firstChildren = [...filter.children];
+
+    pool.present(settings, 1.1);
+    expect([...filter.children].every((node, index) => node === firstChildren[index])).toBe(true);
+    expect([...filter.querySelectorAll("feOffset")].every((node, index) => node === firstOffsets[index])).toBe(true);
+
+    bounds = { width: 400, height: 200 };
+    pool.present(settings, 1.2);
+    expect([...filter.querySelectorAll("feOffset")].every((node, index) => node === firstOffsets[index])).toBe(true);
+    expect(firstOffsets.map((node) => Number(node.getAttribute("dx")))).toEqual([2, 4, 6, 8, 10, 12, 14, 16]);
+    expect(pool.status(settings, 1.2)).toMatchObject({ expectedVisuals: 1, errors: [] });
+    pool.dispose();
+  });
+
+  it("usa nel filtro SVG il vettore drop condiviso e mantiene il glow centrato senza churn", () => {
+    installFakeVideos();
+    const image = imageAsset("vector-shadow");
+    const clip = videoClip("vector-shadow-clip", image.id, "video-editor-track-main", 0, 4);
+    clip.imageShadow = { enabled: true, style: "drop", color: "#445566", opacity: .5, blur: .02, distance: .1, angle: 30 };
+    const settings: VideoEditorSettings = {
+      ...createProject("Vettore ombra").animation.videoEditor,
+      outputWidth: 200, outputHeight: 100, assets: [image], clips: [clip]
+    };
+    const pool = new VideoEditorMediaPool(vi.fn());
+    const monitor = document.createElement("div");
+    pool.attach(monitor);
+    pool.sync(settings);
+    pool.present(settings, 1);
+
+    const filter = monitor.querySelector<SVGFilterElement>("filter")!;
+    const offsets = [...filter.querySelectorAll<SVGElement>("feOffset")];
+    expect(Number(offsets[0]?.getAttribute("dx"))).toBeCloseTo(Math.cos(Math.PI / 6) * 10, 12);
+    expect(Number(offsets[0]?.getAttribute("dy"))).toBeCloseTo(5, 12);
+    expect(offsets.slice(1).every((node) => node.getAttribute("dx") === "0" && node.getAttribute("dy") === "0")).toBe(true);
+
+    const glowClip = { ...clip, imageShadow: { ...clip.imageShadow, style: "glow" as const } };
+    pool.present({ ...settings, clips: [glowClip] }, 1.1);
+    expect([...filter.querySelectorAll("feOffset")].every((node, index) => node === offsets[index])).toBe(true);
+    expect(offsets.every((node) => node.getAttribute("dx") === "0" && node.getAttribute("dy") === "0")).toBe(true);
+    pool.dispose();
+  });
+
+  it.each([
+    ["contain", "contain"],
+    ["cover", "cover"],
+    ["fill", "100% 100%"]
+  ] as const)("maschera gli effetti DOM con l'alpha dell'immagine in fit %s", (fit, maskSize) => {
+    installFakeVideos();
+    const image: VideoEditorAsset = {
+      ...videoAsset(`alpha-${fit}`), kind: "image", url: `blob:alpha-${fit}`,
+      width: 1080, height: 1920, hasAudio: false, durationSeconds: 0
+    };
+    const clip = videoClip(`alpha-${fit}-clip`, image.id, "video-editor-track-overlay", 0, 4);
+    clip.fit = fit;
+    clip.transform = { x: .2, y: -.1, scale: .8, rotation: 12 };
+    const settings: VideoEditorSettings = {
+      ...createProject(`Alpha ${fit}`).animation.videoEditor,
+      outputWidth: 1920, outputHeight: 1080,
+      assets: [image], clips: [clip],
+      effectClips: [
+        {
+          id: `leak-${fit}`, effectId: "light-leak", target: { kind: "clip", clipId: clip.id },
+          startSeconds: 0, durationSeconds: 3, enabled: true, mix: 1, parameters: { amount: .8 }
+        },
+        {
+          id: `rgb-${fit}`, effectId: "rgb-split", target: { kind: "clip", clipId: clip.id },
+          startSeconds: 0, durationSeconds: 3, enabled: true, mix: 1, parameters: { amount: .02, frequency: 6 }
+        }
+      ]
+    };
+    const pool = new VideoEditorMediaPool(vi.fn());
+    const monitor = document.createElement("div");
+    pool.attach(monitor);
+    pool.sync(settings);
+    pool.present(settings, 1);
+
+    const presentedImage = monitor.querySelector<HTMLImageElement>(`img[data-clip-id="${clip.id}"]`)!;
+    const overlay = monitor.querySelector<HTMLDivElement>(`.video-editor-layer-effect-overlay[data-clip-id="${clip.id}"]`)!;
+    expect(presentedImage.style.filter).toContain("drop-shadow(");
+    expect(presentedImage.style.maskImage).toContain(`blob:alpha-${fit}`);
+    expect(presentedImage.style.webkitMaskImage).toContain(`blob:alpha-${fit}`);
+    expect(presentedImage.style.maskSize).toBe(maskSize);
+    expect(presentedImage.style.maskPosition).toBe("center");
+    expect(presentedImage.style.maskRepeat).toBe("no-repeat");
+    expect(overlay.style.maskImage).toContain(`blob:alpha-${fit}`);
+    expect(overlay.style.webkitMaskImage).toContain(`blob:alpha-${fit}`);
+    expect(overlay.style.maskSize).toBe(maskSize);
+    expect(overlay.style.webkitMaskSize).toBe(maskSize);
+    expect(overlay.style.maskPosition).toBe("center");
+    expect(overlay.style.maskRepeat).toBe("no-repeat");
+    expect(presentedImage.style.transform).toContain("translate(192.000px, -54.000px)");
+    expect(presentedImage.style.transform).toContain("rotate(12.000deg) scale(0.80000)");
+    expect(overlay.style.transform).toBe(presentedImage.style.transform);
+    expect(overlay.style.left).toBe("0px");
+    expect(overlay.style.top).toBe("0px");
+    expect(overlay.style.width).toBe(`${settings.outputWidth}px`);
+    expect(overlay.style.height).toBe(`${settings.outputHeight}px`);
+    pool.dispose();
+  });
+
+  it("lascia gli overlay dei video privi di maschera immagine", () => {
+    installFakeVideos();
+    const asset = videoAsset("unmasked-video");
+    const clip = videoClip("unmasked-video-clip", asset.id, "video-editor-track-main", 0, 4);
+    const settings: VideoEditorSettings = {
+      ...createProject("Video senza mask").animation.videoEditor,
+      assets: [asset], clips: [clip],
+      effectClips: [{ id: "video-leak", effectId: "light-leak", target: { kind: "clip", clipId: clip.id }, startSeconds: 0, durationSeconds: 3, enabled: true, mix: 1, parameters: { amount: .8 } }]
+    };
+    const pool = new VideoEditorMediaPool(vi.fn());
+    const monitor = document.createElement("div");
+    pool.attach(monitor);
+    pool.sync(settings);
+    pool.present(settings, 1);
+    const video = monitor.querySelector<HTMLVideoElement>('video[data-clip-id="unmasked-video-clip"]')!;
+    const overlay = monitor.querySelector<HTMLDivElement>('.video-editor-layer-effect-overlay[data-clip-id="unmasked-video-clip"]')!;
+    expect(video.style.maskImage).toBe("none");
+    expect(video.style.webkitMaskImage).toBe("none");
+    expect(overlay.style.maskImage).toBe("none");
+    expect(overlay.style.webkitMaskImage).toBe("none");
     pool.dispose();
   });
 

@@ -33,4 +33,11 @@ describe("routing Upscaler PyTorch", () => {
     expect(form.get("width")).toBe(String(settings.finalWidth));
     expect(form.get("height")).toBe(String(settings.finalHeight));
   });
+
+  it("invia al backend il frammento sorgente selezionato", () => {
+    const settings = { ...createProject().animation.upscaler, sourceStartSeconds: 2.5, sourceDurationSeconds: 1.25 };
+    const form = buildUpscalerVideoForm(new Blob(["video"], { type: "video/mp4" }), "source.mp4", settings, "high", "client");
+    expect(form.get("source_start_seconds")).toBe("2.5");
+    expect(form.get("source_duration_seconds")).toBe("1.25");
+  });
 });

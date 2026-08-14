@@ -47,7 +47,8 @@ describe("Video Editor · protezione delle tracce bloccate", () => {
 
     expect(editor().clips).toEqual([clipBefore]);
     expect(editor().effectClips).toEqual([effectBefore]);
-    expect(editor().assets).toContainEqual(videoAsset);
+    expect(editor().assets).toContainEqual(expect.objectContaining(videoAsset));
+    expect(editor().assets.find((asset) => asset.id === videoAsset.id)).toMatchObject({ sourceFrameCount: 720, sourceRate: { numerator: 60, denominator: 1 }, frameIdentityId: null, timingMode: "constant" });
     expect(editor().tracks.find((track) => track.id === "video-editor-track-main")).toMatchObject({ locked: true, name: "Mixer protetto", hidden: true, muted: true, volume: .1 });
     expect(useProjectStore.getState().addVideoEditorClip(videoAsset.id, { trackId: "video-editor-track-main" })).toBeNull();
     expect(useProjectStore.getState().addVideoEditorEffectClip("fade-out", { targetClipId: clipId })).toBeNull();
@@ -104,5 +105,29 @@ describe("Video Editor · protezione delle tracce bloccate", () => {
     useProjectStore.getState().syncVideoEditorClips(lockedTargetId, [editableTargetId]);
     expect(editor().clips.find((clip) => clip.id === lockedTargetId)?.startSeconds).toBe(4);
     expect(editor().clips.find((clip) => clip.id === editableTargetId)?.startSeconds).toBe(4);
+  });
+
+  it("con strictTrack rifiuta il drop incompatibile senza ripiegare su un altro livello", () => {
+    useProjectStore.getState().addVideoEditorAssets([videoAsset]);
+    const before = editor().clips.length;
+    const clipId = useProjectStore.getState().addVideoEditorClip(videoAsset.id, {
+      trackId: "video-editor-track-audio", startSeconds: 1, strictTrack: true
+    });
+    expect(clipId).toBeNull();
+    expect(editor().clips).toHaveLength(before);
+  });
+
+  it("rifiuta un artifact se la traccia viene bloccata mentre il tool è in esecuzione", () => {
+    useProjectStore.getState().addVideoEditorAssets([videoAsset]);
+    const clipId = useProjectStore.getState().addVideoEditorClip(videoAsset.id, { trackId: "video-editor-track-main" })!;
+    useProjectStore.getState().updateVideoEditorTrack("video-editor-track-main", { locked: true });
+    const artifact = {
+      id: "late-artifact", toolId: "upscaler" as const, url: "blob:late-result", name: "late.mp4", kind: "video" as const,
+      sourceClipId: clipId, sourceFrameCount: 720, sourceRate: { numerator: 60, denominator: 1 },
+      provenance: { toolId: "upscaler" as const, createdAt: new Date().toISOString(), inputAssetId: videoAsset.id }
+    };
+    expect(useProjectStore.getState().insertVideoEditorArtifact(artifact, clipId)).toBeNull();
+    expect(editor().assets.some((asset) => asset.url === artifact.url)).toBe(false);
+    expect(editor().clips).toHaveLength(1);
   });
 });

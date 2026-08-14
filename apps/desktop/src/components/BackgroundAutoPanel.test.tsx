@@ -42,6 +42,23 @@ describe("BackgroundAutoPanel", () => {
     expect(useProjectStore.getState().project.animation.backgroundAuto.effects.find((candidate) => candidate.id === effect.id)?.opacity).toBe(.25);
   });
 
+  it("ignores blank manual geometry inputs and clamps finite out-of-range values", () => {
+    render(<BackgroundAutoPanel />);
+    const effect = useProjectStore.getState().project.animation.backgroundAuto.effects[0]!;
+    fireEvent.change(screen.getByRole("combobox", { name: "Placement for Circular Spectrum 1" }), { target: { value: "manual" } });
+    const centerX = screen.getByRole("spinbutton", { name: "Center X for Circular Spectrum 1" });
+    const centerY = screen.getByRole("spinbutton", { name: "Center Y for Circular Spectrum 1" });
+    const diameter = screen.getByRole("spinbutton", { name: "Diameter for Circular Spectrum 1" });
+    fireEvent.change(centerX, { target: { value: "" } });
+    fireEvent.change(centerY, { target: { value: "" } });
+    fireEvent.change(diameter, { target: { value: "" } });
+    expect(useProjectStore.getState().project.animation.backgroundAuto.effects.find((candidate) => candidate.id === effect.id)).toMatchObject({ centerX: .5, centerY: .5, diameter: .42 });
+    fireEvent.change(centerX, { target: { value: "-3" } });
+    fireEvent.change(centerY, { target: { value: "4" } });
+    fireEvent.change(diameter, { target: { value: "2" } });
+    expect(useProjectStore.getState().project.animation.backgroundAuto.effects.find((candidate) => candidate.id === effect.id)).toMatchObject({ centerX: 0, centerY: 1, diameter: 1 });
+  });
+
   it("aborts superseded detections and ignores their late progress and result", async () => {
     const first = deferred<BackgroundAutoDetectionResult>();
     const second = deferred<BackgroundAutoDetectionResult>();
@@ -95,7 +112,7 @@ describe("BackgroundAutoPanel", () => {
     const secondDetection = deferred<BackgroundAutoDetectionResult>();
     vi.mocked(detectBackgroundObjects).mockReturnValueOnce(firstDetection.promise).mockReturnValueOnce(secondDetection.promise);
     render(<BackgroundAutoPanel />);
-    const input = screen.getByLabelText("Upload Background Auto image");
+    const input = screen.getByLabelText("Upload Auto Detector image");
     const upload = (name: string) => fireEvent.change(input, { target: { files: [new File([name], `${name}.png`, { type: "image/png" })] } });
 
     upload("a");

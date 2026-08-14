@@ -15,6 +15,8 @@ import {
   videoEditorClipMaximumDuration,
   videoEditorCloseGaps,
   videoEditorCompositionForAsset,
+  videoEditorAlignClipsByFrame,
+  videoEditorQuantizeTime,
   videoEditorDefaultImageSeconds,
   videoEditorMinimumClipSeconds,
   videoEditorMoveClip,
@@ -27,7 +29,11 @@ import {
   type VideoEditorEffectClip,
   type VideoEditorTrack
 } from "../services/video-editor";
+import { videoEditorClipSourceDuration, videoEditorClipTimelineDurationForSource } from "../services/video-editor-speed";
+import { defaultVideoEditorImageShadow } from "../services/video-editor-image-shadow";
 import { videoEditorClampEffect, videoEditorMoveEffect, videoEditorPlaceEffect, videoEditorTrimEffect } from "../services/video-editor-effects";
+import { upsertVideoEditorKeyframe, removeVideoEditorKeyframe, type VideoEditorAutomationTarget, type VideoEditorKeyframe } from "../services/video-editor-automation";
+import type { VideoEditorToolArtifact } from "../services/video-editor-tools";
 
 interface AttachAudioOptions {
   preserveSubtitleTrack?: boolean;
@@ -40,6 +46,8 @@ interface ProjectState {
   status: string;
   eventHistory: RhythmBallProject["events"][];
   eventFuture: RhythmBallProject["events"][];
+  videoEditorHistory: RhythmBallProject["animation"]["videoEditor"][];
+  videoEditorFuture: RhythmBallProject["animation"]["videoEditor"][];
   selectedEventId: string | null;
   selectedEventIds: string[];
   newProject: () => void;
@@ -88,7 +96,7 @@ interface ProjectState {
   addVideoEditorAssets: (assets: readonly VideoEditorAsset[]) => void;
   removeVideoEditorAsset: (assetId: string) => void;
   updateVideoEditorAsset: (assetId: string, patch: Partial<VideoEditorAsset>) => void;
-  addVideoEditorClip: (assetId: string, options?: { trackId?: string; startSeconds?: number }) => string | null;
+  addVideoEditorClip: (assetId: string, options?: { trackId?: string; startSeconds?: number; strictTrack?: boolean }) => string | null;
   updateVideoEditorClip: (clipId: string, patch: Partial<Omit<VideoEditorClip, "id" | "assetId">>) => void;
   updateVideoEditorClipAdjustments: (clipId: string, patch: Partial<VideoEditorClip["adjustments"]>) => void;
   moveVideoEditorClip: (clipId: string, startSeconds: number, playheadSeconds?: number) => void;
@@ -100,6 +108,12 @@ interface ProjectState {
   selectVideoEditorClip: (clipId: string | null, additive?: boolean) => void;
   selectVideoEditorClips: (clipIds: readonly string[]) => void;
   syncVideoEditorClips: (referenceClipId: string, targetClipIds: readonly string[]) => void;
+  alignVideoEditorClipsByFrame: (referenceClipId: string, targetClipIds: readonly string[]) => void;
+  upsertVideoEditorKeyframe: (target: VideoEditorAutomationTarget, keyframe: VideoEditorKeyframe) => void;
+  removeVideoEditorKeyframe: (target: VideoEditorAutomationTarget, frame: number) => void;
+  insertVideoEditorArtifact: (artifact: VideoEditorToolArtifact, sourceClipId: string) => string | null;
+  undoVideoEditor: () => void;
+  redoVideoEditor: () => void;
   closeVideoEditorGaps: (trackId: string) => void;
   updateVideoEditorTrack: (trackId: string, patch: Partial<Omit<VideoEditorTrack, "id" | "kind">>) => void;
   addVideoEditorTrack: (kind: VideoEditorTrack["kind"]) => void;
@@ -189,10 +203,15 @@ function normalizeBackgroundAutoSettings(settings: BackgroundAutoSettings): Back
   };
 }
 
+function normalizeBackgroundAutoGeometryValue(value: number | undefined, fallback: number, minimum: number): number {
+  const safeFallback = Number.isFinite(fallback) ? fallback : minimum;
+  return Number.isFinite(value) ? Math.max(minimum, Math.min(1, value as number)) : Math.max(minimum, Math.min(1, safeFallback));
+}
+
 function autoBackgroundEffect(effect: BackgroundAutoEffect, settings: BackgroundAutoSettings, effectIndex: number): BackgroundAutoEffect {
   const target = effect.detectionId ? settings.detections.find((detection) => detection.id === effect.detectionId) : undefined;
   const palette = target ? detectionPalette(target, settings.palette) : completeBackgroundAutoPalette(settings.palette, settings.palette);
-  return { ...effect, centerSpectrumEnabled: effect.centerSpectrumEnabled ?? true, stereoSidesEnabled: effect.stereoSidesEnabled ?? true, subtitlesEnabled: effect.subtitlesEnabled ?? false, palette, color: palette[effectIndex % palette.length] ?? palette[0] };
+  return { ...effect, placementMode: effect.placementMode ?? (effect.detectionId ? "detected" : "manual"), centerX: effect.centerX ?? .5, centerY: effect.centerY ?? .5, diameter: effect.diameter ?? .42, radialSpectrumEnabled: effect.radialSpectrumEnabled ?? true, centerSpectrumEnabled: effect.centerSpectrumEnabled ?? true, stereoSidesEnabled: effect.stereoSidesEnabled ?? true, subtitlesEnabled: effect.subtitlesEnabled ?? false, palette, color: palette[effectIndex % palette.length] ?? palette[0] };
 }
 
 /** Keeps effect foreign keys valid after a new detection snapshot. Null is
@@ -205,7 +224,8 @@ export function reconcileBackgroundAutoEffects(settings: BackgroundAutoSettings)
     if (effect.detectionId && !eligibleIds.has(effect.detectionId)) return [];
     // Null targets remain disabled editor placeholders; never infer a target
     // from array position because animation is an explicit user choice.
-    return [{ ...effect, centerSpectrumEnabled: effect.centerSpectrumEnabled ?? true, stereoSidesEnabled: effect.stereoSidesEnabled ?? true, subtitlesEnabled: effect.subtitlesEnabled ?? false, detectionId: effect.detectionId ?? null, enabled: effect.detectionId ? effect.enabled : false }];
+    const placementMode = effect.placementMode ?? (effect.detectionId ? "detected" : "manual");
+    return [{ ...effect, placementMode, centerX: effect.centerX ?? .5, centerY: effect.centerY ?? .5, diameter: effect.diameter ?? .42, radialSpectrumEnabled: effect.radialSpectrumEnabled ?? true, centerSpectrumEnabled: effect.centerSpectrumEnabled ?? true, stereoSidesEnabled: effect.stereoSidesEnabled ?? true, subtitlesEnabled: effect.subtitlesEnabled ?? false, detectionId: placementMode === "manual" ? null : effect.detectionId ?? null, enabled: placementMode === "manual" ? effect.enabled : effect.detectionId ? effect.enabled : false }];
   });
 }
 function defaultProSubtitleCueStyle(
@@ -264,11 +284,32 @@ function completeProSubtitlePalette(colors: readonly string[], fallback: readonl
   return [primary, secondary, accent];
 }
 
-type VideoEditorSettings = RhythmBallProject["animation"]["videoEditor"];
+type VideoEditorSettings = import("../services/video-editor").VideoEditorSettings;
 /** Ogni mutazione del Video Editor passa da qui: un solo punto in cui il progetto resta coerente. */
-function videoEditorState(state: ProjectState, videoEditor: VideoEditorSettings, status?: string): Partial<ProjectState> {
+function normalizeVideoEditorForProject(videoEditor: VideoEditorSettings): RhythmBallProject["animation"]["videoEditor"] {
   return {
-    project: { ...state.project, animation: { ...state.project.animation, videoEditor } },
+    ...videoEditor,
+    assets: videoEditor.assets.map((asset) => ({
+      ...asset,
+      sourceFrameCount: asset.sourceFrameCount ?? (asset.kind === "video" && asset.durationSeconds > 0 ? Math.max(1, Math.round(asset.durationSeconds * (asset.sourceRate?.numerator ?? 60) / (asset.sourceRate?.denominator ?? 1))) : 0),
+      sourceRate: asset.sourceRate ?? { numerator: 60, denominator: 1 },
+      frameIdentityId: asset.frameIdentityId ?? null,
+      timingMode: asset.timingMode ?? "constant"
+    })),
+    clips: videoEditor.clips.map((clip) => ({
+      ...clip,
+      speed: clip.speed ?? { mode: "constant" as const, constant: 1, points: [], preservePitch: false },
+      imageShadow: { ...defaultVideoEditorImageShadow, ...(clip.imageShadow ?? {}) }
+    }))
+  };
+}
+
+function videoEditorState(state: ProjectState, videoEditor: VideoEditorSettings, status?: string): Partial<ProjectState> {
+  const normalized = normalizeVideoEditorForProject(videoEditor);
+  return {
+    project: { ...state.project, animation: { ...state.project.animation, videoEditor: normalized } },
+    videoEditorHistory: [...state.videoEditorHistory, state.project.animation.videoEditor].slice(-100),
+    videoEditorFuture: [],
     dirty: true,
     ...(status ? { status } : {})
   };
@@ -290,16 +331,30 @@ function defaultVideoEditorClip(id: string, asset: VideoEditorAsset, placement: 
     fadeInSeconds: 0, fadeOutSeconds: 0, fadeCurve: "smooth",
     audioFadeInSeconds: 0, audioFadeOutSeconds: 0,
     blendMode: "normal", blendIntensity: 1,
+    speed: { mode: "constant", constant: 1, points: [], preservePitch: false },
     adjustments: { exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, saturation: 0, vibrance: 0, temperature: 0, tint: 0, hue: 0, sharpness: 0, denoise: 0, opacity: 1 },
     transform: { x: 0, y: 0, scale: 1, rotation: 0 },
-    fit: "cover", muted: false, volume: 1
+    imageShadow: { ...defaultVideoEditorImageShadow },
+    // Un fermo immagine trasparente deve mostrare tutto il canvas senza crop:
+    // i video conservano il comportamento storico cover.
+    fit: asset.kind === "image" ? "contain" : "cover", muted: false, volume: 1
+  };
+}
+
+function hydrateVideoEditorAsset(asset: VideoEditorAsset): RhythmBallProject["animation"]["videoEditor"]["assets"][number] {
+  return {
+    ...asset,
+    sourceFrameCount: asset.sourceFrameCount ?? (asset.kind === "video" && asset.durationSeconds > 0 ? Math.max(1, Math.round(asset.durationSeconds * (asset.sourceRate?.numerator ?? 60) / (asset.sourceRate?.denominator ?? 1))) : 0),
+    sourceRate: asset.sourceRate ?? { numerator: 60, denominator: 1 },
+    frameIdentityId: asset.frameIdentityId ?? null,
+    timingMode: asset.timingMode ?? "constant"
   };
 }
 /** Riporta la clip dentro i limiti dello schema: durata utile, sorgente disponibile, dissolvenze compatibili. */
-function clampVideoEditorClip(clip: VideoEditorClip, asset: VideoEditorAsset | null): VideoEditorClip {
+function clampVideoEditorClip(clip: VideoEditorClip, asset: VideoEditorAsset | null, timebase: VideoEditorSettings["timebase"] = { fpsNumerator: 60, fpsDenominator: 1, dropFrame: false }): VideoEditorClip {
   const still = videoEditorAssetIsStill(asset);
   const sourceInSeconds = still ? 0 : Math.max(0, Math.min(asset!.durationSeconds - videoEditorMinimumClipSeconds, clip.sourceInSeconds));
-  const maximum = videoEditorClipMaximumDuration({ ...clip, sourceInSeconds }, asset);
+  const maximum = videoEditorClipMaximumDuration({ ...clip, sourceInSeconds }, asset, timebase);
   const durationSeconds = Math.max(videoEditorMinimumClipSeconds, Math.min(maximum, clip.durationSeconds || videoEditorDefaultImageSeconds));
   const limitFades = (inSeconds: number, outSeconds: number): [number, number] => {
     const fadeIn = Math.max(0, Math.min(durationSeconds, inSeconds));
@@ -337,9 +392,9 @@ function moveTargetEffects(settings: VideoEditorSettings, clips: readonly VideoE
 }
 
 export const useProjectStore = create<ProjectState>((set) => ({
-  project: createProject(), filePath: null, dirty: false, status: "Pronto", eventHistory: [], eventFuture: [], selectedEventId: null, selectedEventIds: [],
-  newProject: () => set({ project: createProject(), filePath: null, dirty: false, status: "Nuovo progetto creato", eventHistory: [], eventFuture: [], selectedEventId: null, selectedEventIds: [] }),
-  setProject: (project, filePath) => set({ project: { ...project, animation: { ...project.animation, backgroundAuto: normalizeBackgroundAutoSettings(project.animation.backgroundAuto) } }, filePath, dirty: false, status: "Progetto caricato", eventHistory: [], eventFuture: [], selectedEventId: null, selectedEventIds: [] }),
+  project: createProject(), filePath: null, dirty: false, status: "Pronto", eventHistory: [], eventFuture: [], videoEditorHistory: [], videoEditorFuture: [], selectedEventId: null, selectedEventIds: [],
+  newProject: () => set({ project: createProject(), filePath: null, dirty: false, status: "Nuovo progetto creato", eventHistory: [], eventFuture: [], videoEditorHistory: [], videoEditorFuture: [], selectedEventId: null, selectedEventIds: [] }),
+  setProject: (project, filePath) => set({ project: { ...project, animation: { ...project.animation, backgroundAuto: normalizeBackgroundAutoSettings(project.animation.backgroundAuto) } }, filePath, dirty: false, status: "Progetto caricato", eventHistory: [], eventFuture: [], videoEditorHistory: [], videoEditorFuture: [], selectedEventId: null, selectedEventIds: [] }),
   renameProject: (name) => set((state) => ({ project: { ...state.project, project: { ...state.project.project, name } }, dirty: true })),
   attachAudio: (metadata, waveform, options = {}) => set((state) => {
     const preserveSubtitleTrack = options.preserveSubtitleTrack === true;
@@ -529,7 +584,7 @@ export const useProjectStore = create<ProjectState>((set) => ({
       const target = settings.detections.find((detection) => detection.id === id);
       const targetPalette = target ? detectionPalette(target, settings.palette) : settings.palette;
       const color = targetPalette[index % targetPalette.length] ?? targetPalette[0];
-      effects = [...settings.effects, { id: `circular-spectrum-${index + 1}-${crypto.randomUUID()}`, type: "circularSpectrum" as const, label: "Circular Spectrum" as const, enabled: true, detectionId: id, paletteMode: "auto" as const, color, palette: targetPalette, intensity: 1, scale: 1, opacity: .9, rotationSpeed: .08, collisionParticles: true, centerSpectrumEnabled: true, stereoSidesEnabled: true, subtitlesEnabled: false }];
+      effects = [...settings.effects, { id: `circular-spectrum-${index + 1}-${crypto.randomUUID()}`, type: "circularSpectrum" as const, label: "Circular Spectrum" as const, enabled: true, placementMode: "detected" as const, detectionId: id, centerX: .5, centerY: .5, diameter: .42, paletteMode: "auto" as const, color, palette: targetPalette, intensity: 1, scale: 1, opacity: .9, rotationSpeed: .08, collisionParticles: true, centerSpectrumEnabled: true, stereoSidesEnabled: true, subtitlesEnabled: false, radialSpectrumEnabled: true }];
     }
     }
     return effects === settings.effects ? state : { project: { ...state.project, animation: { ...state.project.animation, backgroundAuto: { ...settings, effects, personAnimationEnabled: false } } }, dirty: true };
@@ -537,7 +592,7 @@ export const useProjectStore = create<ProjectState>((set) => ({
   addBackgroundAutoEffect: () => set((state) => {
     const settings = state.project.animation.backgroundAuto; if (settings.effects.length >= 16) return state;
     const index = settings.effects.length; const color = settings.palette[index % settings.palette.length] ?? settings.palette[0];
-    const effect = { id: `circular-spectrum-${index + 1}-${crypto.randomUUID()}`, type: "circularSpectrum" as const, label: "Circular Spectrum" as const, enabled: false, detectionId: null, paletteMode: "auto" as const, color, palette: settings.palette, intensity: 1, scale: 1, opacity: .9, rotationSpeed: .08, collisionParticles: true, centerSpectrumEnabled: true, stereoSidesEnabled: true, subtitlesEnabled: false };
+    const effect = { id: `circular-spectrum-${index + 1}-${crypto.randomUUID()}`, type: "circularSpectrum" as const, label: "Circular Spectrum" as const, enabled: false, placementMode: "manual" as const, detectionId: null, centerX: .5, centerY: .5, diameter: .42, paletteMode: "auto" as const, color, palette: settings.palette, intensity: 1, scale: 1, opacity: .9, rotationSpeed: .08, collisionParticles: true, centerSpectrumEnabled: true, stereoSidesEnabled: true, subtitlesEnabled: false, radialSpectrumEnabled: true };
     return { project: { ...state.project, animation: { ...state.project.animation, backgroundAuto: { ...settings, effects: [...settings.effects, effect] } } }, dirty: true };
   }),
   removeBackgroundAutoEffect: (id) => set((state) => {
@@ -552,7 +607,13 @@ export const useProjectStore = create<ProjectState>((set) => ({
       if (effect.id !== id) return effect;
       const paletteMode = safePatch.paletteMode ?? effect.paletteMode;
       const automatic = paletteMode === "auto" ? autoBackgroundEffect({ ...effect, ...safePatch, paletteMode }, settings, settings.effects.indexOf(effect)) : {};
-      return { ...effect, ...safePatch, ...automatic, paletteMode, label: "Circular Spectrum" as const, type: "circularSpectrum" as const };
+      const next = { ...effect, ...safePatch, ...automatic, paletteMode, label: "Circular Spectrum" as const, type: "circularSpectrum" as const };
+      return {
+        ...next,
+        centerX: normalizeBackgroundAutoGeometryValue(next.centerX, effect.centerX ?? .5, 0),
+        centerY: normalizeBackgroundAutoGeometryValue(next.centerY, effect.centerY ?? .5, 0),
+        diameter: normalizeBackgroundAutoGeometryValue(next.diameter, effect.diameter ?? .42, .05)
+      };
     });
     return { project: { ...state.project, animation: { ...state.project.animation, backgroundAuto: { ...settings, effects } } }, dirty: true };
   }),
@@ -568,7 +629,7 @@ export const useProjectStore = create<ProjectState>((set) => ({
   addVideoEditorAssets: (assets) => set((state) => {
     const settings = state.project.animation.videoEditor;
     const known = new Set(settings.assets.map((asset) => asset.id));
-    const added = assets.filter((asset) => !known.has(asset.id));
+    const added = assets.filter((asset) => !known.has(asset.id)).map(hydrateVideoEditorAsset);
     if (!added.length) return state;
     return videoEditorState(state, { ...settings, assets: [...settings.assets, ...added].slice(0, 200) }, `${added.length === 1 ? added[0]!.name : `${added.length} file`} nel pool media`);
   }),
@@ -602,7 +663,16 @@ export const useProjectStore = create<ProjectState>((set) => ({
       const settings = state.project.animation.videoEditor;
       const asset = findVideoEditorAsset(settings, assetId);
       if (!asset) return state;
+      if (options.strictTrack && !options.trackId) return state;
       if (options.trackId && videoEditorTrackIsLocked(settings, options.trackId)) return state;
+      // A drop onto a concrete lane must never silently jump to another one.
+      // Button/keyboard insertion can omit strictTrack and retain append's
+      // normal compatible-track selection; timeline DnD opts into strictness.
+      if (options.strictTrack && options.trackId) {
+        const requestedTrack = settings.tracks.find((track) => track.id === options.trackId);
+        const requestedKind = asset.kind === "audio" ? "audio" : "video";
+        if (!requestedTrack || requestedTrack.locked || requestedTrack.kind !== requestedKind) return state;
+      }
       const placement = videoEditorAppendPlacement(settings, asset, options.trackId);
       if (!placement) return state;
       created = true;
@@ -629,7 +699,12 @@ export const useProjectStore = create<ProjectState>((set) => ({
     // generica non può aggirare la protezione del livello di destinazione.
     if (patch.trackId !== undefined && patch.trackId !== clip.trackId) return state;
     const asset = findVideoEditorAsset(settings, clip.assetId);
-    const next = clampVideoEditorClip({ ...clip, ...patch }, asset);
+    let candidate = { ...clip, ...patch };
+    if (patch.speed && patch.durationSeconds === undefined && patch.sourceInSeconds === undefined && !videoEditorAssetIsStill(asset)) {
+      const sourceDuration = videoEditorClipSourceDuration(clip, settings.timebase);
+      candidate = { ...candidate, durationSeconds: videoEditorClipTimelineDurationForSource(sourceDuration, patch.speed, settings.timebase) };
+    }
+    const next = clampVideoEditorClip(candidate, asset, settings.timebase);
     const clips = settings.clips.map((item) => item.id === clipId ? next : item);
     const delta = next.startSeconds - clip.startSeconds;
     const shifted = settings.effectClips.map((effect) => effect.target.kind === "clip" && effect.target.clipId === clipId ? { ...effect, startSeconds: effect.startSeconds + delta } : effect);
@@ -666,7 +741,7 @@ export const useProjectStore = create<ProjectState>((set) => ({
     const trimmed = videoEditorTrimClip(settings, clipId, edge, timeSeconds, playheadSeconds);
     if (!trimmed) return state;
     const asset = findVideoEditorAsset(settings, trimmed.assetId);
-    const next = clampVideoEditorClip(trimmed, asset);
+    const next = clampVideoEditorClip(trimmed, asset, settings.timebase);
     const clips = settings.clips.map((clip) => clip.id === clipId ? next : clip);
     const oldEnd = videoEditorClipEnd(findVideoEditorClip(settings, clipId)!);
     const newEnd = videoEditorClipEnd(next);
@@ -682,7 +757,7 @@ export const useProjectStore = create<ProjectState>((set) => ({
     const settings = state.project.animation.videoEditor;
     const clip = findVideoEditorClip(settings, clipId);
     if (!clip || videoEditorTrackIsLocked(settings, clip.trackId)) return state;
-    const halves = videoEditorSplitClip(clip, timeSeconds, `video-editor-clip-${crypto.randomUUID()}`);
+    const halves = videoEditorSplitClip(clip, videoEditorQuantizeTime(timeSeconds, settings.timebase), `video-editor-clip-${crypto.randomUUID()}`, settings.timebase);
     if (!halves) return state;
     const clips = settings.clips.flatMap((item) => item.id === clipId ? [halves[0], halves[1]] : [item]);
     const retargeted = settings.effectClips.map((effect) => {
@@ -736,6 +811,66 @@ export const useProjectStore = create<ProjectState>((set) => ({
       ? `Sincronizzazione ritmica · ${result.matchedBeats} battute allineate`
       : `Attacchi allineati · scarto ${result.offsetSeconds >= 0 ? "+" : ""}${result.offsetSeconds.toFixed(3)} s`;
     return videoEditorState(state, { ...settings, clips: result.clips, effectClips: moveTargetEffects(settings, result.clips) }, status);
+  }),
+  alignVideoEditorClipsByFrame: (referenceClipId, targetClipIds) => set((state) => {
+    const settings = state.project.animation.videoEditor;
+    const editableTargets = targetClipIds.filter((clipId) => !videoEditorClipIsLocked(settings, clipId));
+    const result = videoEditorAlignClipsByFrame(settings, referenceClipId, editableTargets);
+    if (!result) return videoEditorState(state, settings, "Allineamento per frame non disponibile: i video devono avere stesso numero di frame e frame rate costante.");
+    return videoEditorState(state, { ...settings, clips: result.clips, effectClips: moveTargetEffects(settings, result.clips) }, `${result.alignedClipIds.length} clip allineate per frame (${result.referenceFrameCount} frame)`);
+  }),
+  upsertVideoEditorKeyframe: (target, keyframe) => set((state) => {
+    const settings = state.project.animation.videoEditor;
+    return videoEditorState(state, { ...settings, automationLanes: upsertVideoEditorKeyframe(settings.automationLanes, target, keyframe) }, "Keyframe automazione aggiunto");
+  }),
+  removeVideoEditorKeyframe: (target, frame) => set((state) => {
+    const settings = state.project.animation.videoEditor;
+    return videoEditorState(state, { ...settings, automationLanes: removeVideoEditorKeyframe(settings.automationLanes, target, frame) }, "Keyframe automazione rimosso");
+  }),
+  insertVideoEditorArtifact: (artifact, sourceClipId) => {
+    let insertedId: string | null = null;
+    set((state) => {
+      const settings = state.project.animation.videoEditor;
+      const source = settings.clips.find((clip) => clip.id === sourceClipId);
+      const asset = settings.assets.find((item) => item.id === source?.assetId);
+      const track = source ? settings.tracks.find((item) => item.id === source.trackId && !item.locked) : null;
+      if (!source || !asset || !track || !artifact.url) return state;
+      const assetId = `video-editor-asset-${crypto.randomUUID()}`;
+      const clipId = `video-editor-clip-${crypto.randomUUID()}`;
+      const sourceDuration = artifact.sourceDurationSeconds ?? videoEditorClipSourceDuration(source, settings.timebase);
+      const nextAsset: VideoEditorAsset = { id: assetId, name: artifact.name, kind: artifact.kind, url: artifact.url, durationSeconds: sourceDuration, width: asset.width, height: asset.height, sourceFrameCount: artifact.sourceFrameCount ?? asset.sourceFrameCount, sourceRate: artifact.sourceRate ?? asset.sourceRate, frameIdentityId: artifact.id, timingMode: "constant", thumbnailUrl: null, hasAudio: asset.hasAudio, bpm: null, beats: [], downbeats: [], waveform: [] };
+      const trackId = `video-editor-track-${crypto.randomUUID()}`;
+      const artifactTrack = { id: trackId, name: `${artifact.name} · risultato`, kind: artifact.kind === "audio" ? "audio" as const : "video" as const, hidden: false, muted: false, locked: false, volume: 1 };
+      const sourceTrackIndex = settings.tracks.findIndex((item) => item.id === track.id);
+      const tracks = [...settings.tracks];
+      tracks.splice(Math.max(0, sourceTrackIndex), 0, artifactTrack);
+      const nextClip = { ...source, id: clipId, assetId, trackId, sourceInSeconds: 0 };
+      insertedId = clipId;
+      return videoEditorState(state, { ...settings, assets: [...settings.assets, nextAsset], tracks, clips: [...settings.clips, nextClip], selectedClipIds: [clipId], selectedEffectClipIds: [] }, `${artifact.name} inserito come nuova clip`);
+    });
+    return insertedId;
+  },
+  undoVideoEditor: () => set((state) => {
+    const previous = state.videoEditorHistory.at(-1);
+    if (!previous) return state;
+    return {
+      project: { ...state.project, animation: { ...state.project.animation, videoEditor: previous } },
+      videoEditorHistory: state.videoEditorHistory.slice(0, -1),
+      videoEditorFuture: [state.project.animation.videoEditor, ...state.videoEditorFuture].slice(0, 100),
+      dirty: true,
+      status: "Modifica Video Editor annullata"
+    };
+  }),
+  redoVideoEditor: () => set((state) => {
+    const next = state.videoEditorFuture[0];
+    if (!next) return state;
+    return {
+      project: { ...state.project, animation: { ...state.project.animation, videoEditor: next } },
+      videoEditorHistory: [...state.videoEditorHistory, state.project.animation.videoEditor].slice(-100),
+      videoEditorFuture: state.videoEditorFuture.slice(1),
+      dirty: true,
+      status: "Modifica Video Editor ripristinata"
+    };
   }),
   closeVideoEditorGaps: (trackId) => set((state) => {
     const settings = state.project.animation.videoEditor;

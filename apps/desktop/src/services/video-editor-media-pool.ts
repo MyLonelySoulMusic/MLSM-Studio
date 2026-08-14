@@ -1,7 +1,9 @@
 import { videoEditorAsset, videoEditorClipEnd, videoEditorClipGain, videoEditorPresentationTime, videoEditorSourceTime, videoEditorVisibleLayers, type VideoEditorAsset, type VideoEditorClip, type VideoEditorLayer, type VideoEditorSettings } from "./video-editor";
 import { videoEditorEffectCssFilter, videoEditorEffectFrameState, videoEditorEffectFrameStateIsNeutral, type VideoEditorEffectFrameState } from "./video-editor-effects";
-import { videoEditorAdjustmentsAreNeutral, videoEditorFilter, type VideoEditorFrameSource } from "./video-editor-renderer";
+import { videoEditorAdjustmentsAreNeutral, videoEditorFilter, videoEditorSettingsAtAutomationFrame, type VideoEditorFrameSource } from "./video-editor-renderer";
 import { mediaDrawRect, type ExportMediaFit } from "./offline-video-exporter";
+import { videoEditorClipPlaybackRateAtLocalSeconds } from "./video-editor-speed";
+import { defaultVideoEditorImageShadow, videoEditorImageLongShadowStops, videoEditorImageShadowCssFilter, videoEditorImageShadowPaint } from "./video-editor-image-shadow";
 
 /** Le sorgenti vengono preparate poco prima del loro attacco: evita il fotogramma nero al taglio. */
 const preloadWindowSeconds = .4;
@@ -72,6 +74,12 @@ interface PoolEntry {
   frameCallbackId: number | null;
   playbackError: string | null;
   effectOverlay: HTMLDivElement | null;
+  /** Reusable original-alpha caster for still-image shadows. */
+  shadowCaster: HTMLImageElement | null;
+  shadowFilterId: string | null;
+  shadowFilterRoot: SVGSVGElement | null;
+  shadowFilter: SVGFilterElement | null;
+  shadowFilterSignature: string | null;
 }
 
 export interface VideoEditorMediaPoolStatus { expectedVisuals: number; readyVisuals: number; pendingNames: string[]; errors: string[] }
@@ -83,6 +91,9 @@ export interface VideoEditorPlaybackStartResult { startedMedia: number; startedV
  * valori crescenti sono via via piu vicini allo spettatore.
  */
 interface PresentedVisualLayer { layer: VideoEditorLayer; stackIndex: number }
+
+/** Each DOM layer owns shadow, media and optical-overlay slots in this order. */
+const presentedLayerStride = 3;
 
 function combinedTransform(
   clip: VideoEditorClip,
@@ -138,6 +149,112 @@ function opticalOverlayBackground(effect: VideoEditorEffectFrameState): string {
   return layers.join(", ");
 }
 
+function cssUrl(value: string): string {
+  return `url("${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/[\n\r\f]/g, "")}")`;
+}
+
+const svgNamespace = "http://www.w3.org/2000/svg";
+
+function createImageShadowFilter(clipId: string): { id: string; root: SVGSVGElement; filter: SVGFilterElement } | null {
+  if (typeof document.createElementNS !== "function") return null;
+  const root = document.createElementNS(svgNamespace, "svg");
+  const filter = document.createElementNS(svgNamespace, "filter");
+  const id = `video-editor-image-shadow-${clipId.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+  root.setAttribute("aria-hidden", "true");
+  root.style.position = "absolute";
+  root.style.width = "0";
+  root.style.height = "0";
+  root.style.overflow = "hidden";
+  filter.setAttribute("id", id);
+  filter.setAttribute("x", "-100%");
+  filter.setAttribute("y", "-100%");
+  filter.setAttribute("width", "300%");
+  filter.setAttribute("height", "300%");
+  filter.setAttribute("filterUnits", "objectBoundingBox");
+  const make = (name: string): SVGElement => document.createElementNS(svgNamespace, name);
+  const merge = make("feMerge");
+  for (let index = 1; index <= videoEditorImageLongShadowStops.length; index += 1) {
+    const blurNode = make("feGaussianBlur");
+    const blurId = `shadow-blur-${index}`;
+    blurNode.setAttribute("in", "SourceAlpha");
+    blurNode.setAttribute("stdDeviation", "0");
+    blurNode.setAttribute("result", blurId);
+    filter.append(blurNode);
+    const offsetNode = make("feOffset");
+    const offsetId = `shadow-offset-${index}`;
+    offsetNode.setAttribute("in", blurId);
+    offsetNode.setAttribute("dx", "0");
+    offsetNode.setAttribute("dy", "0");
+    offsetNode.setAttribute("result", offsetId);
+    filter.append(offsetNode);
+    const floodNode = make("feFlood");
+    floodNode.setAttribute("flood-color", "#000000");
+    floodNode.setAttribute("flood-opacity", "0");
+    floodNode.setAttribute("result", `shadow-color-${index}`);
+    filter.append(floodNode);
+    const compositeNode = make("feComposite");
+    const compositeId = `shadow-layer-${index}`;
+    compositeNode.setAttribute("in", `shadow-color-${index}`);
+    compositeNode.setAttribute("in2", offsetId);
+    compositeNode.setAttribute("operator", "in");
+    compositeNode.setAttribute("result", compositeId);
+    filter.append(compositeNode);
+    const mergeNode = make("feMergeNode");
+    mergeNode.setAttribute("in", compositeId);
+    merge.append(mergeNode);
+  }
+  merge.setAttribute("result", "shadow-merged");
+  filter.append(merge);
+  const outside = make("feComposite");
+  outside.setAttribute("in", "shadow-merged");
+  outside.setAttribute("in2", "SourceAlpha");
+  outside.setAttribute("operator", "out");
+  outside.setAttribute("result", "shadow-only");
+  filter.append(outside);
+  root.append(filter);
+  return { id, root, filter };
+}
+
+function configureImageShadowFilter(
+  filter: SVGFilterElement,
+  shadow: NonNullable<VideoEditorClip["imageShadow"]>,
+  width: number,
+  height: number,
+  previousSignature: string | null
+): string {
+  const paint = videoEditorImageShadowPaint(shadow, width, height);
+  const signature = JSON.stringify(paint);
+  if (signature === previousSignature) return signature;
+  const blurNodes = [...filter.querySelectorAll<SVGElement>("feGaussianBlur")];
+  const offsetNodes = [...filter.querySelectorAll<SVGElement>("feOffset")];
+  const floodNodes = [...filter.querySelectorAll<SVGElement>("feFlood")];
+  for (let index = 0; index < videoEditorImageLongShadowStops.length; index += 1) {
+    const primitive = paint.primitives[index];
+    blurNodes[index]?.setAttribute("stdDeviation", String(primitive?.blur ?? 0));
+    offsetNodes[index]?.setAttribute("dx", String(primitive?.offsetX ?? 0));
+    offsetNodes[index]?.setAttribute("dy", String(primitive?.offsetY ?? 0));
+    floodNodes[index]?.setAttribute("flood-color", paint.color);
+    floodNodes[index]?.setAttribute("flood-opacity", primitive ? String(paint.opacity) : "0");
+  }
+  return signature;
+}
+
+/** Mirrors object-fit while using the still source alpha as a post-filter mask.
+ * Applying it to both the media node and its optical overlay keeps blur/RGB
+ * shadows and generated gradients inside the same transformed silhouette. */
+function applyImageAlphaMask(target: HTMLElement, entry: PoolEntry, asset: VideoEditorAsset | null, fit: VideoEditorClip["fit"]): void {
+  const imageMask = entry.kind === "image" && asset ? cssUrl(asset.url) : "none";
+  const maskSize = fit === "fill" ? "100% 100%" : fit;
+  target.style.maskImage = imageMask;
+  target.style.maskSize = maskSize;
+  target.style.maskPosition = "center";
+  target.style.maskRepeat = "no-repeat";
+  target.style.webkitMaskImage = imageMask;
+  target.style.webkitMaskSize = maskSize;
+  target.style.webkitMaskPosition = "center";
+  target.style.webkitMaskRepeat = "no-repeat";
+}
+
 /**
  * Le sorgenti della preview vivono per clip, non per media: due clip che usano lo stesso
  * file possono suonare o scorrere in istanti diversi, quindi ognuna tiene il proprio
@@ -164,6 +281,8 @@ export class VideoEditorMediaPool {
     for (const entry of this.entries.values()) {
       if (entry.element.parentElement !== host) host.append(entry.element);
       if (entry.effectOverlay && entry.effectOverlay.parentElement !== host) host.append(entry.effectOverlay);
+      if (entry.shadowCaster && entry.shadowCaster.parentElement !== host) host.append(entry.shadowCaster);
+      if (entry.shadowFilterRoot && entry.shadowFilterRoot.parentElement !== host) host.append(entry.shadowFilterRoot);
     }
   }
 
@@ -177,6 +296,7 @@ export class VideoEditorMediaPool {
    * fallback per sorgenti non ancora montabili.
    */
   present(settings: VideoEditorSettings, timeSeconds: number): ReadonlySet<string> {
+    settings = videoEditorSettingsAtAutomationFrame(settings, timeSeconds);
     const presentationTime = videoEditorPresentationTime(settings, timeSeconds);
     const visible = videoEditorVisibleLayers(settings, timeSeconds);
     const visibleById = new Map(visible.map((layer) => [layer.clip.id, layer] as const));
@@ -193,7 +313,7 @@ export class VideoEditorMediaPool {
         // decoder resta nello stack con opacity 0 per essere gia promosso dal
         // browser al primo frame visibile, ma mantiene comunque l'ordine tracce.
         const layer = visibleById.get(clip.id)
-          ?? { clip, track, opacity: 0, sourceTimeSeconds: videoEditorSourceTime(clip, presentationTime) };
+          ?? { clip, track, opacity: 0, sourceTimeSeconds: videoEditorSourceTime(clip, presentationTime, settings.timebase) };
         presented.set(clip.id, {
           layer,
           stackIndex: presented.size
@@ -222,8 +342,8 @@ export class VideoEditorMediaPool {
         if (this.host && element.parentElement !== this.host) this.host.append(element);
         element.className = `video-editor-presented-media video-editor-presented-${entry.kind}`;
         element.dataset.clipId = clip.id;
-        const stackIndex = presentation.stackIndex * 2 + 1;
-        element.style.zIndex = String(stackIndex);
+        const stackBase = presentation.stackIndex * presentedLayerStride;
+        element.style.zIndex = String(stackBase + 1);
         element.style.opacity = String(opacity);
         element.style.objectFit = clip.fit;
         element.style.mixBlendMode = videoEditorDomBlendMode(clip);
@@ -235,18 +355,37 @@ export class VideoEditorMediaPool {
           filters.push(`drop-shadow(-${offset}px 0 rgb(0 238 255 / .28)) drop-shadow(${offset}px 0 rgb(255 28 118 / .28))`);
         }
         element.style.filter = filters.join(" ") || "none";
+        applyImageAlphaMask(element, entry, asset, clip.fit);
         element.style.transform = combinedTransform(clip, effect, previewWidth, previewHeight);
         element.style.clipPath = "none";
         element.style.visibility = "visible";
 
+        if (entry.shadowCaster) {
+          const imageShadow = clip.imageShadow ?? defaultVideoEditorImageShadow;
+          entry.shadowCaster.className = "video-editor-image-shadow-caster";
+          entry.shadowCaster.dataset.clipId = clip.id;
+          entry.shadowCaster.style.zIndex = String(stackBase);
+          entry.shadowCaster.style.opacity = String(opacity);
+          entry.shadowCaster.style.objectFit = clip.fit;
+          if (entry.shadowFilter) {
+            entry.shadowFilterSignature = configureImageShadowFilter(entry.shadowFilter, imageShadow, previewWidth, previewHeight, entry.shadowFilterSignature);
+            entry.shadowCaster.style.filter = `url(#${entry.shadowFilterId})`;
+          } else entry.shadowCaster.style.filter = videoEditorImageShadowCssFilter(imageShadow, previewWidth, previewHeight);
+          entry.shadowCaster.style.transform = combinedTransform(clip, effect, previewWidth, previewHeight);
+          entry.shadowCaster.style.visibility = imageShadow.enabled ? "visible" : "hidden";
+        }
+
         if (entry.effectOverlay) {
           const background = opticalOverlayBackground(effect);
-          const contentRect = clip.fit === "contain" && asset && asset.width > 0 && asset.height > 0
+          // Image overlays remain output-sized so their gradients share the exact
+          // preview/export coordinate system; the alpha mask itself performs fit.
+          // Videos retain their established contain rectangle and stay unmasked.
+          const contentRect = entry.kind !== "image" && clip.fit === "contain" && asset && asset.width > 0 && asset.height > 0
             ? mediaDrawRect(asset.width, asset.height, previewWidth, previewHeight, clip.fit as ExportMediaFit)
             : { x: 0, y: 0, width: previewWidth, height: previewHeight };
           entry.effectOverlay.className = "video-editor-layer-effect-overlay";
           entry.effectOverlay.dataset.clipId = clip.id;
-          entry.effectOverlay.style.zIndex = String(stackIndex + 1);
+          entry.effectOverlay.style.zIndex = String(stackBase + 2);
           entry.effectOverlay.style.opacity = background ? String(opacity) : "0";
           entry.effectOverlay.style.background = background;
           entry.effectOverlay.style.left = `${contentRect.x}px`;
@@ -257,6 +396,7 @@ export class VideoEditorMediaPool {
           entry.effectOverlay.style.height = `${contentRect.height}px`;
           entry.effectOverlay.style.mixBlendMode = videoEditorDomBlendMode(clip);
           entry.effectOverlay.style.transform = combinedTransform(clip, effect, previewWidth, previewHeight);
+          applyImageAlphaMask(entry.effectOverlay, entry, asset, clip.fit);
           entry.effectOverlay.style.visibility = background ? "visible" : "hidden";
         }
       } else {
@@ -269,18 +409,29 @@ export class VideoEditorMediaPool {
         element.style.objectFit = "fill";
         element.style.mixBlendMode = "normal";
         element.style.filter = "none";
+        applyImageAlphaMask(element, entry, null, "fill");
         element.style.transform = "none";
         element.style.clipPath = "inset(50%)";
         // Deve restare renderizzato: WKWebView puo sospendere decodifica e rVFC se
         // visibility e hidden. Le dimensioni 2px + clip-path garantiscono che non
         // copra mai la composizione mentre continua a preparare il prossimo taglio.
         element.style.visibility = "visible";
+        if (entry.shadowCaster) {
+          entry.shadowCaster.className = "video-editor-image-shadow-caster is-hidden";
+          delete entry.shadowCaster.dataset.clipId;
+          entry.shadowCaster.style.zIndex = "0";
+          entry.shadowCaster.style.opacity = "0";
+          entry.shadowCaster.style.filter = "none";
+          entry.shadowCaster.style.transform = "none";
+          entry.shadowCaster.style.visibility = "hidden";
+        }
         if (entry.effectOverlay) {
           entry.effectOverlay.className = "video-editor-layer-effect-overlay is-hidden";
           delete entry.effectOverlay.dataset.clipId;
           entry.effectOverlay.style.opacity = "0";
           entry.effectOverlay.style.background = "none";
           entry.effectOverlay.style.transform = "none";
+          applyImageAlphaMask(entry.effectOverlay, entry, null, "fill");
           entry.effectOverlay.style.visibility = "hidden";
         }
       }
@@ -358,6 +509,7 @@ export class VideoEditorMediaPool {
 
   /** Porta ogni sorgente all’istante richiesto e applica dissolvenze e volumi audio. */
   update(settings: VideoEditorSettings, timeSeconds: number, playing: boolean): void {
+    settings = videoEditorSettingsAtAutomationFrame(settings, timeSeconds);
     const presentationTime = videoEditorPresentationTime(settings, timeSeconds);
     for (const clip of settings.clips) {
       const entry = this.entries.get(clip.id);
@@ -382,7 +534,14 @@ export class VideoEditorMediaPool {
         element.muted = gainValue <= 0;
         element.volume = Math.max(0, Math.min(1, gainValue));
       }
-      const target = videoEditorSourceTime(clip, presentationTime);
+      const localSeconds = Math.max(0, presentationTime - clip.startSeconds);
+      const target = videoEditorSourceTime(clip, presentationTime, settings.timebase);
+      const playbackRate = videoEditorClipPlaybackRateAtLocalSeconds(clip, localSeconds, settings.timebase);
+      if (Math.abs(element.playbackRate - playbackRate) > 1e-6) element.playbackRate = playbackRate;
+      // Offline Web Audio rate automation changes pitch. Force the same honest
+      // behavior in preview whenever speed is non-unity or ramped.
+      const pitchPreservationAvailable = clip.speed?.mode !== "ramp" && Math.abs(playbackRate - 1) <= 1e-6;
+      if ("preservesPitch" in element) (element as HTMLMediaElement & { preservesPitch: boolean }).preservesPitch = pitchPreservationAvailable && (clip.speed?.preservePitch ?? false);
       const decision = videoEditorPlaybackSyncDecision({
         armed,
         inside,
@@ -494,16 +653,33 @@ export class VideoEditorMediaPool {
       ready: false, gain: null, routed: false, playPromise: null, lastFrame: null, lastFrameTime: -1,
       primePromise: null, wantedPlaying: false,
       frameCallbackId: null, playbackError: null,
-      effectOverlay: asset.kind === "audio" ? null : document.createElement("div")
+      effectOverlay: asset.kind === "audio" ? null : document.createElement("div"),
+      shadowCaster: asset.kind === "image" ? new Image() : null,
+      shadowFilterId: null,
+      shadowFilterRoot: null,
+      shadowFilter: null,
+      shadowFilterSignature: null
     };
     if (asset.kind === "image") {
       const image = entry.element as HTMLImageElement;
       image.onload = () => { entry.ready = true; this.onSourceReady(); };
       image.onerror = () => { entry.ready = false; };
       image.src = asset.url;
+      if (entry.shadowCaster) {
+        entry.shadowCaster.decoding = "async";
+        entry.shadowCaster.src = asset.url;
+      }
+      const shadowFilter = createImageShadowFilter(clipId);
+      if (shadowFilter) {
+        entry.shadowFilterId = shadowFilter.id;
+        entry.shadowFilterRoot = shadowFilter.root;
+        entry.shadowFilter = shadowFilter.filter;
+      }
       if (this.host) {
         this.host.append(image);
         if (entry.effectOverlay) this.host.append(entry.effectOverlay);
+        if (entry.shadowCaster) this.host.append(entry.shadowCaster);
+        if (entry.shadowFilterRoot) this.host.append(entry.shadowFilterRoot);
       }
       return entry;
     }
@@ -657,6 +833,13 @@ export class VideoEditorMediaPool {
       image.removeAttribute("src");
       entry.effectOverlay?.remove();
       entry.effectOverlay = null;
+      entry.shadowCaster?.remove();
+      entry.shadowCaster = null;
+      entry.shadowFilterRoot?.remove();
+      entry.shadowFilterRoot = null;
+      entry.shadowFilter = null;
+      entry.shadowFilterId = null;
+      entry.shadowFilterSignature = null;
       return;
     }
     const element = entry.element as HTMLMediaElement;
@@ -680,6 +863,13 @@ export class VideoEditorMediaPool {
     element.remove();
     entry.effectOverlay?.remove();
     entry.effectOverlay = null;
+    entry.shadowCaster?.remove();
+    entry.shadowCaster = null;
+    entry.shadowFilterRoot?.remove();
+    entry.shadowFilterRoot = null;
+    entry.shadowFilter = null;
+    entry.shadowFilterId = null;
+    entry.shadowFilterSignature = null;
     element.removeAttribute("src");
     element.load();
   }

@@ -64,6 +64,9 @@ export function buildUpscalerVideoForm(source: Blob, sourceName: string, setting
   form.set("preserve_aspect_ratio", String(settings.lockAspectRatio));
   form.set("quality", quality);
   form.set("client_id", clientId);
+  const range = (settings as Settings & { sourceStartSeconds?: number; sourceDurationSeconds?: number });
+  if (Number.isFinite(range.sourceStartSeconds)) form.set("source_start_seconds", String(Math.max(0, range.sourceStartSeconds ?? 0)));
+  if (Number.isFinite(range.sourceDurationSeconds)) form.set("source_duration_seconds", String(Math.max(0, range.sourceDurationSeconds ?? 0)));
   return form;
 }
 

@@ -11,6 +11,33 @@ export interface VideoEditorInterpolationHealth {
   ffmpeg: boolean;
   rife: boolean;
   device: string;
+  jobs?: boolean;
+}
+
+export type VideoEditorInterpolationJobPhase = "uploading" | "queued" | "interpolating" | "verifying" | "downloading" | "ready" | "error" | "cancelled";
+
+export interface VideoEditorInterpolationJobStatus {
+  id: string;
+  phase: VideoEditorInterpolationJobPhase;
+  /** Diagnostic-only server text. UI copy is selected from `phase`. */
+  phaseLabel?: string;
+  progress: number;
+  stageProgress?: number | null;
+  currentFrame: number;
+  totalFrames: number;
+  sourceFrames?: number;
+  processedBytes?: number;
+  bytesProcessed?: number;
+  totalBytes?: number;
+  resultBytes?: number;
+  elapsedSeconds?: number;
+  estimatedRemainingSeconds?: number | null;
+  indeterminate?: boolean;
+  sourceFps?: number;
+  targetFps?: number;
+  method?: VideoEditorInterpolationMethod;
+  backend?: string;
+  error?: string;
 }
 
 export interface VideoEditorInterpolationResult {
@@ -28,7 +55,7 @@ export const videoEditorInterpolationCommand = "npm run upscaler:server";
 
 const healthTimeoutMs = 2_500;
 
-interface HealthPayload { interpolation?: { ffmpeg?: boolean; rife?: boolean; device?: string } }
+interface HealthPayload { interpolation?: { ffmpeg?: boolean; rife?: boolean; jobs?: boolean; device?: string } }
 
 export async function videoEditorInterpolationHealth(): Promise<VideoEditorInterpolationHealth | null> {
   try {
@@ -38,7 +65,7 @@ export async function videoEditorInterpolationHealth(): Promise<VideoEditorInter
     if (!response.ok) return null;
     const payload = await response.json() as HealthPayload;
     const info = payload.interpolation ?? {};
-    return { available: Boolean(info.ffmpeg || info.rife), ffmpeg: Boolean(info.ffmpeg), rife: Boolean(info.rife), device: info.device ?? "cpu" };
+    return { available: Boolean(info.ffmpeg || info.rife), ffmpeg: Boolean(info.ffmpeg), rife: Boolean(info.rife), ...(info.jobs === undefined ? {} : { jobs: Boolean(info.jobs) }), device: info.device ?? "cpu" };
   } catch {
     // Servizio assente: l’export continua al frame rate reso, senza interpolazione.
     return null;
@@ -84,4 +111,112 @@ export async function videoEditorInterpolate(options: {
     targetFps: Number(response.headers.get("X-Interpolation-Target-Fps") ?? options.targetFps),
     backend: response.headers.get("X-Interpolation-Backend") ?? "ffmpeg"
   };
+}
+
+function uploadInterpolationJob(body: FormData, signal: AbortSignal, onUpload: (progress: number, loaded: number, total: number) => void): Promise<VideoEditorInterpolationJobStatus> {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    const abort = () => request.abort();
+    request.open("POST", `${videoEditorInterpolationBaseUrl}/interpolation/jobs`);
+    request.responseType = "json";
+    request.upload.onprogress = (event) => { if (event.lengthComputable) onUpload(event.loaded / Math.max(1, event.total), event.loaded, event.total); };
+    request.onload = () => {
+      signal.removeEventListener("abort", abort);
+      if (request.status >= 200 && request.status < 300) resolve(request.response as VideoEditorInterpolationJobStatus);
+      else reject(new Error(typeof request.response === "string" ? request.response : request.response?.detail || `Avvio interpolazione fallito: HTTP ${request.status}.`));
+    };
+    request.onerror = () => { signal.removeEventListener("abort", abort); reject(new Error("Il servizio locale non ha ricevuto il video.")); };
+    request.onabort = () => { signal.removeEventListener("abort", abort); reject(new DOMException("Operazione annullata", "AbortError")); };
+    signal.addEventListener("abort", abort, { once: true });
+    request.send(body);
+  });
+}
+
+function downloadInterpolationResult(url: string, signal: AbortSignal, onProgress: (loaded: number, total: number) => void): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    const abort = () => request.abort();
+    request.open("GET", url);
+    request.responseType = "blob";
+    request.onprogress = (event) => onProgress(event.loaded, event.lengthComputable ? event.total : 0);
+    request.onload = () => {
+      signal.removeEventListener("abort", abort);
+      if (request.status >= 200 && request.status < 300 && request.response?.size) resolve(request.response as Blob);
+      else reject(new Error(`Download del video interpolato fallito (HTTP ${request.status}).`));
+    };
+    request.onerror = () => { signal.removeEventListener("abort", abort); reject(new Error("Download del video interpolato fallito.")); };
+    request.onabort = () => { signal.removeEventListener("abort", abort); reject(new DOMException("Operazione annullata", "AbortError")); };
+    signal.addEventListener("abort", abort, { once: true });
+    request.send();
+  });
+}
+
+/**
+ * Job-based interpolation.  Upload and result download use XHR so the UI can
+ * report byte progress; frame progress comes from the server's ffmpeg `-progress`
+ * stream.  The legacy synchronous `/interpolate` client above remains untouched.
+ */
+export async function videoEditorInterpolateJob(options: {
+  blob: Blob;
+  fileName: string;
+  sourceFps: number;
+  targetFps: number;
+  method: VideoEditorInterpolationMethod;
+  signal: AbortSignal;
+  clientId?: string;
+  onStatus?: (status: VideoEditorInterpolationJobStatus & { uploadProgress?: number; downloadProgress?: number }) => void;
+}): Promise<{ blob: Blob; status: VideoEditorInterpolationJobStatus }> {
+  if (options.targetFps <= options.sourceFps) throw new Error("Il frame rate di destinazione deve superare quello di partenza.");
+  const clientId = options.clientId ?? globalThis.crypto?.randomUUID?.() ?? `interpolation-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const body = new FormData();
+  body.append("file", options.blob, options.fileName);
+  body.append("source_fps", String(options.sourceFps));
+  body.append("target_fps", String(options.targetFps));
+  body.append("method", options.method);
+  body.append("client_id", clientId);
+  let status: VideoEditorInterpolationJobStatus | undefined;
+  const cancelRemote = async () => {
+    const urls = [`${videoEditorInterpolationBaseUrl}/interpolation/clients/${encodeURIComponent(clientId)}`];
+    if (status?.id) urls.push(`${videoEditorInterpolationBaseUrl}/interpolation/jobs/${encodeURIComponent(status.id)}`);
+    await Promise.all(urls.map((url) => Promise.resolve()
+      .then(() => fetch(url, { method: "DELETE", keepalive: true }))
+      .catch(() => undefined)));
+  };
+  const cancelOnAbort = () => { void cancelRemote(); };
+  options.signal.addEventListener("abort", cancelOnAbort, { once: true });
+  let cancelAfterFailure = false;
+  try {
+    status = await uploadInterpolationJob(body, options.signal, (uploadProgress, loaded, total) => options.onStatus?.({
+      id: "upload", phase: "uploading", progress: uploadProgress, stageProgress: uploadProgress,
+      currentFrame: 0, totalFrames: 0, sourceFps: options.sourceFps, targetFps: options.targetFps, method: options.method, uploadProgress, processedBytes: loaded, bytesProcessed: loaded, totalBytes: total
+    }));
+    options.onStatus?.(status);
+    while (status.phase !== "ready") {
+      if (options.signal.aborted) throw new DOMException("Operazione annullata", "AbortError");
+      if (status.phase === "error") throw new Error(status.error || "Interpolazione interrotta dal servizio locale.");
+      if (status.phase === "cancelled") throw new DOMException("Operazione annullata", "AbortError");
+      await new Promise((resolve) => window.setTimeout(resolve, 300));
+      const response = await fetch(`${videoEditorInterpolationBaseUrl}/interpolation/jobs/${encodeURIComponent(status.id)}`, { signal: options.signal });
+      if (!response.ok) throw new Error(`Impossibile leggere l’avanzamento dell’interpolazione (HTTP ${response.status}).`);
+      status = await response.json() as VideoEditorInterpolationJobStatus;
+      options.onStatus?.(status);
+    }
+    const resultUrl = `${videoEditorInterpolationBaseUrl}/interpolation/jobs/${encodeURIComponent(status.id)}/result`;
+    const blob = await downloadInterpolationResult(resultUrl, options.signal, (loaded, total) => options.onStatus?.({
+      ...status!, phase: "downloading", progress: total ? loaded / total : 0,
+      stageProgress: total ? loaded / total : null, processedBytes: loaded, totalBytes: total,
+      downloadProgress: total ? loaded / total : 0, indeterminate: !total
+    }));
+    const downloaded = { ...status, phase: "ready" as const, progress: 1, stageProgress: 1, processedBytes: blob.size, bytesProcessed: blob.size, totalBytes: blob.size, resultBytes: blob.size };
+    options.onStatus?.(downloaded);
+    return { blob, status: downloaded };
+  } catch (error) {
+    cancelAfterFailure = !(error instanceof DOMException && error.name === "AbortError") && Boolean(status?.id);
+    throw error;
+  } finally {
+    options.signal.removeEventListener("abort", cancelOnAbort);
+    // Polling/JSON/download failures must not orphan CPU/GPU work.  Cleanup is
+    // best-effort and deliberately cannot replace the original client error.
+    if (cancelAfterFailure) await cancelRemote();
+  }
 }

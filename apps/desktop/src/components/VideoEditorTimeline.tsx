@@ -9,6 +9,10 @@ import {
   videoEditorSnap,
   videoEditorSnapCandidates,
   videoEditorTimelineDuration,
+  videoEditorFrameAlignmentReason,
+  videoEditorFrameToSeconds,
+  videoEditorQuantizeTime,
+  videoEditorTrimClip,
   type VideoEditorClip,
   type VideoEditorEffectClip,
   type VideoEditorTrack
@@ -22,7 +26,7 @@ import {
   videoEditorTrimEffect
 } from "../services/video-editor-effects";
 import { VideoEditorClipWaveform } from "./VideoEditorClipWaveform";
-import { videoEditorAssetDragType } from "../services/video-editor-import";
+import { videoEditorAssetDragType, videoEditorAssetKindDragType } from "../services/video-editor-import";
 
 /** Altezza di una traccia in timeline: le clip video mostrano etichetta e onda, quelle audio la sola onda. */
 const trackHeight = 52;
@@ -71,6 +75,12 @@ function formatTime(time: number): string {
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.${String(centiseconds).padStart(2, "0")}`;
 }
 
+function automationMarkerPosition(settings: ReturnType<typeof useProjectStore.getState>["project"]["animation"]["videoEditor"], frame: number): string {
+  const fps = settings.timebase.fpsNumerator / settings.timebase.fpsDenominator;
+  const totalFrames = Math.max(1, Math.ceil(videoEditorTimelineDuration(settings) * fps));
+  return `${Math.min(100, Math.max(0, frame / totalFrames * 100))}%`;
+}
+
 interface PointerSessionHandlers { move: (event: PointerEvent) => void; end: (event: PointerEvent) => void; cancel?: () => void }
 
 export function VideoEditorTimeline({ timelineHeight = 300, onResizeHeight }: { timelineHeight?: number; onResizeHeight?: (height: number) => void }) {
@@ -84,6 +94,7 @@ export function VideoEditorTimeline({ timelineHeight = 300, onResizeHeight }: { 
   const selectClip = useProjectStore((state) => state.selectVideoEditorClip);
   const selectClips = useProjectStore((state) => state.selectVideoEditorClips);
   const syncClips = useProjectStore((state) => state.syncVideoEditorClips);
+  const alignClipsByFrame = useProjectStore((state) => state.alignVideoEditorClipsByFrame);
   const closeGaps = useProjectStore((state) => state.closeVideoEditorGaps);
   const updateClip = useProjectStore((state) => state.updateVideoEditorClip);
   const updateSettings = useProjectStore((state) => state.updateVideoEditor);
@@ -96,6 +107,8 @@ export function VideoEditorTimeline({ timelineHeight = 300, onResizeHeight }: { 
   const trimEffect = useProjectStore((state) => state.trimVideoEditorEffectClip);
   const deleteEffects = useProjectStore((state) => state.deleteVideoEditorEffectClips);
   const selectEffect = useProjectStore((state) => state.selectVideoEditorEffectClip);
+  const upsertKeyframe = useProjectStore((state) => state.upsertVideoEditorKeyframe);
+  const removeKeyframe = useProjectStore((state) => state.removeVideoEditorKeyframe);
 
   const currentTime = useVideoEditorPlayback((state) => state.currentTime);
   const playing = useVideoEditorPlayback((state) => state.playing);
@@ -213,7 +226,31 @@ export function VideoEditorTimeline({ timelineHeight = 300, onResizeHeight }: { 
     if (track.locked) return;
     const assetId = event.dataTransfer.getData(videoEditorAssetDragType);
     if (!assetId) return;
-    addClip(assetId, { trackId: track.id, startSeconds: Math.min(span, timeAtPointer(event.clientX)) });
+    const asset = videoEditorAsset(settings, assetId);
+    if (!asset) return;
+    const draggedKind = event.dataTransfer.getData(videoEditorAssetKindDragType);
+    const expectedKind = asset.kind === "audio" ? "audio" : "video";
+    // The kind travels with the drag so a stale/forged payload cannot be used to
+    // route a media item to an incompatible lane. Legacy drags without the
+    // secondary type are accepted only after validating the asset in the store.
+    if ((draggedKind && draggedKind !== asset.kind) || track.kind !== expectedKind) return;
+    // WebViews/JSDOM possono consegnare un DragEvent senza clientX: in quel
+    // caso il playhead è il riferimento deterministico, mai NaN.
+    const requestedTime = Number.isFinite(event.clientX) ? timeAtPointer(event.clientX) : currentTime;
+    addClip(assetId, { trackId: track.id, startSeconds: Math.min(span, videoEditorQuantizeTime(requestedTime, settings.timebase)), strictTrack: true });
+  };
+
+  const canDropAsset = (event: ReactDragEvent<HTMLDivElement>, track: VideoEditorTrack): boolean => {
+    if (track.locked || !event.dataTransfer.types.includes(videoEditorAssetDragType)) return false;
+    const assetId = event.dataTransfer.getData(videoEditorAssetDragType);
+    const draggedKind = event.dataTransfer.getData(videoEditorAssetKindDragType);
+    // Alcuni WebView oscurano getData durante dragover: autorizziamo il gesto
+    // sulla corsia sbloccata e demandiamo la validazione definitiva a dropAsset.
+    // Se il tipo secondario è disponibile possiamo comunque filtrare subito la
+    // corsia sbagliata, evitando feedback positivo per audio/video incompatibili.
+    if (!assetId) return !draggedKind || track.kind === (draggedKind === "audio" ? "audio" : "video");
+    const asset = videoEditorAsset(settings, assetId);
+    return Boolean(asset && (!draggedKind || draggedKind === asset.kind) && track.kind === (asset.kind === "audio" ? "audio" : "video"));
   };
 
   const visualClipAtTime = (timeSeconds: number, trackId?: string): VideoEditorClip | null => {
@@ -360,11 +397,12 @@ export function VideoEditorTimeline({ timelineHeight = 300, onResizeHeight }: { 
         const requested = timeAtPointer(pointer.clientX);
         const resolved = settings.snapEnabled ? videoEditorSnap(requested, candidates, settings.snapThresholdSeconds) : { timeSeconds: requested, snapped: false };
         latest = resolved.timeSeconds;
-        // L’anteprima ricalcola i bordi come lo farà lo store, senza però scriverli:
-        // il riscontro visivo resta immediato anche su timeline molto popolate.
-        const startSeconds = edge === "start" ? Math.min(latest, videoEditorClipEnd(clip) - videoEditorFrameSeconds) : clip.startSeconds;
-        const endSeconds = edge === "start" ? videoEditorClipEnd(clip) : Math.max(latest, clip.startSeconds + videoEditorFrameSeconds);
-        setPreview({ clipId: clip.id, startSeconds: Math.max(0, startSeconds), durationSeconds: Math.max(videoEditorFrameSeconds, endSeconds - Math.max(0, startSeconds)), snapped: resolved.snapped });
+        // L’anteprima usa esattamente la stessa funzione pura del commit nello
+        // store. È importante per i fermi immagine: il bordo destro può crescere
+        // fino a un’ora anche se la sorgente ha durata zero, mentre video e audio
+        // restano limitati al materiale disponibile.
+        const next = videoEditorTrimClip(settings, clip.id, edge, latest, currentTime);
+        if (next) setPreview({ clipId: clip.id, startSeconds: next.startSeconds, durationSeconds: next.durationSeconds, snapped: resolved.snapped });
       },
       end: () => { setPreview(null); trimClip(clip.id, edge, latest, currentTime); },
       cancel: () => setPreview(null)
@@ -381,6 +419,7 @@ export function VideoEditorTimeline({ timelineHeight = 300, onResizeHeight }: { 
   const menuClip = menu ? settings.clips.find((clip) => clip.id === menu.clipId) ?? null : null;
   const menuAsset = menuClip ? videoEditorAsset(settings, menuClip.assetId) : null;
   const syncTargets = menuClip ? selected.filter((id) => id !== menuClip.id) : [];
+  const frameAlignmentReason = menuClip ? videoEditorFrameAlignmentReason(settings, menuClip.id, syncTargets) : "Seleziona almeno due clip video.";
 
   const runMenu = (action: () => void) => { action(); setMenu(null); };
 
@@ -412,7 +451,7 @@ export function VideoEditorTimeline({ timelineHeight = 300, onResizeHeight }: { 
 
   const ruler = [0, .25, .5, .75, 1].map((fraction) => span * fraction);
 
-  return <section className="timeline video-editor-timeline" aria-label="Timeline Video Editor" tabIndex={0} onKeyDown={(event) => {
+  return <section className="timeline video-editor-timeline" aria-label="Timeline Video Editor" tabIndex={0} style={{ height: `${Math.max(140, timelineHeight)}px`, minHeight: "140px" }} onKeyDown={(event) => {
     const target = event.target as HTMLElement | null;
     if (target?.closest("input, textarea, select, [contenteditable]:not([contenteditable=\"false\"])")) return;
     if ((event.key === "Delete" || event.key === "Backspace") && selectedEffects.length) { event.preventDefault(); deleteEffects(selectedEffects); return; }
@@ -421,7 +460,7 @@ export function VideoEditorTimeline({ timelineHeight = 300, onResizeHeight }: { 
     if (event.key === "ArrowLeft") { event.preventDefault(); setCurrentTime(Math.max(0, currentTime - (event.shiftKey ? 1 : videoEditorFrameSeconds))); return; }
     if (event.key === "ArrowRight") { event.preventDefault(); setCurrentTime(Math.min(span, currentTime + (event.shiftKey ? 1 : videoEditorFrameSeconds))); }
   }}>
-    {onResizeHeight ? <div className="timeline-resize-handle" role="separator" aria-label="Ridimensiona altezza timeline" aria-orientation="horizontal" aria-valuemin={150} aria-valuenow={Math.round(timelineHeight)} tabIndex={0} title="Trascina per allargare o stringere la timeline · doppio clic per ripristinare" onPointerDown={beginTimelineResize} onDoubleClick={() => onResizeHeight(300)} onKeyDown={(event) => { if (event.key === "ArrowUp") { event.preventDefault(); onResizeHeight(timelineHeight + 20); } else if (event.key === "ArrowDown") { event.preventDefault(); onResizeHeight(timelineHeight - 20); } }}><span /></div> : null}
+    {onResizeHeight ? <div className="timeline-resize-handle" role="separator" aria-label="Ridimensiona altezza timeline" aria-orientation="horizontal" aria-valuemin={140} aria-valuenow={Math.round(timelineHeight)} tabIndex={0} title="Trascina per allargare o stringere la timeline · doppio clic per ripristinare" onPointerDown={beginTimelineResize} onDoubleClick={() => onResizeHeight(300)} onKeyDown={(event) => { if (event.key === "ArrowUp") { event.preventDefault(); onResizeHeight(timelineHeight + 20); } else if (event.key === "ArrowDown") { event.preventDefault(); onResizeHeight(timelineHeight - 20); } }}><span /></div> : null}
     <div className="transport">
       <button type="button" onClick={() => setCurrentTime(Math.max(0, currentTime - 5))} disabled={duration <= 0}>↶ 5</button>
       <button type="button" onClick={() => setCurrentTime(0)} disabled={duration <= 0}>◀</button>
@@ -510,8 +549,8 @@ export function VideoEditorTimeline({ timelineHeight = 300, onResizeHeight }: { 
               {settings.effectClips.length ? null : <span className="effect-lane-placeholder">Trascina qui un effetto dalla libreria</span>}
             </div>
             {settings.tracks.map((track, trackIndex) => <div key={track.id} className={`video-editor-lane lane-${track.kind}${track.locked ? " locked" : ""}${track.hidden ? " hidden-track" : ""}`} style={{ top: effectLaneHeight + trackIndex * trackHeight, height: trackHeight }} onDragOver={(event) => {
-              const acceptable = event.dataTransfer.types.includes(videoEditorAssetDragType) || (track.kind === "video" && event.dataTransfer.types.includes(videoEditorEffectDragType));
-              if (!track.locked && acceptable) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }
+              const effectDrop = track.kind === "video" && event.dataTransfer.types.includes(videoEditorEffectDragType) && !track.locked;
+              if (effectDrop || canDropAsset(event, track)) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }
             }} onDrop={(event) => event.dataTransfer.getData(videoEditorEffectDragType) ? dropEffect(event, track) : dropAsset(event, track)}>
               {settings.clips.filter((clip) => clip.trackId === track.id).map((clip) => {
                 const asset = videoEditorAsset(settings, clip.assetId);
@@ -553,11 +592,16 @@ export function VideoEditorTimeline({ timelineHeight = 300, onResizeHeight }: { 
       <button type="button" onClick={() => addTrack("audio")}>+ Traccia audio</button>
       <span className="muted">Tasto destro su una clip per sincronizzare audio e video, tagliare o chiudere i vuoti.</span>
     </div>
+    {settings.automationLanes.length ? <div className="video-editor-automation-lanes" aria-label="Lane automazioni">{settings.automationLanes.map((lane) => <div key={lane.id} className="video-editor-automation-lane"><strong>{lane.target.property}</strong><span>{lane.keyframes.map((point) => <span key={point.id} className="video-editor-keyframe-editor" style={{ left: automationMarkerPosition(settings, point.frame) }}><button type="button" aria-label={`Vai al keyframe ${lane.target.property} frame ${point.frame}`} title={`${point.curve} · frame ${point.frame}`} onClick={() => setCurrentTime(videoEditorFrameToSeconds(point.frame, settings.timebase))}>◆</button><input aria-label={`Valore keyframe ${lane.target.property} frame ${point.frame}`} type="number" step=".01" value={point.value} onChange={(event) => upsertKeyframe(lane.target, { ...point, value: Number(event.target.value) })} /><button type="button" aria-label={`Elimina keyframe ${lane.target.property} frame ${point.frame}`} onClick={() => removeKeyframe(lane.target, point.frame)}>×</button></span>)}</span></div>)}</div> : null}
     {menu && menuClip
       ? <div className="video-editor-context-menu" role="menu" aria-label="Azioni clip" style={{ left: menu.x, top: menu.y }} onPointerDown={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()}>
         <button type="button" role="menuitem" disabled={syncTargets.length === 0} onClick={() => runMenu(() => syncClips(menuClip.id, syncTargets))}>
           {syncTargets.length ? `Sincronizza audio e video (${syncTargets.length})` : "Sincronizza audio e video"}
         </button>
+        <button type="button" role="menuitem" disabled={Boolean(frameAlignmentReason)} title={frameAlignmentReason ?? "Allinea i frame sorgente"} onClick={() => runMenu(() => alignClipsByFrame(menuClip.id, syncTargets))}>
+          {syncTargets.length ? `Allinea per frame (${syncTargets.length})` : "Allinea per frame"}
+        </button>
+        {frameAlignmentReason ? <span className="context-menu-note">{frameAlignmentReason}</span> : null}
         {syncTargets.length ? null : <span className="context-menu-note">Seleziona anche le altre clip con Shift o Cmd, poi tasto destro sul riferimento.</span>}
         <hr />
         <button type="button" role="menuitem" onClick={() => runMenu(() => splitClip(menuClip.id, currentTime))}>Taglia sul playhead</button>

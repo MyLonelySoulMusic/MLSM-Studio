@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, createEvent, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceResizeHandle } from "./WorkspaceResizeHandle";
 
@@ -22,5 +22,22 @@ describe("WorkspaceResizeHandle", () => {
     render(<WorkspaceResizeHandle side="right" width={260} onResize={onResize} onReset={vi.fn()} />);
     fireEvent.keyDown(screen.getByRole("separator"), { key: "ArrowRight" });
     expect(onResize).toHaveBeenCalledWith(244);
+  });
+
+  it("cattura il puntatore e rilascia la cattura alla fine del drag", () => {
+    const onResize = vi.fn();
+    render(<WorkspaceResizeHandle side="left" width={230} onResize={onResize} onReset={vi.fn()} />);
+    const separator = screen.getByRole("separator");
+    const setPointerCapture = vi.fn();
+    const releasePointerCapture = vi.fn();
+    Object.defineProperty(separator, "setPointerCapture", { configurable: true, value: setPointerCapture });
+    Object.defineProperty(separator, "hasPointerCapture", { configurable: true, value: () => true });
+    Object.defineProperty(separator, "releasePointerCapture", { configurable: true, value: releasePointerCapture });
+    const pointerDown = createEvent.pointerDown(separator, { clientX: 100 });
+    Object.defineProperty(pointerDown, "pointerId", { configurable: true, value: 7 });
+    fireEvent(separator, pointerDown);
+    expect(setPointerCapture).toHaveBeenCalledWith(7);
+    window.dispatchEvent(new Event("pointerup"));
+    expect(releasePointerCapture).toHaveBeenCalledWith(7);
   });
 });

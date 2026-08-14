@@ -63,7 +63,7 @@ describe("VideoEditorPreview · lifecycle decoder", () => {
     const rack = container.querySelector(".video-editor-media-rack")!;
     expect(rack.querySelectorAll(".video-editor-presented-media")).toHaveLength(2);
     expect(rack.querySelector<HTMLVideoElement>(`[data-clip-id="${baseClip}"]`)?.style.zIndex).toBe("1");
-    expect(rack.querySelector<HTMLVideoElement>(`[data-clip-id="${topClip}"]`)?.style.zIndex).toBe("3");
+    expect(rack.querySelector<HTMLVideoElement>(`[data-clip-id="${topClip}"]`)?.style.zIndex).toBe("4");
 
     act(() => useProjectStore.getState().updateVideoEditorClip(topClip, { startSeconds: 6 }));
     expect(rack.querySelectorAll(".video-editor-presented-media")).toHaveLength(1);

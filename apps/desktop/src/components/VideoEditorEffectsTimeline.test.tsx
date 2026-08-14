@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useProjectStore } from "../store/project-store";
 import { videoEditorEffectDragType } from "../services/video-editor-effects";
+import { videoEditorAssetDragType, videoEditorAssetKindDragType } from "../services/video-editor-import";
 import { VideoEditorInspector } from "./VideoEditorInspector";
 import { VideoEditorTimeline } from "./VideoEditorTimeline";
 
@@ -92,6 +93,32 @@ describe("Video Editor · effetti montabili", () => {
     expect(useProjectStore.getState().project.animation.videoEditor.effectClips).toEqual([
       expect.objectContaining({ effectId: "fade-out", target: { kind: "clip", clipId } })
     ]);
+  });
+
+  it("inserisce un media nel punto esatto della corsia compatibile e rifiuta quella audio", () => {
+    useProjectStore.getState().newProject();
+    useProjectStore.getState().addVideoEditorAssets([videoAsset]);
+    const { container } = render(<VideoEditorTimeline />);
+    const lanes = container.querySelector<HTMLElement>(".video-editor-lanes")!;
+    vi.spyOn(lanes, "getBoundingClientRect").mockReturnValue({
+      x: 0, y: 0, left: 0, top: 0, right: 1200, bottom: 300, width: 1200, height: 300,
+      toJSON: () => ({})
+    });
+    const videoLane = container.querySelector<HTMLElement>(".video-editor-lane.lane-video")!;
+    const audioLane = container.querySelector<HTMLElement>(".video-editor-lane.lane-audio")!;
+    const dataTransfer = {
+      types: [videoEditorAssetDragType, videoEditorAssetKindDragType], dropEffect: "copy",
+      getData: (type: string) => type === videoEditorAssetDragType ? videoAsset.id : type === videoEditorAssetKindDragType ? videoAsset.kind : ""
+    };
+    const dropAt = (target: HTMLElement, clientX: number) => {
+      const event = new MouseEvent("drop", { bubbles: true, clientX });
+      Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
+      fireEvent(target, event);
+    };
+    dropAt(videoLane, 360);
+    expect(useProjectStore.getState().project.animation.videoEditor.clips[0]).toMatchObject({ trackId: "video-editor-track-overlay", startSeconds: 3.6 });
+    dropAt(audioLane, 900);
+    expect(useProjectStore.getState().project.animation.videoEditor.clips).toHaveLength(1);
   });
 
   it("applica il drop alla clip B sotto il cursore anche quando la clip A era selezionata", () => {

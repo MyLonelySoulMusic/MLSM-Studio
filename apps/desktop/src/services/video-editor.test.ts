@@ -24,10 +24,16 @@ import {
   videoEditorTimelineDuration,
   videoEditorTrimClip,
   videoEditorVisibleLayers,
+  videoEditorAlignClipsByFrame,
+  videoEditorFrameAlignmentReason,
+  videoEditorFormatTimecode,
+  videoEditorFrameToSeconds,
+  videoEditorSecondsToFrame,
   type VideoEditorAsset,
   type VideoEditorClip,
   type VideoEditorSettings
 } from "./video-editor";
+import { videoEditorSpeedAtFrame } from "./video-editor-speed";
 
 const baseSettings = createProject("Montaggio").animation.videoEditor;
 
@@ -76,6 +82,49 @@ describe("Video Editor · durata e riferimenti della timeline", () => {
     const imageClip = clip({ id: "ci", assetId: "i", trackId: mainTrack });
     expect(videoEditorClipMaximumDuration(videoClip, video)).toBeCloseTo(6, 10);
     expect(videoEditorClipMaximumDuration(imageClip, still)).toBe(videoEditorMaximumImageSeconds);
+    const longVideo = asset({ id: "long", durationSeconds: 5_400 });
+    expect(videoEditorClipMaximumDuration(clip({ id: "cl", assetId: "long", trackId: mainTrack }), longVideo)).toBe(5_400);
+  });
+});
+
+describe("Video Editor · timebase e allineamento esatto", () => {
+  it("converte secondi e frame sulla timebase legacy 60/1", () => {
+    expect(videoEditorSecondsToFrame(1 / 60, baseSettings.timebase, "round")).toBe(1);
+    expect(videoEditorFrameToSeconds(120, baseSettings.timebase)).toBe(2);
+    expect(videoEditorFormatTimecode(125, baseSettings.timebase)).toBe("00:00:02:05");
+  });
+
+  it("formatta correttamente i confini drop-frame 29.97 e 59.94", () => {
+    expect(videoEditorFormatTimecode(1_800, { fpsNumerator: 30_000, fpsDenominator: 1_001, dropFrame: true })).toBe("00:01:00;02");
+    expect(videoEditorFormatTimecode(17_982, { fpsNumerator: 30_000, fpsDenominator: 1_001, dropFrame: true })).toBe("00:10:00;00");
+    expect(videoEditorFormatTimecode(3_600, { fpsNumerator: 60_000, fpsDenominator: 1_001, dropFrame: true })).toBe("00:01:00;04");
+  });
+
+  it("allinea clip con stesso frame count usando l'ordinale sorgente", () => {
+    const first = asset({ id: "first", durationSeconds: 4, sourceFrameCount: 240, sourceRate: { numerator: 60, denominator: 1 }, frameIdentityId: "same" });
+    const second = asset({ id: "second", durationSeconds: 4, sourceFrameCount: 240, sourceRate: { numerator: 60, denominator: 1 }, frameIdentityId: "same" });
+    const state = settings([first, second], [
+      clip({ id: "reference", assetId: first.id, trackId: mainTrack, startSeconds: 2, sourceInSeconds: 1 / 60 }),
+      clip({ id: "target", assetId: second.id, trackId: overlayTrack, startSeconds: 8, sourceInSeconds: 2 / 60 })
+    ]);
+    const result = videoEditorAlignClipsByFrame(state, "reference", ["target"]);
+    expect(result?.alignedClipIds).toEqual(["target"]);
+    expect(result?.clips.find((item) => item.id === "target")?.startSeconds).toBeCloseTo(2 + 1 / 60, 5);
+  });
+
+  it("rifiuta allineamento quando il numero di frame sorgente non coincide", () => {
+    const first = asset({ id: "first", sourceFrameCount: 240 });
+    const second = asset({ id: "second", sourceFrameCount: 239 });
+    const state = settings([first, second], [clip({ id: "reference", assetId: first.id, trackId: mainTrack }), clip({ id: "target", assetId: second.id, trackId: overlayTrack })]);
+    expect(videoEditorAlignClipsByFrame(state, "reference", ["target"])).toBeNull();
+  });
+
+  it("rifiuta di dichiarare esatto un riferimento con fase sub-frame", () => {
+    const first = asset({ id: "first", sourceFrameCount: 240, sourceRate: { numerator: 60, denominator: 1 } });
+    const second = asset({ id: "second", sourceFrameCount: 240, sourceRate: { numerator: 60, denominator: 1 } });
+    const state = settings([first, second], [clip({ id: "reference", assetId: first.id, trackId: mainTrack, startSeconds: .001 }), clip({ id: "target", assetId: second.id, trackId: overlayTrack })]);
+    expect(videoEditorFrameAlignmentReason(state, "reference", ["target"])).toMatch(/griglia frame/);
+    expect(videoEditorAlignClipsByFrame(state, "reference", ["target"])).toBeNull();
   });
 });
 
@@ -154,6 +203,7 @@ describe("Video Editor · calamita", () => {
       clip({ id: "right", assetId: "a", trackId: mainTrack, startSeconds: 3.06, durationSeconds: 2 })
     ], { snapEnabled: false });
     expect(videoEditorMoveClip(state, "right", 3.06)?.startSeconds).toBe(3.06);
+    expect(videoEditorMoveClip(state, "right", .010)?.startSeconds).toBe(.010);
     expect(videoEditorMoveClip(state, "right", -4)?.startSeconds).toBe(0);
     expect(videoEditorMoveClip(state, "assente", 1)).toBeNull();
   });
@@ -214,6 +264,27 @@ describe("Video Editor · estensione trascinando i bordi", () => {
     // Con una clip vicina, il bordo si allinea esattamente.
     const neighbour = settings(state.assets, [...state.clips, clip({ id: "next", assetId: "v", trackId: overlayTrack, startSeconds: 5.02, durationSeconds: 1 })], { snapEnabled: true, snapToBeats: false });
     expect(videoEditorClipEnd(videoEditorTrimClip(neighbour, "video", "end", 4.98)!)).toBe(5.02);
+  });
+
+  it("conserva un trim sub-frame nel mapping locale della rampa", () => {
+    const ramp = clip({
+      id: "ramp", assetId: "v", trackId: mainTrack, startSeconds: .010, durationSeconds: 1.01,
+      speed: { mode: "ramp", constant: 1, preservePitch: false, points: [
+        { id: "a", frame: 0, speed: 1, curve: "linear" },
+        { id: "b", frame: 60, speed: 2, curve: "linear" }
+      ] }
+    });
+    const rampState = settings(state.assets, [ramp], { snapEnabled: false });
+    const requestedStart = .020;
+    const sourceAtCut = videoEditorSourceTime(ramp, requestedStart, rampState.timebase);
+    const trimmed = videoEditorTrimClip(rampState, ramp.id, "start", requestedStart)!;
+    expect(trimmed.startSeconds).toBe(requestedStart);
+    expect(trimmed.sourceInSeconds).toBeCloseTo(sourceAtCut, 6);
+    expect(trimmed.speed?.points[0]?.frame).toBe(0);
+    expect(trimmed.speed?.points.find((point) => point.id === "b")?.frame).toBeCloseTo(59.4, 10);
+    expect(trimmed.speed?.points.at(-1)?.frame).toBeCloseTo(60, 10);
+    expect(videoEditorSpeedAtFrame(trimmed.speed, 10.2)).toBeCloseTo(videoEditorSpeedAtFrame(ramp.speed, 10.8), 10);
+    expect(videoEditorSourceTime(trimmed, trimmed.startSeconds, rampState.timebase)).toBeCloseTo(sourceAtCut, 6);
   });
 });
 

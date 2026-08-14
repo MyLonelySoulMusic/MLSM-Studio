@@ -1,5 +1,5 @@
 export const DEFAULT_TIMELINE_HEIGHT = 270;
-export const MIN_TIMELINE_HEIGHT = 150;
+export const MIN_TIMELINE_HEIGHT = 140;
 export const MIN_WORKSPACE_HEIGHT = 220;
 const FIXED_APP_HEIGHT = 84;
 

@@ -46,6 +46,13 @@ describe("project event history", () => {
     expect(effects.find((effect) => effect.id === manualId)).toMatchObject({ paletteMode: "manual", color: "#101010", palette: ["#101010", "#202020", "#303030"], opacity: .42 });
     expect(effects.find((effect) => effect.id === autoId)).toMatchObject({ paletteMode: "auto", color: "#00bb00", palette: ["#aa0000", "#00bb00", "#0000cc"] });
   });
+  it("normalizza la geometria manuale non finita o fuori intervallo", () => {
+    const effect = useProjectStore.getState().project.animation.backgroundAuto.effects[0]!;
+    useProjectStore.getState().updateBackgroundAutoEffect(effect.id, { centerX: Number.NaN, centerY: Number.POSITIVE_INFINITY, diameter: Number.NEGATIVE_INFINITY });
+    expect(useProjectStore.getState().project.animation.backgroundAuto.effects[0]).toMatchObject({ centerX: .5, centerY: .5, diameter: .42 });
+    useProjectStore.getState().updateBackgroundAutoEffect(effect.id, { centerX: -5, centerY: 8, diameter: -2 });
+    expect(useProjectStore.getState().project.animation.backgroundAuto.effects[0]).toMatchObject({ centerX: 0, centerY: 1, diameter: .05 });
+  });
   it("propaga le palette automatiche per oggetto senza sovrascrivere i colori manuali", () => {
     const first = { id: "first", label: "lamp", score: .8, isPerson: false, bbox: { x: .1, y: .1, width: .2, height: .2 }, palette: ["#110000", "#001100", "#000011"] as [string, string, string], paletteMode: "manual" as const };
     const second = { id: "second", label: "car", score: .7, isPerson: false, bbox: { x: .5, y: .2, width: .2, height: .2 } };
@@ -343,7 +350,7 @@ describe("Video Editor · montaggio nello store", () => {
     store.addVideoEditorAssets([videoAsset, imageAsset]);
     useProjectStore.getState().updateVideoEditor({ snapEnabled: false });
     const imageClip = useProjectStore.getState().addVideoEditorClip("media-image")!;
-    expect(editor().clips.find((clip) => clip.id === imageClip)?.durationSeconds).toBe(4);
+    expect(editor().clips.find((clip) => clip.id === imageClip)).toMatchObject({ durationSeconds: 4, sourceInSeconds: 0, fit: "contain" });
     useProjectStore.getState().trimVideoEditorClip(imageClip, "end", 45);
     expect(editor().clips.find((clip) => clip.id === imageClip)?.durationSeconds).toBe(45);
 

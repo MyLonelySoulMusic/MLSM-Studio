@@ -1,10 +1,13 @@
 import { mediaDrawRect, type ExportMediaFit } from "./offline-video-exporter";
-import { videoEditorVisibleLayers, type VideoEditorAdjustments, type VideoEditorClip, type VideoEditorSettings } from "./video-editor";
+import { videoEditorAsset, videoEditorVisibleLayers, type VideoEditorAdjustments, type VideoEditorClip, type VideoEditorSettings } from "./video-editor";
 import {
   videoEditorEffectCssFilter,
   videoEditorEffectFrameState,
   type VideoEditorEffectFrameState
 } from "./video-editor-effects";
+import { resolveVideoEditorAutomationValue } from "./video-editor-automation";
+import { videoEditorSecondsToFrame } from "./video-editor";
+import { defaultVideoEditorImageShadow, drawVideoEditorImageShadow, videoEditorImageShadowGeometry } from "./video-editor-image-shadow";
 
 export interface VideoEditorFrameSource { width: number; height: number; source: CanvasImageSource }
 /** La preview e l’export offline condividono questa funzione: ogni clip risolve il proprio fotogramma. */
@@ -27,6 +30,33 @@ export function videoEditorAdjustmentsAreNeutral(item: VideoEditorAdjustments): 
   return item.exposure === 0 && item.contrast === 0 && item.highlights === 0 && item.shadows === 0
     && item.whites === 0 && item.blacks === 0 && item.saturation === 0 && item.vibrance === 0
     && item.temperature === 0 && item.tint === 0 && item.hue === 0 && item.sharpness === 0 && item.denoise === 0;
+}
+
+/** Applies the persisted automation lanes to a render-only settings snapshot. */
+export function videoEditorSettingsAtAutomationFrame(settings: VideoEditorSettings, timeSeconds: number): VideoEditorSettings {
+  if (!settings.automationLanes.length) return settings;
+  const frame = videoEditorSecondsToFrame(timeSeconds, settings.timebase);
+  const clips = settings.clips.map((clip) => {
+    const read = (property: string, fallback: number) => resolveVideoEditorAutomationValue(settings.automationLanes, { kind: "clip", clipId: clip.id, property }, frame, fallback);
+    const transform = clip.transform ?? { x: 0, y: 0, scale: 1, rotation: 0 };
+    const adjustments = Object.fromEntries(Object.entries(clip.adjustments).map(([property, value]) => [property, read(`adjustments.${property}`, value)])) as unknown as VideoEditorAdjustments;
+    return {
+      ...clip,
+      transform: { x: read("transform.x", transform.x), y: read("transform.y", transform.y), scale: read("transform.scale", transform.scale), rotation: read("transform.rotation", transform.rotation) },
+      volume: read("volume", clip.volume),
+      blendIntensity: read("blendIntensity", clip.blendIntensity),
+      adjustments
+    };
+  });
+  const effectClips = settings.effectClips.map((effect) => ({
+    ...effect,
+    mix: resolveVideoEditorAutomationValue(settings.automationLanes, { kind: "effect", effectId: effect.id, property: "mix" }, frame, effect.mix),
+    parameters: Object.fromEntries(Object.entries(effect.parameters).map(([property, value]) => [
+      property,
+      typeof value === "number" ? resolveVideoEditorAutomationValue(settings.automationLanes, { kind: "effect", effectId: effect.id, property: `parameters.${property}` }, frame, value) : value
+    ]))
+  }));
+  return { ...settings, clips, effectClips };
 }
 
 /**
@@ -112,6 +142,11 @@ export interface VideoEditorFrameRenderer {
 export function createVideoEditorFrameRenderer(): VideoEditorFrameRenderer {
   let layerCanvas: HTMLCanvasElement | OffscreenCanvas | null = null;
   let layerContext: CanvasRenderingContext2D | null = null;
+  let imageEffectCanvas: HTMLCanvasElement | OffscreenCanvas | null = null;
+  let imageEffectContext: CanvasRenderingContext2D | null = null;
+  let imageShadowCanvas: HTMLCanvasElement | OffscreenCanvas | null = null;
+  let imageShadowContext: CanvasRenderingContext2D | null = null;
+  let hasPresentedFrame = false;
 
   const layerSurface = (width: number, height: number): CanvasRenderingContext2D | null => {
     if (!layerCanvas || layerCanvas.width !== width || layerCanvas.height !== height) {
@@ -125,11 +160,43 @@ export function createVideoEditorFrameRenderer(): VideoEditorFrameRenderer {
     return layerContext;
   };
 
+  /** RGB split needs a second isolated surface: applying its shifted copies to the
+   * scene and masking afterwards would also erase the already composed layers. */
+  const imageEffectSurface = (width: number, height: number): CanvasRenderingContext2D | null => {
+    if (!imageEffectCanvas || imageEffectCanvas.width !== width || imageEffectCanvas.height !== height) {
+      imageEffectCanvas = typeof OffscreenCanvas === "function" ? new OffscreenCanvas(width, height) : document.createElement("canvas");
+      imageEffectCanvas.width = width;
+      imageEffectCanvas.height = height;
+      imageEffectContext = imageEffectCanvas.getContext("2d", { alpha: true }) as CanvasRenderingContext2D | null;
+      if (imageEffectContext) { imageEffectContext.imageSmoothingEnabled = true; imageEffectContext.imageSmoothingQuality = "high"; }
+    }
+    if (imageEffectContext) imageEffectContext.clearRect(0, 0, width, height);
+    return imageEffectContext;
+  };
+
+  const imageShadowSurface = (width: number, height: number): CanvasRenderingContext2D | null => {
+    if (!imageShadowCanvas || imageShadowCanvas.width !== width || imageShadowCanvas.height !== height) {
+      imageShadowCanvas = typeof OffscreenCanvas === "function" ? new OffscreenCanvas(width, height) : document.createElement("canvas");
+      imageShadowCanvas.width = width;
+      imageShadowCanvas.height = height;
+      imageShadowContext = imageShadowCanvas.getContext("2d", { alpha: true }) as CanvasRenderingContext2D | null;
+      if (imageShadowContext) { imageShadowContext.imageSmoothingEnabled = true; imageShadowContext.imageSmoothingQuality = "high"; }
+    }
+    if (imageShadowContext) imageShadowContext.clearRect(0, 0, width, height);
+    return imageShadowContext;
+  };
+
   return (target, settings, timeSeconds, resolve) => {
     const context = target.getContext("2d", { alpha: false }) as CanvasRenderingContext2D | null;
     if (!context) return;
     const width = target.width;
     const height = target.height;
+    const renderSettings = videoEditorSettingsAtAutomationFrame(settings, timeSeconds);
+    const visible = videoEditorVisibleLayers(renderSettings, timeSeconds);
+    const resolved = visible.map((layer) => ({ layer, frame: resolve(layer.clip, layer.sourceTimeSeconds) }));
+    // A decoder seek may temporarily produce no frame. Preserve the last complete
+    // composition instead of flashing the background until the requested frame is ready.
+    if (visible.length > 0 && resolved.every((item) => !item.frame) && hasPresentedFrame) return;
     context.save();
     context.setTransform(1, 0, 0, 1, 0, 0);
     context.globalCompositeOperation = "source-over";
@@ -140,16 +207,19 @@ export function createVideoEditorFrameRenderer(): VideoEditorFrameRenderer {
     context.fillStyle = settings.backgroundColor;
     context.fillRect(0, 0, width, height);
 
-    for (const layer of videoEditorVisibleLayers(settings, timeSeconds)) {
-      const frame = resolve(layer.clip, layer.sourceTimeSeconds);
+    for (const item of resolved) {
+      const layer = item.layer;
+      const frame = item.frame;
       if (!frame || frame.width <= 0 || frame.height <= 0) continue;
+      const preserveSourceAlpha = videoEditorAsset(renderSettings, layer.clip.assetId)?.kind === "image";
       const rect = mediaDrawRect(frame.width, frame.height, width, height, layer.clip.fit as ExportMediaFit);
-      const effectState = videoEditorEffectFrameState(settings.effectClips, layer.clip.id, timeSeconds, width, height);
-      const drawTransformed = (destination: CanvasRenderingContext2D, source: CanvasImageSource) => {
-        const transform = layer.clip.transform ?? { x: 0, y: 0, scale: 1, rotation: 0 };
-        if (transform.x === 0 && transform.y === 0 && transform.scale === 1 && transform.rotation === 0
-          && effectState.translateX === 0 && effectState.translateY === 0 && effectState.scale === 1 && effectState.rotationDegrees === 0) {
-          destination.drawImage(source, rect.x, rect.y, rect.width, rect.height);
+      const effectState = videoEditorEffectFrameState(renderSettings.effectClips, layer.clip.id, timeSeconds, width, height);
+      const transform = layer.clip.transform ?? { x: 0, y: 0, scale: 1, rotation: 0 };
+      const transformIsNeutral = transform.x === 0 && transform.y === 0 && transform.scale === 1 && transform.rotation === 0
+        && effectState.translateX === 0 && effectState.translateY === 0 && effectState.scale === 1 && effectState.rotationDegrees === 0;
+      const withLayerTransform = (destination: CanvasRenderingContext2D, draw: () => void) => {
+        if (transformIsNeutral) {
+          draw();
           return;
         }
         destination.save();
@@ -159,18 +229,107 @@ export function createVideoEditorFrameRenderer(): VideoEditorFrameRenderer {
         );
         destination.rotate((transform.rotation + effectState.rotationDegrees) * Math.PI / 180);
         destination.scale(transform.scale * effectState.scale, transform.scale * effectState.scale);
-        destination.drawImage(source, rect.x - width / 2, rect.y - height / 2, rect.width, rect.height);
+        draw();
         destination.restore();
       };
+      const drawFitted = (destination: CanvasRenderingContext2D, source: CanvasImageSource) => {
+        destination.drawImage(source, rect.x, rect.y, rect.width, rect.height);
+      };
+      const drawTransformed = (destination: CanvasRenderingContext2D, source: CanvasImageSource) => {
+        withLayerTransform(destination, () => destination.drawImage(
+          source,
+          rect.x - (transformIsNeutral ? 0 : width / 2),
+          rect.y - (transformIsNeutral ? 0 : height / 2),
+          rect.width,
+          rect.height
+        ));
+      };
+      const drawIsolatedImageLayer = (destination: CanvasRenderingContext2D, source: CanvasImageSource) => {
+        withLayerTransform(destination, () => destination.drawImage(
+          source,
+          transformIsNeutral ? 0 : -width / 2,
+          transformIsNeutral ? 0 : -height / 2,
+          width,
+          height
+        ));
+      };
+      // Shadows are emitted as a separate pass so they stay below this image,
+      // above lower tracks, and never get clipped by the source alpha mask.
+      // Video clips intentionally skip this branch.
+      if (preserveSourceAlpha) {
+        const imageShadow = layer.clip.imageShadow ?? defaultVideoEditorImageShadow;
+        if (imageShadow.enabled) {
+          const shadowSurface = imageShadowSurface(width, height);
+          if (shadowSurface && imageShadowCanvas) {
+            drawVideoEditorImageShadow(
+              shadowSurface,
+              frame.source,
+              videoEditorImageShadowGeometry(frame.width, frame.height, width, height, layer.clip.fit),
+              imageShadow,
+              width,
+              height,
+              {
+                x: transform.x + (effectState.translateX / Math.max(1, width / 2)),
+                y: transform.y + (effectState.translateY / Math.max(1, height / 2)),
+                scale: transform.scale * effectState.scale,
+                rotation: transform.rotation + effectState.rotationDegrees
+              },
+              layer.opacity
+            );
+            context.save();
+            context.globalCompositeOperation = "source-over";
+            context.globalAlpha = 1;
+            context.drawImage(imageShadowCanvas, 0, 0);
+            context.restore();
+          }
+        }
+      }
       const neutral = videoEditorAdjustmentsAreNeutral(layer.clip.adjustments);
       const surface = neutral && !effectNeedsIsolation(effectState) ? null : layerSurface(width, height);
+      let composedLayerCanvas = layerCanvas;
       if (surface && layerCanvas) {
         surface.save();
         surface.filter = `${videoEditorFilter(layer.clip.adjustments)} ${videoEditorEffectCssFilter(effectState)}`;
-        drawTransformed(surface, frame.source);
+        // Still effects are authored in the layer's local composition space and
+        // the completed layer is transformed once at scene composition time. This
+        // matches CSS, where filters, masks and gradients precede `transform`.
+        if (preserveSourceAlpha) drawFitted(surface, frame.source);
+        else drawTransformed(surface, frame.source);
         surface.restore();
         correctionOverlay(surface, width, height, layer.clip.adjustments);
         effectOverlay(surface, width, height, effectState);
+
+        // Blend filters such as soft-light and screen paint into a transparent
+        // backdrop. For still images, restore the local source alpha only after
+        // every adjustment/effect has been assembled on an isolated layer. The
+        // result is transformed as a unit when it enters the scene.
+        // Never destination-in the scene: that would punch through media below.
+        if (preserveSourceAlpha) {
+          let alphaTarget = surface;
+          if (effectState.chromaticOffsetPixels > 0) {
+            const composed = imageEffectSurface(width, height);
+            if (composed && imageEffectCanvas) {
+              composed.drawImage(layerCanvas, 0, 0);
+              const offset = Math.max(.5, effectState.chromaticOffsetPixels);
+              composed.save();
+              composed.globalCompositeOperation = "screen";
+              composed.globalAlpha = .2;
+              composed.filter = "hue-rotate(92deg) saturate(1.8)";
+              composed.drawImage(layerCanvas, -offset, 0, width, height);
+              composed.filter = "hue-rotate(-92deg) saturate(1.8)";
+              composed.drawImage(layerCanvas, offset, 0, width, height);
+              composed.restore();
+              alphaTarget = composed;
+              composedLayerCanvas = imageEffectCanvas;
+            }
+          }
+          alphaTarget.save();
+          alphaTarget.globalCompositeOperation = "destination-in";
+          alphaTarget.globalAlpha = 1;
+          alphaTarget.filter = "none";
+          drawFitted(alphaTarget, frame.source);
+          alphaTarget.restore();
+        }
       }
 
       // L’intensità di fusione miscela il livello fuso con la stessa immagine in
@@ -180,7 +339,10 @@ export function createVideoEditorFrameRenderer(): VideoEditorFrameRenderer {
         context.save();
         context.globalCompositeOperation = mode;
         context.globalAlpha = alpha;
-        if (surface && layerCanvas) context.drawImage(layerCanvas, 0, 0);
+        if (surface && composedLayerCanvas) {
+          if (preserveSourceAlpha) drawIsolatedImageLayer(context, composedLayerCanvas);
+          else context.drawImage(composedLayerCanvas, 0, 0);
+        }
         else drawTransformed(context, frame.source);
         context.restore();
       };
@@ -191,7 +353,7 @@ export function createVideoEditorFrameRenderer(): VideoEditorFrameRenderer {
         draw("source-over", layer.opacity * (1 - layer.clip.blendIntensity));
         draw(blendMode, layer.opacity * layer.clip.blendIntensity);
       }
-      if (surface && layerCanvas && effectState.chromaticOffsetPixels > 0) {
+      if (!preserveSourceAlpha && surface && layerCanvas && effectState.chromaticOffsetPixels > 0) {
         const offset = Math.max(.5, effectState.chromaticOffsetPixels);
         context.save();
         context.globalCompositeOperation = "screen";
@@ -204,5 +366,6 @@ export function createVideoEditorFrameRenderer(): VideoEditorFrameRenderer {
       }
     }
     context.restore();
+    hasPresentedFrame = true;
   };
 }

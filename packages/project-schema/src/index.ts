@@ -210,7 +210,10 @@ const backgroundAutoDetectionSchema = z.object({
 });
 const backgroundAutoEffectSchema = z.object({
   id: z.string().min(1), type: z.literal("circularSpectrum"), label: z.literal("Circular Spectrum"), enabled: z.boolean().default(true),
-  detectionId: z.string().min(1).nullable().default(null), paletteMode: z.enum(["auto", "manual"]).default("auto"),
+  placementMode: z.enum(["detected", "manual"]).default("detected"),
+  detectionId: z.string().min(1).nullable().default(null),
+  centerX: z.number().min(0).max(1).default(.5), centerY: z.number().min(0).max(1).default(.5), diameter: z.number().min(.05).max(1).default(.42),
+  paletteMode: z.enum(["auto", "manual"]).default("auto"),
   color: z.string().default("#63f0d1"), palette: z.tuple([z.string(), z.string(), z.string()]).default(["#63f0d1", "#7657ff", "#ff4f9a"]),
   intensity: z.number().min(0).max(3).default(1), scale: z.number().min(.25).max(3).default(1),
   opacity: z.number().min(0).max(1).default(.9), collisionParticles: z.boolean().default(true),
@@ -220,6 +223,7 @@ const backgroundAutoEffectSchema = z.object({
   centerSpectrumEnabled: z.boolean().default(true),
   stereoSidesEnabled: z.boolean().default(true),
   subtitlesEnabled: z.boolean().default(false),
+  radialSpectrumEnabled: z.boolean().default(true),
   // Revolutions per second. Zero is a valid, deterministic freeze value.
   rotationSpeed: z.number().min(0).max(1).default(.08)
 }).strict();
@@ -227,7 +231,7 @@ const defaultBackgroundAuto = {
   imageUrl: null, sourceWidth: 0, sourceHeight: 0, palette: backgroundAutoDefaultPalette,
   detectionThreshold: .15,
   detections: [] as Array<{ id: string; label: string; alias: string; score: number; bbox: { x: number; y: number; width: number; height: number }; isPerson: boolean; paletteMode?: "auto" | "manual"; palette?: [string, string, string] | null }>,
-  effects: [{ id: "circular-spectrum-1", type: "circularSpectrum" as const, label: "Circular Spectrum" as const, enabled: false, detectionId: null, paletteMode: "auto" as const, color: "#63f0d1", palette: backgroundAutoDefaultPalette, intensity: 1, scale: 1, opacity: .9, collisionParticles: true, centerSpectrumEnabled: true, stereoSidesEnabled: true, subtitlesEnabled: false, rotationSpeed: .08 }],
+  effects: [{ id: "circular-spectrum-1", type: "circularSpectrum" as const, label: "Circular Spectrum" as const, enabled: false, placementMode: "detected" as const, detectionId: null, centerX: .5, centerY: .5, diameter: .42, paletteMode: "auto" as const, color: "#63f0d1", palette: backgroundAutoDefaultPalette, intensity: 1, scale: 1, opacity: .9, collisionParticles: true, centerSpectrumEnabled: true, stereoSidesEnabled: true, subtitlesEnabled: false, radialSpectrumEnabled: true, rotationSpeed: .08 }],
   personAnimationEnabled: false
 };
 const backgroundAutoSchema = z.object({
@@ -252,7 +256,16 @@ const backgroundAutoSchema = z.object({
   // Null-target effects are intentional editor placeholders. Legacy projects
   // may have persisted them as enabled; disable those placeholders rather
   // than implicitly animating the first detection.
-  effects: value.effects.map((effect) => effect.detectionId || !effect.enabled ? effect : { ...effect, enabled: false })
+  effects: value.effects.map((effect) => ({
+    ...effect,
+    placementMode: effect.placementMode ?? (effect.detectionId ? "detected" : "manual"),
+    centerX: effect.centerX ?? .5,
+    centerY: effect.centerY ?? .5,
+    diameter: effect.diameter ?? .42,
+    radialSpectrumEnabled: effect.radialSpectrumEnabled ?? true,
+    ...(effect.placementMode === "manual" || !effect.detectionId ? { detectionId: null } : {}),
+    ...(!effect.detectionId && effect.enabled && effect.placementMode !== "manual" ? { enabled: false } : {})
+  }))
 }));
 const pixelsSubSchema = z.object({
   imageUrl: z.string().nullable().default(defaultPixelsSub.imageUrl),
@@ -358,6 +371,12 @@ const videoEditorAdjustmentsSchema = z.object({
 const videoEditorAssetSchema = z.object({
   id: z.string().min(1), name: z.string().min(1).max(500), kind: z.enum(["video", "image", "audio"]),
   url: z.string().min(1), durationSeconds: z.number().nonnegative(), width: z.number().int().nonnegative(), height: z.number().int().nonnegative(),
+  // Frame identity metadata is optional on the wire for legacy projects. The
+  // parser hydrates stable defaults so preview/export can use one timebase.
+  sourceFrameCount: z.number().int().nonnegative().optional(),
+  sourceRate: z.object({ numerator: z.number().int().min(1).max(120_000), denominator: z.number().int().min(1).max(1_001) }).strict().optional(),
+  frameIdentityId: z.string().min(1).nullable().optional(),
+  timingMode: z.enum(["constant", "variable", "unknown"]).optional(),
   thumbnailUrl: z.string().nullable().optional(),
   hasAudio: z.boolean().default(false), bpm: z.number().positive().nullable().default(null),
   beats: z.array(z.number().nonnegative()).max(4_000).default([]), downbeats: z.array(z.number().nonnegative()).max(1_000).default([]),
@@ -368,14 +387,42 @@ const videoEditorTrackSchema = z.object({
   hidden: z.boolean().default(false), muted: z.boolean().default(false), locked: z.boolean().default(false),
   volume: z.number().min(0).max(2).default(1)
 }).strict();
+const defaultVideoEditorImageShadow = {
+  enabled: false,
+  style: "drop" as const,
+  color: "#000000",
+  opacity: .5,
+  blur: .045,
+  distance: .035,
+  angle: 135
+};
+const videoEditorImageShadowSchema = z.object({
+  enabled: z.boolean().default(defaultVideoEditorImageShadow.enabled),
+  style: z.enum(["drop", "glow", "long"]).default(defaultVideoEditorImageShadow.style),
+  color: z.string().min(1).max(64).default(defaultVideoEditorImageShadow.color),
+  opacity: z.number().min(0).max(1).default(defaultVideoEditorImageShadow.opacity),
+  blur: z.number().min(0).max(.4).default(defaultVideoEditorImageShadow.blur),
+  distance: z.number().min(0).max(.5).default(defaultVideoEditorImageShadow.distance),
+  angle: z.number().min(-360).max(360).default(defaultVideoEditorImageShadow.angle)
+}).strict().default(defaultVideoEditorImageShadow);
 const videoEditorClipSchema = z.object({
   id: z.string().min(1), assetId: z.string().min(1), trackId: z.string().min(1),
   startSeconds: z.number().nonnegative(), durationSeconds: z.number().positive(), sourceInSeconds: z.number().nonnegative().default(0),
   fadeInSeconds: z.number().nonnegative().max(60).default(0), fadeOutSeconds: z.number().nonnegative().max(60).default(0),
   fadeCurve: videoEditorFadeCurveSchema.default("smooth"), audioFadeInSeconds: z.number().nonnegative().max(60).default(0), audioFadeOutSeconds: z.number().nonnegative().max(60).default(0),
   blendMode: videoEditorBlendModeSchema.default("normal"), blendIntensity: z.number().min(0).max(1).default(1),
+  speed: z.object({
+    mode: z.enum(["constant", "ramp"]).default("constant"),
+    constant: z.number().min(.1).max(8).default(1),
+    points: z.array(z.object({ id: z.string().min(1), frame: z.number().finite().nonnegative(), speed: z.number().min(.1).max(8), curve: z.enum(["hold", "linear", "exponential", "logarithmic", "custom", "easeIn", "easeOut", "easeInOut", "bezier"]).default("linear"), bezier: z.object({ x1: z.number().min(0).max(1), y1: z.number().min(0).max(1), x2: z.number().min(0).max(1), y2: z.number().min(0).max(1) }).strict().optional(), segment: z.object({ curve: z.enum(["hold", "linear", "exponential", "logarithmic", "easeIn", "easeOut", "easeInOut"]), fromProgress: z.number().min(0).max(1), toProgress: z.number().min(0).max(1) }).strict().optional(), inTangent: z.object({ x: z.number(), y: z.number() }).strict().optional(), outTangent: z.object({ x: z.number(), y: z.number() }).strict().optional() }).strict()).max(600).default([]),
+    sampleOriginFrame: z.number().finite().optional(),
+    leadingRate: z.number().min(.1).max(8).optional(),
+    trailingRate: z.number().min(.1).max(8).optional(),
+    preservePitch: z.boolean().default(false)
+  }).strict().optional(),
   adjustments: videoEditorAdjustmentsSchema.default(defaultVideoEditorAdjustments),
   transform: z.object({ x: z.number().min(-2).max(2), y: z.number().min(-2).max(2), scale: z.number().min(.05).max(6), rotation: z.number().min(-360).max(360) }).strict().optional(),
+  imageShadow: videoEditorImageShadowSchema,
   fit: z.enum(["cover", "contain", "fill"]).default("cover"),
   muted: z.boolean().default(false), volume: z.number().min(0).max(2).default(1)
 }).strict();
@@ -387,6 +434,8 @@ const defaultVideoEditor = {
     { id: "video-editor-track-main", name: "Livello video 1", kind: "video" as const, hidden: false, muted: false, locked: false, volume: 1 },
     { id: "video-editor-track-audio", name: "Audio 1", kind: "audio" as const, hidden: false, muted: false, locked: false, volume: 1 }
   ], clips: [] as [], selectedClipIds: [] as [], effectClips: [] as [], selectedEffectClipIds: [] as [],
+  timebase: { fpsNumerator: 60, fpsDenominator: 1, dropFrame: false },
+  automationLanes: [] as [],
   snapEnabled: true, snapThresholdSeconds: .08, snapToBeats: true,
   backgroundColor: "#000000", outputWidth: 1920, outputHeight: 1080,
   interpolationEnabled: false, interpolationTargetFps: 60, interpolationMethod: "motion" as const
@@ -400,6 +449,15 @@ const videoEditorSchema = z.object({
   selectedClipIds: z.array(z.string().min(1)).max(600).default(defaultVideoEditor.selectedClipIds),
   effectClips: z.array(videoEditorEffectClipSchema).max(1_200).default(defaultVideoEditor.effectClips),
   selectedEffectClipIds: z.array(z.string().min(1)).max(1_200).default(defaultVideoEditor.selectedEffectClipIds),
+  timebase: z.object({ fpsNumerator: z.number().int().min(1).max(240), fpsDenominator: z.number().int().min(1).max(1_001), dropFrame: z.boolean().default(false) }).strict().default(defaultVideoEditor.timebase),
+  automationLanes: z.array(z.object({
+    id: z.string().min(1), target: z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("clip"), clipId: z.string().min(1), property: z.string().min(1).max(120) }).strict(),
+      z.object({ kind: z.literal("effect"), effectId: z.string().min(1), property: z.string().min(1).max(120) }).strict()
+    ]),
+    keyframes: z.array(z.object({ id: z.string().min(1), frame: z.number().int().nonnegative(), value: z.number().finite(), curve: z.enum(["hold", "linear", "exponential", "logarithmic", "custom", "easeIn", "easeOut", "easeInOut", "bezier"]).default("linear"), bezier: z.object({ x1: z.number().min(0).max(1), y1: z.number().min(0).max(1), x2: z.number().min(0).max(1), y2: z.number().min(0).max(1) }).strict().optional(), inTangent: z.object({ x: z.number(), y: z.number() }).strict().optional(), outTangent: z.object({ x: z.number(), y: z.number() }).strict().optional() }).strict()).max(600),
+    enabled: z.boolean().default(true)
+  }).strict()).max(1_200).default(defaultVideoEditor.automationLanes),
   snapEnabled: z.boolean().default(defaultVideoEditor.snapEnabled),
   snapThresholdSeconds: z.number().min(.005).max(.5).default(defaultVideoEditor.snapThresholdSeconds),
   snapToBeats: z.boolean().default(defaultVideoEditor.snapToBeats),

@@ -1,5 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import type { RhythmBallProject } from "@rbs/project-schema";
+import { useProjectStore } from "../store/project-store";
 import { backgroundAutoContainTransform, mapBackgroundAutoBoxToCanvas, normalizeBackgroundAutoProjectSeed, renderBackgroundAutoFrame } from "../services/background-auto-renderer";
 import { FullscreenPlaybackDock } from "./FullscreenPlaybackDock";
 import { useFullscreenPreview } from "../services/use-fullscreen-preview";
@@ -33,6 +34,8 @@ export function BackgroundAutoPreview({ settings, timeSeconds, durationSeconds, 
   const [image, setImage] = useState<HTMLImageElement | null>(null);
   const [hostSize, setHostSize] = useState({ width: 0, height: 0 });
   const [selectedDetectionId, setSelectedDetectionId] = useState<string | null>(null);
+  const [selectedEffectId, setSelectedEffectId] = useState<string | null>(null);
+  const dragEffect = useRef<{ id: string; mode: "move" | "resize" } | null>(null);
   const [showDetectedAreas, setShowDetectedAreas] = useState(true);
   const loadId = useRef(0);
   const { fullscreenPreview, toggleFullscreenPreview } = useFullscreenPreview();
@@ -75,6 +78,20 @@ export function BackgroundAutoPreview({ settings, timeSeconds, durationSeconds, 
     if (selectedDetectionId && !settings.detections.some((detection) => detection.id === selectedDetectionId)) setSelectedDetectionId(null);
   }, [selectedDetectionId, settings.detections]);
 
+  const updateManualEffectFromPointer = (event: ReactPointerEvent, mode: "move" | "resize") => {
+    const effect = settings.effects.find((candidate) => candidate.id === selectedEffectId);
+    if (!effect || (effect.placementMode ?? (effect.detectionId ? "detected" : "manual")) !== "manual" || !host.current) return;
+    const rect = host.current.getBoundingClientRect();
+    const x = Math.max(0, Math.min(1, (event.clientX - rect.left) / Math.max(1, rect.width)));
+    const y = Math.max(0, Math.min(1, (event.clientY - rect.top) / Math.max(1, rect.height)));
+    if (mode === "move") useProjectStore.getState().updateBackgroundAutoEffect(effect.id, { centerX: x, centerY: y });
+    else {
+      const centerX = effect.centerX ?? .5; const centerY = effect.centerY ?? .5;
+      const diameter = Math.max(.05, Math.min(1, Math.hypot(x - centerX, y - centerY) * 2));
+      useProjectStore.getState().updateBackgroundAutoEffect(effect.id, { diameter });
+    }
+  };
+
   // The renderer derives its contain transform from the actual image pixels;
   // use the same dimensions once the image is loaded and only fall back to
   // persisted source metadata while it is still loading.
@@ -97,11 +114,18 @@ export function BackgroundAutoPreview({ settings, timeSeconds, durationSeconds, 
       <span className="background-auto-detection-overlay-meta">{detection.label} · {Math.round(detection.score * 100)}%</span>
     </button>;
   }) : null;
+  const manualOverlays = settings.effects.filter((effect) => (effect.placementMode ?? (effect.detectionId ? "detected" : "manual")) === "manual").map((effect, index) => {
+    const diameter = (effect.diameter ?? .42) * Math.min(hostSize.width, hostSize.height);
+    const left = `${(effect.centerX ?? .5) * hostSize.width - diameter / 2}px`;
+    const top = `${(effect.centerY ?? .5) * hostSize.height - diameter / 2}px`;
+    const selected = effect.id === selectedEffectId;
+    return <div key={effect.id} className={`background-auto-manual-circle${selected ? " is-selected" : ""}`} style={{ left, top, width: diameter, height: diameter }} onPointerDown={(event) => { event.preventDefault(); setSelectedEffectId(effect.id); dragEffect.current = { id: effect.id, mode: "move" }; event.currentTarget.setPointerCapture?.(event.pointerId); }} onPointerMove={(event) => { if (dragEffect.current?.id === effect.id) updateManualEffectFromPointer(event, dragEffect.current.mode); }} onPointerUp={() => { dragEffect.current = null; }} role="button" tabIndex={0} aria-label={`Manual Circular Spectrum ${index + 1}`}><span>{effect.label}</span>{selected ? <button type="button" aria-label={`Resize Circular Spectrum ${index + 1}`} onPointerDown={(event) => { event.stopPropagation(); dragEffect.current = { id: effect.id, mode: "resize" }; }}>↘</button> : null}</div>;
+  });
 
-  return <main className={`viewport background-auto-viewport${fullscreenPreview ? " viewport-fullscreen" : ""}`} aria-label="Background Auto Animation preview">
-    <div className="viewport-tools"><button className="active-control">Background Auto Animation</button><span /><span className="viewport-quality">Deterministic Canvas2D · contain + object detection</span><button type="button" className={`background-auto-detection-toggle${showDetectedAreas ? " active-control" : ""}`} aria-label="Toggle detected areas" aria-pressed={showDetectedAreas} onClick={() => setShowDetectedAreas((visible) => !visible)}>{showDetectedAreas ? "Hide detected areas" : "Show detected areas"}</button><button type="button" className="viewport-fullscreen-toggle" aria-label={fullscreenPreview ? "Exit full screen" : "Preview full screen"} aria-pressed={fullscreenPreview} onClick={toggleFullscreenPreview}>{fullscreenPreview ? "↙ Back to editor" : "⛶ Full screen"}</button></div>
-    <div className="three-stage"><div className={`preview-frame ${portraitFrame ? "ratio-portrait" : "ratio-landscape"}`} style={frameWidth > 0 && frameHeight > 0 ? { aspectRatio: `${frameWidth} / ${frameHeight}` } : undefined}><div ref={host} className="background-auto-canvas-host"><canvas ref={canvasRef} />{overlays}</div></div></div>
+  return <main className={`viewport background-auto-viewport${fullscreenPreview ? " viewport-fullscreen" : ""}`} aria-label="Circular Spectrum Auto Detector preview">
+    <div className="viewport-tools"><button className="active-control">Circular Spectrum Auto Detector</button><span /><span className="viewport-quality">Deterministic Canvas2D · contain + object detection</span><button type="button" className={`background-auto-detection-toggle${showDetectedAreas ? " active-control" : ""}`} aria-label="Toggle detected areas" aria-pressed={showDetectedAreas} onClick={() => setShowDetectedAreas((visible) => !visible)}>{showDetectedAreas ? "Hide detected areas" : "Show detected areas"}</button><button type="button" className="viewport-fullscreen-toggle" aria-label={fullscreenPreview ? "Exit full screen" : "Preview full screen"} aria-pressed={fullscreenPreview} onClick={toggleFullscreenPreview}>{fullscreenPreview ? "↙ Back to editor" : "⛶ Full screen"}</button></div>
+    <div className="three-stage"><div className={`preview-frame ${portraitFrame ? "ratio-portrait" : "ratio-landscape"}`} style={frameWidth > 0 && frameHeight > 0 ? { aspectRatio: `${frameWidth} / ${frameHeight}` } : undefined}><div ref={host} className="background-auto-canvas-host"><canvas ref={canvasRef} />{overlays}{manualOverlays}</div></div></div>
     {fullscreenTransport ? <FullscreenPlaybackDock currentTime={timeSeconds} duration={durationSeconds} playing={playing} onPlayPause={onPlayPause} onStop={onStop} onSeek={onSeek} /> : null}
-    <div className="viewport-footer"><span>● Canvas2D · shared offline export</span><span>{settings.detections.length} objects · {settings.effects.filter((effect) => effect.enabled).length} Circular Spectrum effects</span></div>
+    <div className="viewport-footer"><span>● Canvas2D · shared offline export</span><span>{settings.detections.length} objects · {settings.effects.filter((effect) => effect.enabled).length} Circular Spectrum circles</span></div>
   </main>;
 }

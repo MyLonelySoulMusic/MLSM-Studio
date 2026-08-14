@@ -23,7 +23,7 @@ import { useExportStore } from "./store/export-store";
 import { exportOfflineSceneVideo, type SharedViewportRenderer } from "./services/offline-video-exporter";
 import { exportPixelsSubOfflineVideo } from "./services/pixels-sub-offline-exporter";
 import { exportStaticWatermarkVideo } from "./services/static-watermark-exporter";
-import { exportProSubtitleVideo } from "./services/pro-subtitle-exporter";
+import { exportProSubtitleVideo, processProSubtitleVideo } from "./services/pro-subtitle-exporter";
 import { isTauri } from "@tauri-apps/api/core";
 import { deserializeSceneObjects, serializeSceneObjects } from "./services/scene-persistence";
 import type { EditableSceneObject } from "./store/scene-store";
@@ -43,16 +43,23 @@ import { exportPortraitLandscapeOfflineVideo } from "./services/portrait-landsca
 import { VideoEditorPreview } from "./components/VideoEditorPreview";
 import { VideoEditorInspector } from "./components/VideoEditorInspector";
 import { VideoEditorTimeline } from "./components/VideoEditorTimeline";
+import { VideoEditorWorkspace } from "./components/VideoEditorWorkspace";
 import { AIQuantizerWorkspace } from "./components/AIQuantizerWorkspace";
 import { exportVideoEditorOfflineVideo } from "./services/video-editor-offline-exporter";
-import { videoEditorTimelineDuration } from "./services/video-editor";
+import { videoEditorSourceTime, videoEditorTimelineDuration } from "./services/video-editor";
 import { useVideoEditorPlayback } from "./store/video-editor-playback-store";
 import { BackgroundAutoPreview } from "./components/BackgroundAutoPreview";
 import { exportBackgroundAutoOfflineVideo } from "./services/background-auto-offline-exporter";
 import { backgroundAutoConfigurationError } from "./services/background-auto-renderer";
+import type { VideoEditorToolId } from "./services/video-editor-tools";
+import { createVideoEditorArtifact, videoEditorToolSourceRange } from "./services/video-editor-tools";
+import { processUpscaledVideo } from "./services/upscaler-video-exporter";
+import { processStaticWatermarkVideo } from "./services/static-watermark-exporter";
+import { videoEditorSessionFile } from "./services/video-editor-import";
 
 const WORKSPACE_LAYOUT_KEY = "dynamic-sound-animation-studio.workspace-layout.v1";
 const TIMELINE_LAYOUT_KEY = "dynamic-sound-animation-studio.timeline-height.v1";
+const VIDEO_EDITOR_TIMELINE_LAYOUT_KEY = "dynamic-sound-animation-studio.video-editor.timeline-height.v1";
 
 function initialWorkspacePanelWidths() {
   if (typeof window === "undefined") return DEFAULT_WORKSPACE_PANEL_WIDTHS;
@@ -62,6 +69,11 @@ function initialWorkspacePanelWidths() {
 function initialTimelineHeight() {
   if (typeof window === "undefined") return DEFAULT_TIMELINE_HEIGHT;
   return parseTimelineHeight(window.localStorage.getItem(TIMELINE_LAYOUT_KEY), window.innerHeight);
+}
+
+function initialVideoEditorTimelineHeight() {
+  if (typeof window === "undefined") return DEFAULT_TIMELINE_HEIGHT;
+  return parseTimelineHeight(window.localStorage.getItem(VIDEO_EDITOR_TIMELINE_LAYOUT_KEY), window.innerHeight);
 }
 
 function objectSurfaceHeight(object: EditableSceneObject | undefined): number { if (!object) return .2; if (object.type === "kick") return .31; if (object.type === "snare") return .22; if (object.type === "drum") return .27; if (object.type === "guitar" || object.type === "strings") return .2; if (object.type === "pebble") return .12; if (object.type === "spring") return .54; if (object.type === "peg") return .75; if (object.type === "block") return .28; return .14; }
@@ -75,16 +87,23 @@ function probeVideoDimensions(url: string): Promise<{ width: number; height: num
 }
 
 export function App({ onHome }: { onHome?: () => void } = {}) {
-  const store = useProjectStore(); const audio = useAudioStore(); const analysis = useAnalysisStore(); const exportState = useExportStore(); const sceneObjects = useSceneStore((state) => state.objects); const sceneBall = useSceneStore((state) => state.ball); const sceneBackground = useSceneStore((state) => state.background); const sceneRailColors = useSceneStore((state) => state.railColors); const sceneLight = useSceneStore((state) => state.light); const replaceScene = useSceneStore((state) => state.replace); const regenerateScene = useSceneStore((state) => state.regenerate); const resetScene = useSceneStore((state) => state.reset); const updateSceneBall = useSceneStore((state) => state.updateBall); const updateSceneBackground = useSceneStore((state) => state.updateBackground); const updateSceneLight = useSceneStore((state) => state.updateLight); const updateRailColor = useSceneStore((state) => state.updateRailColor); const { setCurrentTime, setPlaying, setDiagnostics } = audio; const audioElement = useRef<HTMLAudioElement>(null); const viewportRenderer = useRef<SharedViewportRenderer | null>(null); const workspace = useRef<HTMLDivElement>(null); const portraitAutoAnalysisHash = useRef<string | null>(null); const [workspacePanelWidths, setWorkspacePanelWidths] = useState(initialWorkspacePanelWidths); const [timelineHeight, setTimelineHeight] = useState(initialTimelineHeight); const [exportRenderTime, setExportRenderTime] = useState<number | null>(null); const [selectedPhonemeId, setSelectedPhonemeId] = useState<string | null>(null); const [selectedSubtitleId, setSelectedSubtitleId] = useState<string | null>(null); const analyzer = useRef(new WebAudioAnalyzer()); const onRendererReady = useCallback((renderer: SharedViewportRenderer | null) => { viewportRenderer.current = renderer; }, []); const handleSelectObject = useCallback((id: string | null) => { useSceneStore.getState().select(id); if (id) useProjectStore.getState().selectEvent(null); }, []); const handleSelectMusicEvent = useCallback((id: string | null, additive = false) => { setSelectedPhonemeId(null); setSelectedSubtitleId(null); useSceneStore.getState().select(null); useProjectStore.getState().selectEvent(id, additive); }, []);
+  const store = useProjectStore(); const audio = useAudioStore(); const analysis = useAnalysisStore(); const exportState = useExportStore(); const sceneObjects = useSceneStore((state) => state.objects); const sceneBall = useSceneStore((state) => state.ball); const sceneBackground = useSceneStore((state) => state.background); const sceneRailColors = useSceneStore((state) => state.railColors); const sceneLight = useSceneStore((state) => state.light); const replaceScene = useSceneStore((state) => state.replace); const regenerateScene = useSceneStore((state) => state.regenerate); const resetScene = useSceneStore((state) => state.reset); const updateSceneBall = useSceneStore((state) => state.updateBall); const updateSceneBackground = useSceneStore((state) => state.updateBackground); const updateSceneLight = useSceneStore((state) => state.updateLight); const updateRailColor = useSceneStore((state) => state.updateRailColor); const { setCurrentTime, setPlaying, setDiagnostics } = audio; const audioElement = useRef<HTMLAudioElement>(null); const viewportRenderer = useRef<SharedViewportRenderer | null>(null); const workspace = useRef<HTMLDivElement>(null); const portraitAutoAnalysisHash = useRef<string | null>(null); const [workspacePanelWidths, setWorkspacePanelWidths] = useState(initialWorkspacePanelWidths); const [timelineHeight, setTimelineHeight] = useState(initialTimelineHeight); const [videoEditorTimelineHeight, setVideoEditorTimelineHeight] = useState(initialVideoEditorTimelineHeight); const [exportRenderTime, setExportRenderTime] = useState<number | null>(null); const [selectedPhonemeId, setSelectedPhonemeId] = useState<string | null>(null); const [selectedSubtitleId, setSelectedSubtitleId] = useState<string | null>(null); const analyzer = useRef(new WebAudioAnalyzer()); const onRendererReady = useCallback((renderer: SharedViewportRenderer | null) => { viewportRenderer.current = renderer; }, []); const handleSelectObject = useCallback((id: string | null) => { useSceneStore.getState().select(id); if (id) useProjectStore.getState().selectEvent(null); }, []); const handleSelectMusicEvent = useCallback((id: string | null, additive = false) => { setSelectedPhonemeId(null); setSelectedSubtitleId(null); useSceneStore.getState().select(null); useProjectStore.getState().selectEvent(id, additive); }, []);
   const timelineResizeFrame = useRef<number | null>(null); const requestedTimelineHeight = useRef(timelineHeight);
   const resizeTimelineHeight = useCallback((height: number) => {
     requestedTimelineHeight.current = clampTimelineHeight(height, window.innerHeight);
     if (timelineResizeFrame.current !== null) return;
     timelineResizeFrame.current = window.requestAnimationFrame(() => { timelineResizeFrame.current = null; setTimelineHeight(requestedTimelineHeight.current); });
   }, []);
+  const videoEditorTimelineResizeFrame = useRef<number | null>(null); const requestedVideoEditorTimelineHeight = useRef(videoEditorTimelineHeight);
+  const resizeVideoEditorTimelineHeight = useCallback((height: number) => {
+    requestedVideoEditorTimelineHeight.current = clampTimelineHeight(height, window.innerHeight);
+    if (videoEditorTimelineResizeFrame.current !== null) return;
+    videoEditorTimelineResizeFrame.current = window.requestAnimationFrame(() => { videoEditorTimelineResizeFrame.current = null; setVideoEditorTimelineHeight(requestedVideoEditorTimelineHeight.current); });
+  }, []);
   useEffect(() => { try { window.localStorage.setItem(WORKSPACE_LAYOUT_KEY, JSON.stringify(workspacePanelWidths)); } catch { /* Il ridimensionamento resta attivo per la sessione. */ } }, [workspacePanelWidths]);
   useEffect(() => { requestedTimelineHeight.current = timelineHeight; try { window.localStorage.setItem(TIMELINE_LAYOUT_KEY, String(timelineHeight)); } catch { /* Il ridimensionamento resta attivo per la sessione. */ } }, [timelineHeight]);
-  useEffect(() => () => { if (timelineResizeFrame.current !== null) window.cancelAnimationFrame(timelineResizeFrame.current); }, []);
+  useEffect(() => { requestedVideoEditorTimelineHeight.current = videoEditorTimelineHeight; try { window.localStorage.setItem(VIDEO_EDITOR_TIMELINE_LAYOUT_KEY, String(videoEditorTimelineHeight)); } catch { /* Il layout del Video Editor resta attivo per la sessione. */ } }, [videoEditorTimelineHeight]);
+  useEffect(() => () => { if (timelineResizeFrame.current !== null) window.cancelAnimationFrame(timelineResizeFrame.current); if (videoEditorTimelineResizeFrame.current !== null) window.cancelAnimationFrame(videoEditorTimelineResizeFrame.current); }, []);
   useEffect(() => {
     const fit = () => setWorkspacePanelWidths((current) => fitWorkspacePanelWidths(current, workspace.current?.clientWidth ?? window.innerWidth));
     window.addEventListener("resize", fit);
@@ -92,6 +111,11 @@ export function App({ onHome }: { onHome?: () => void } = {}) {
   }, []);
   useEffect(() => {
     const fit = () => setTimelineHeight((current) => clampTimelineHeight(current, window.innerHeight));
+    window.addEventListener("resize", fit);
+    return () => window.removeEventListener("resize", fit);
+  }, []);
+  useEffect(() => {
+    const fit = () => setVideoEditorTimelineHeight((current) => clampTimelineHeight(current, window.innerHeight));
     window.addEventListener("resize", fit);
     return () => window.removeEventListener("resize", fit);
   }, []);
@@ -195,6 +219,85 @@ export function App({ onHome }: { onHome?: () => void } = {}) {
   const staticWatermarkMode = store.project.animation.modeId === "staticWatermark";
   const upscalerMode = store.project.animation.modeId === "upscaler";
   const videoEditorSettings = store.project.animation.videoEditor;
+  const openVideoEditorTool = useCallback((toolId: VideoEditorToolId, clipId: string) => {
+    const settings = useProjectStore.getState().project.animation.videoEditor;
+    const clip = settings.clips.find((item) => item.id === clipId);
+    const asset = clip ? settings.assets.find((item) => item.id === clip.assetId) : null;
+    if (!clip || !asset) return;
+    if (toolId === "upscaler") {
+      const { sourceDurationSeconds } = videoEditorToolSourceRange(clip, settings.timebase);
+      store.updateUpscaler({ sourceUrl: asset.url, sourceName: asset.name, sourceKind: asset.kind === "video" ? "video" : "image", sourceWidth: asset.width, sourceHeight: asset.height, durationSeconds: sourceDurationSeconds });
+      store.setAnimationMode("upscaler", store.project.animation.baseObjectTypes);
+    } else if (toolId === "pro-subtitles") {
+      store.updateProSubtitles({ videoUrl: asset.url, videoName: asset.name });
+      store.setAnimationMode("proSubtitles", store.project.animation.baseObjectTypes);
+    } else {
+      store.setStatus("Watermark Remover: backend artifact non disponibile; nessun output simulato.");
+    }
+  }, [store]);
+  const runVideoEditorTool = useCallback(async (toolId: VideoEditorToolId, clipId: string, signal: AbortSignal) => {
+    const settings = useProjectStore.getState().project.animation.videoEditor;
+    const clip = settings.clips.find((item) => item.id === clipId);
+    const asset = clip ? settings.assets.find((item) => item.id === clip.assetId) : null;
+    if (!clip || !asset) throw new Error("Clip selezionata non disponibile.");
+    const { sourceStartSeconds, sourceDurationSeconds } = videoEditorToolSourceRange(clip, settings.timebase);
+    if (toolId === "upscaler") {
+      if (asset.kind !== "video") throw new Error("Upscaler video richiede una clip video.");
+      const result = await processUpscaledVideo({ projectName: store.project.project.name, quality: "high", sourceVideoUrl: asset.url, sourceVideoFile: videoEditorSessionFile(asset.id), sourceStartSeconds, sourceDurationSeconds, upscalerSettings: { ...store.project.animation.upscaler, sourceUrl: asset.url, sourceName: asset.name, sourceKind: "video", sourceWidth: asset.width, sourceHeight: asset.height, durationSeconds: sourceDurationSeconds } }, signal, () => undefined);
+      return createVideoEditorArtifact(toolId, clip, asset, URL.createObjectURL(result.blob), { name: result.fileName, sourceFrameCount: result.sourceFrameCount, sourceDurationSeconds, ...(asset.sourceRate ? { sourceRate: asset.sourceRate } : {}) });
+    }
+    if (toolId === "watermark-remover") {
+      const watermark = store.project.animation.staticWatermark;
+      if (!watermark.referenceImageUrl) throw new Error("Watermark Remover richiede prima un’immagine di riferimento.");
+      if (asset.kind !== "video") throw new Error("Watermark Remover richiede una clip video.");
+      const result = await processStaticWatermarkVideo({ projectName: store.project.project.name, quality: "high", sourceVideoUrl: asset.url, sourceVideoFile: videoEditorSessionFile(asset.id), sourceStartSeconds, sourceDurationSeconds, referenceImageUrl: watermark.referenceImageUrl, watermarkSettings: watermark }, signal, () => undefined);
+      return createVideoEditorArtifact(toolId, clip, asset, URL.createObjectURL(result.blob), { name: result.fileName, sourceFrameCount: result.sourceFrameCount, sourceDurationSeconds, ...(asset.sourceRate ? { sourceRate: asset.sourceRate } : {}) });
+    }
+    if (asset.kind !== "video") throw new Error("Pro Subtitles richiede una clip video.");
+    const clipStart = clip.startSeconds;
+    const clipEnd = clip.startSeconds + clip.durationSeconds;
+    const sourceRelativeCues = store.project.subtitles.cues.flatMap((cue) => {
+      const timelineStart = Math.max(clipStart, cue.startSeconds);
+      const timelineEnd = Math.min(clipEnd, cue.endSeconds);
+      if (timelineEnd <= timelineStart || !cue.text.trim()) return [];
+      return [{
+        ...cue,
+        startSeconds: videoEditorSourceTime(clip, timelineStart, settings.timebase),
+        endSeconds: videoEditorSourceTime(clip, timelineEnd, settings.timebase)
+      }];
+    });
+    const fps = (settings.timebase?.fpsNumerator ?? 60) / Math.max(1, settings.timebase?.fpsDenominator ?? 1);
+    const renderer = {
+      canvas: document.createElement("canvas"),
+      setExportSize: () => undefined,
+      restorePreviewSize: () => undefined,
+      renderNow: () => undefined
+    };
+    const result = await processProSubtitleVideo({
+      width: Math.max(2, asset.width),
+      height: Math.max(2, asset.height),
+      fps,
+      durationSeconds: sourceDurationSeconds,
+      projectName: store.project.project.name,
+      quality: "high",
+      outputMode: "completeVideo",
+      backgroundMode: "solid",
+      backgroundColor: "#000000",
+      sourceVideoUrl: asset.url,
+      sourceVideoFile: videoEditorSessionFile(asset.id),
+      sourceVideoName: asset.name,
+      sourceStartSeconds,
+      sourceDurationSeconds,
+      subtitleCues: sourceRelativeCues,
+      subtitleSettings: store.project.animation.proSubtitles
+    }, renderer, signal, () => undefined);
+    return createVideoEditorArtifact(toolId, clip, asset, URL.createObjectURL(result.blob), {
+      name: result.fileName,
+      sourceDurationSeconds,
+      ...(result.sourceFrameCount !== undefined ? { sourceFrameCount: result.sourceFrameCount } : {}),
+      ...(asset.sourceRate ? { sourceRate: asset.sourceRate } : {})
+    });
+  }, [store]);
   // Il montaggio ha una propria durata e un proprio playhead: non dipende dal brano importato.
   const videoEditorDuration = useMemo(() => videoEditorTimelineDuration(videoEditorSettings), [videoEditorSettings]);
   const characterMode = walkingCubeMode || pixelsSubMode || backgroundAutoMode || store.project.animation.modeId === "teddyWalk" || store.project.animation.modeId === "teddySing";
@@ -312,7 +415,7 @@ export function App({ onHome }: { onHome?: () => void } = {}) {
           interpolationEnabled: advanced?.interpolationEnabled ?? false,
           interpolationTargetFps: advanced?.interpolationTargetFps ?? settings.fps,
           interpolationMethod: advanced?.interpolationMethod ?? "motion"
-        }, controller.signal, (progress) => exportState.update(progress.progress, progress.currentFrame, progress.totalFrames));
+        }, controller.signal, (progress) => exportState.update(progress));
         exportState.complete();
         const interpolated = result.interpolatedFps ? ` · interpolato a ${result.interpolatedFps} fps` : "";
         const note = result.interpolationNote ? ` · ${result.interpolationNote}` : "";
@@ -321,14 +424,13 @@ export function App({ onHome }: { onHome?: () => void } = {}) {
       }
       if (backgroundAutoMode) {
         const backgroundAuto = store.project.animation.backgroundAuto;
-        if (!backgroundAuto.imageUrl) throw new Error("Upload an image and complete detection before export.");
-        if (backgroundAuto.sourceWidth <= 0 || backgroundAuto.sourceHeight <= 0) throw new Error("Source dimensions are missing: reload the image and complete detection before export.");
-        if (!backgroundAuto.detections.length) throw new Error("No saved detections: run image analysis again.");
+        if (!backgroundAuto.imageUrl) throw new Error("Upload an image before exporting Circular Spectrum Auto Detector.");
+        if (backgroundAuto.sourceWidth <= 0 || backgroundAuto.sourceHeight <= 0) throw new Error("Source dimensions are missing: reload the image before export.");
         const configurationError = backgroundAutoConfigurationError(backgroundAuto); if (configurationError) throw new Error(configurationError);
         element?.pause(); audio.setPlaying(false);
-        if (!imported?.url) throw new Error("Import an audio track before Background Auto Animation export.");
+        if (!imported?.url) throw new Error("Import an audio track before Circular Spectrum Auto Detector export.");
         const result = await exportBackgroundAutoOfflineVideo({ width: settings.width, height: settings.height, fps: settings.fps, durationSeconds: settings.durationSeconds, projectName: store.project.project.name, projectSeed: store.project.project.seed, quality: settings.quality, audioUrl: imported.url, imageUrl: backgroundAuto.imageUrl, backgroundAutoSettings: backgroundAuto, energyFrames: analysis.result?.energy ?? [], subtitleCues: store.project.subtitles.cues, proSubtitlesSettings: store.project.animation.proSubtitles }, controller.signal, (progress) => exportState.update(progress.progress, progress.currentFrame, progress.totalFrames));
-        exportState.complete(); store.setStatus(`Background Auto Animation export ready · ${result.width} × ${result.height} · ${result.encodedFrameCount} frames · ${result.fileName}`); return;
+        exportState.complete(); store.setStatus(`Circular Spectrum Auto Detector export ready · ${result.width} × ${result.height} · ${result.encodedFrameCount} frames · ${result.fileName}`); return;
       }
       if (staticWatermarkMode) {
         const watermark = store.project.animation.staticWatermark;
@@ -460,23 +562,25 @@ export function App({ onHome }: { onHome?: () => void } = {}) {
     ? Boolean(store.project.animation.upscaler.sourceUrl)
     : videoEditorMode
       ? videoEditorDuration > 0
-      : duration > 0 && (backgroundAutoMode ? Boolean(store.project.animation.backgroundAuto.imageUrl && store.project.animation.backgroundAuto.sourceWidth > 0 && store.project.animation.backgroundAuto.sourceHeight > 0 && store.project.animation.backgroundAuto.detections.length && !backgroundAutoConfigurationError(store.project.animation.backgroundAuto)) : staticWatermarkMode ? Boolean(store.project.animation.staticWatermark.videoUrl && store.project.animation.staticWatermark.referenceImageUrl) : portraitLandscapeMode ? Boolean(store.project.animation.portraitLandscape.videoUrl && store.project.animation.portraitLandscape.sideImageUrl && store.project.animation.portraitLandscape.coverImageUrl && (!store.project.animation.portraitLandscape.videoHasAudio || analysis.result)) : pixelsSubMode ? Boolean(store.project.animation.pixelsSub.imageUrl) : subtitleVideoMode ? subtitleVideoReady : store.project.animation.modeId === "coverSphere" || stereoUnfoldMode || characterMode || trajectory.segments.length > 0);
+      : duration > 0 && (backgroundAutoMode ? Boolean(store.project.animation.backgroundAuto.imageUrl && store.project.animation.backgroundAuto.sourceWidth > 0 && store.project.animation.backgroundAuto.effects.some((effect) => effect.enabled && (effect.placementMode === "manual" || Boolean(effect.detectionId))) && !backgroundAutoConfigurationError(store.project.animation.backgroundAuto)) : staticWatermarkMode ? Boolean(store.project.animation.staticWatermark.videoUrl && store.project.animation.staticWatermark.referenceImageUrl) : portraitLandscapeMode ? Boolean(store.project.animation.portraitLandscape.videoUrl && store.project.animation.portraitLandscape.sideImageUrl && store.project.animation.portraitLandscape.coverImageUrl && (!store.project.animation.portraitLandscape.videoHasAudio || analysis.result)) : pixelsSubMode ? Boolean(store.project.animation.pixelsSub.imageUrl) : subtitleVideoMode ? subtitleVideoReady : store.project.animation.modeId === "coverSphere" || stereoUnfoldMode || characterMode || trajectory.segments.length > 0);
   const handleToolbarExport = () => { if (upscalerMode) window.dispatchEvent(new Event("upscaler:export")); else exportState.show(); };
   const shellStyle = { "--timeline-height": `${timelineHeight}px` } as CSSProperties;
   if (aiQuantizerMode) return <AIQuantizerWorkspace {...(onHome ? { onHome } : {})} />;
   return <div className={`app-shell${upscalerMode ? " upscaler-app-shell" : ""}${portraitLandscapeMode ? " portrait-landscape-app-shell" : ""}${videoEditorMode ? " video-editor-app-shell" : ""}`} style={shellStyle}>
     <audio ref={audioElement} src={imported?.url} preload="auto" loop={audio.looping} />
-    <Toolbar {...(onHome ? { onHome } : {})} name={store.project.project.name} dirty={store.dirty} subtitleVideoMode={videoEditorMode || (sourceVideoMode && !portraitLandscapeMode)} analysisOnlyMode={portraitLandscapeMode} audioLoading={audio.loading} canAnalyze={Boolean(imported) && !staticWatermarkMode} analysisRunning={analysis.running} analysisProgress={analysis.progress?.progress ?? 0} canGenerate={store.project.events.length > 0 && !characterMode && !stereoUnfoldMode && !sourceVideoMode && store.project.animation.modeId !== "coverSphere"} canExport={canExportCurrentMode} canUndo={store.eventHistory.length > 0} canRedo={store.eventFuture.length > 0} onNew={newProject} onOpen={() => void openProject()} onSave={() => void saveProject()} onImportAudio={() => void handleImportAudio()} onAnalyze={() => void handleAnalyze()} onGenerate={handleGenerateScene} onExport={handleToolbarExport} onUndo={store.undoEvents} onRedo={store.redoEvents} />
-    <div className="workspace" ref={workspace} style={workspaceStyle}>
-      <LibraryPanel canRegenerate={store.project.events.length > 0} onRegenerate={handleGenerateScene} onImportSubtitleVideo={handleImportSubtitleVideo} audioUrl={imported?.url ?? null} duration={duration} currentTime={audio.currentTime} selectedSubtitleId={selectedSubtitleId} onSelectSubtitle={setSelectedSubtitleId} />
-      <WorkspaceResizeHandle side="left" width={workspacePanelWidths.left} onResize={(width) => resizeWorkspaceSide("left", width)} onReset={() => resizeWorkspaceSide("left", DEFAULT_WORKSPACE_PANEL_WIDTHS.left)} />
-      {videoEditorMode ? <VideoEditorPreview /> : portraitLandscapeMode ? <PortraitLandscapePreview settings={store.project.animation.portraitLandscape} subtitles={store.project.subtitles} proSubtitlesSettings={store.project.animation.proSubtitles} timeSeconds={displayTime} durationSeconds={duration} playing={audio.playing} bpm={globalBpm} analysisReady={Boolean(analysis.result?.energy.length)} audioPulse={coverSpectrum.pulse} rhythmPulse={rhythmPulse} spectrumBands={coverSpectrum.bands} stereoLeftBands={coverSpectrum.leftBands} stereoRightBands={coverSpectrum.rightBands} onPlayPause={playPause} onStop={stop} onSeek={seek} /> : backgroundAutoMode ? <BackgroundAutoPreview settings={store.project.animation.backgroundAuto} timeSeconds={displayTime} durationSeconds={duration} playing={audio.playing || exportState.running} spectrumBands={coverSpectrum.bands} audioPulse={coverSpectrum.pulse} stereoLeftBands={coverSpectrum.leftBands} stereoRightBands={coverSpectrum.rightBands} stereoLeftPulse={coverSpectrum.leftPulse} stereoRightPulse={coverSpectrum.rightPulse} subtitleCues={store.project.subtitles.cues} proSubtitlesSettings={store.project.animation.proSubtitles} projectSeed={store.project.project.seed} onSourceDimensions={hydrateBackgroundAutoSource} onPlayPause={playPause} onStop={stop} onSeek={seek} /> : <Viewport key={`${sceneBall.innerShape}-${store.project.animation.modeId}`} timeSeconds={displayTime} durationSeconds={duration} playing={audio.playing || exportState.running} onPlayPause={playPause} onStop={stop} onSeek={seek} ballPosition={trajectory.segments.length ? ballState.position : undefined} ballVelocity={trajectory.segments.length ? ballState.velocity : undefined} activeObjectIndex={activeObjectIndex} aspectRatio={store.project.canvas.aspectRatio} animationModeId={store.project.animation.modeId} newYorkSettings={store.project.animation.newYorkStreets} coverSphereSettings={store.project.animation.coverSphere} stereoUnfoldSettings={store.project.animation.stereoUnfold} walkingCubeSettings={store.project.animation.walkingCube} teddyWalkSettings={store.project.animation.teddyWalk} teddySingSettings={store.project.animation.teddySing} proSubtitlesSettings={store.project.animation.proSubtitles} pixelsSubSettings={store.project.animation.pixelsSub} staticWatermarkSettings={store.project.animation.staticWatermark} upscalerSettings={store.project.animation.upscaler} pixelsSubRhythmHits={pixelsSubRhythmHits} teddyLipSync={teddyLipSync} subtitles={viewportSubtitles} spectrumBands={coverSpectrum.bands} stereoLeftBands={coverSpectrum.leftBands} stereoRightBands={coverSpectrum.rightBands} stereoWidth={coverSpectrum.stereoWidth} stereoLeftPulse={coverSpectrum.leftPulse} stereoRightPulse={coverSpectrum.rightPulse} audioPulse={coverSpectrum.pulse} rhythmPulse={rhythmPulse} globalBpm={globalBpm} trajectorySegments={trajectory.segments} projectSeed={store.project.project.seed} motionKinds={trajectory.objectMotionKinds} impactResponses={impactResponses} onRendererReady={onRendererReady} onSelectObject={handleSelectObject} />}
-      <WorkspaceResizeHandle side="right" width={workspacePanelWidths.right} onResize={(width) => resizeWorkspaceSide("right", width)} onReset={() => resizeWorkspaceSide("right", DEFAULT_WORKSPACE_PANEL_WIDTHS.right)} />
-      {videoEditorMode ? <VideoEditorInspector /> : upscalerMode ? <UpscalerInspector /> : staticWatermarkMode ? <StaticWatermarkInspector /> : portraitLandscapeMode ? <PortraitLandscapeInspector /> : backgroundAutoMode ? null : <InspectorPanel name={store.project.project.name} aspectRatio={store.project.canvas.aspectRatio} event={selectedMusicEvent} events={store.project.events} duration={duration} availableObjectTypes={availableObjectTypes} onRename={store.renameProject} onAspectRatio={store.setAspectRatio} onSelectObject={(id) => handleSelectObject(id)} onChangeObjectType={handleChangeObjectType} onUpdateEvent={handleUpdateEvent} onDeleteEvent={store.deleteEvent} />}
-    </div>
-    {videoEditorMode ? <VideoEditorTimeline timelineHeight={timelineHeight} onResizeHeight={resizeTimelineHeight} /> : upscalerMode ? null : <Timeline peaks={imported?.waveform ?? store.project.analysis.waveform} events={store.project.events} beats={analysis.result?.beats ?? store.project.events.map((event) => event.timeSeconds)} subtitleOnly={subtitleVideoMode || pixelsSubMode} showPhonemes={store.project.animation.modeId === "teddySing"} phonemes={store.project.animation.modeId === "teddySing" ? store.project.animation.teddySing.phonemeCues : []} selectedPhonemeId={selectedPhonemeId} subtitles={timelineSubtitles} selectedSubtitleId={selectedSubtitleId} selectedEventId={store.selectedEventId} selectedEventIds={store.selectedEventIds} compositorLayers={portraitCompositorLayers} timelineHeight={timelineHeight} currentTime={audio.currentTime} duration={duration} playing={audio.playing} looping={audio.looping} onResizeHeight={resizeTimelineHeight} onPlayPause={playPause} onStop={stop} onSeek={seek} onLoop={audio.setLooping} onSelectPhoneme={(id) => { setSelectedPhonemeId(id); setSelectedSubtitleId(null); if (id) useProjectStore.getState().selectEvent(null); }} onDeletePhoneme={(id) => store.deleteTeddySingPhoneme(id)} onSplitPhoneme={(id, time) => store.splitTeddySingPhoneme(id, time)} onAddSubtitle={(time) => { const id = store.addSubtitleCue(time); setSelectedSubtitleId(id); setSelectedPhonemeId(null); }} onSelectSubtitle={(id) => { setSelectedSubtitleId(id); setSelectedPhonemeId(null); if (id) useProjectStore.getState().selectEvent(null); }} onMoveSubtitle={store.moveSubtitleCue} onResizeSubtitle={store.resizeSubtitleCue} onDeleteSubtitle={store.deleteSubtitleCue} onSplitSubtitle={store.splitSubtitleCue} onSelectEvent={handleSelectMusicEvent} onAddEvent={addElementAtBeat} onMoveEvent={store.moveEvent} onDeleteEvent={store.deleteEvent} onDeleteEvents={store.deleteEvents} onMoveCompositorLayer={movePortraitCompositorLayer} />}
+    <Toolbar {...(onHome ? { onHome } : {})} name={store.project.project.name} dirty={store.dirty} subtitleVideoMode={videoEditorMode || (sourceVideoMode && !portraitLandscapeMode)} analysisOnlyMode={portraitLandscapeMode} audioLoading={audio.loading} canAnalyze={Boolean(imported) && !staticWatermarkMode} analysisRunning={analysis.running} analysisProgress={analysis.progress?.progress ?? 0} canGenerate={store.project.events.length > 0 && !characterMode && !stereoUnfoldMode && !sourceVideoMode && store.project.animation.modeId !== "coverSphere"} canExport={canExportCurrentMode} canUndo={videoEditorMode ? store.videoEditorHistory.length > 0 : store.eventHistory.length > 0} canRedo={videoEditorMode ? store.videoEditorFuture.length > 0 : store.eventFuture.length > 0} onNew={newProject} onOpen={() => void openProject()} onSave={() => void saveProject()} onImportAudio={() => void handleImportAudio()} onAnalyze={() => void handleAnalyze()} onGenerate={handleGenerateScene} onExport={handleToolbarExport} onUndo={videoEditorMode ? store.undoVideoEditor : store.undoEvents} onRedo={videoEditorMode ? store.redoVideoEditor : store.redoEvents} />
+    {videoEditorMode
+      ? <VideoEditorWorkspace preview={<VideoEditorPreview />} inspector={<VideoEditorInspector />} timeline={<VideoEditorTimeline timelineHeight={videoEditorTimelineHeight} onResizeHeight={resizeVideoEditorTimelineHeight} />} onUndo={store.undoVideoEditor} onRedo={store.redoVideoEditor} onOpenTool={openVideoEditorTool} runTool={runVideoEditorTool} />
+      : <><div className="workspace" ref={workspace} style={workspaceStyle}>
+        <LibraryPanel canRegenerate={store.project.events.length > 0} onRegenerate={handleGenerateScene} onImportSubtitleVideo={handleImportSubtitleVideo} audioUrl={imported?.url ?? null} duration={duration} currentTime={audio.currentTime} selectedSubtitleId={selectedSubtitleId} onSelectSubtitle={setSelectedSubtitleId} />
+        <WorkspaceResizeHandle side="left" width={workspacePanelWidths.left} onResize={(width) => resizeWorkspaceSide("left", width)} onReset={() => resizeWorkspaceSide("left", DEFAULT_WORKSPACE_PANEL_WIDTHS.left)} />
+        {portraitLandscapeMode ? <PortraitLandscapePreview settings={store.project.animation.portraitLandscape} subtitles={store.project.subtitles} proSubtitlesSettings={store.project.animation.proSubtitles} timeSeconds={displayTime} durationSeconds={duration} playing={audio.playing} bpm={globalBpm} analysisReady={Boolean(analysis.result?.energy.length)} audioPulse={coverSpectrum.pulse} rhythmPulse={rhythmPulse} spectrumBands={coverSpectrum.bands} stereoLeftBands={coverSpectrum.leftBands} stereoRightBands={coverSpectrum.rightBands} onPlayPause={playPause} onStop={stop} onSeek={seek} /> : backgroundAutoMode ? <BackgroundAutoPreview settings={store.project.animation.backgroundAuto} timeSeconds={displayTime} durationSeconds={duration} playing={audio.playing || exportState.running} spectrumBands={coverSpectrum.bands} audioPulse={coverSpectrum.pulse} stereoLeftBands={coverSpectrum.leftBands} stereoRightBands={coverSpectrum.rightBands} stereoLeftPulse={coverSpectrum.leftPulse} stereoRightPulse={coverSpectrum.rightPulse} subtitleCues={store.project.subtitles.cues} proSubtitlesSettings={store.project.animation.proSubtitles} projectSeed={store.project.project.seed} onSourceDimensions={hydrateBackgroundAutoSource} onPlayPause={playPause} onStop={stop} onSeek={seek} /> : <Viewport key={`${sceneBall.innerShape}-${store.project.animation.modeId}`} timeSeconds={displayTime} durationSeconds={duration} playing={audio.playing || exportState.running} onPlayPause={playPause} onStop={stop} onSeek={seek} ballPosition={trajectory.segments.length ? ballState.position : undefined} ballVelocity={trajectory.segments.length ? ballState.velocity : undefined} activeObjectIndex={activeObjectIndex} aspectRatio={store.project.canvas.aspectRatio} animationModeId={store.project.animation.modeId} newYorkSettings={store.project.animation.newYorkStreets} coverSphereSettings={store.project.animation.coverSphere} stereoUnfoldSettings={store.project.animation.stereoUnfold} walkingCubeSettings={store.project.animation.walkingCube} teddyWalkSettings={store.project.animation.teddyWalk} teddySingSettings={store.project.animation.teddySing} proSubtitlesSettings={store.project.animation.proSubtitles} pixelsSubSettings={store.project.animation.pixelsSub} staticWatermarkSettings={store.project.animation.staticWatermark} upscalerSettings={store.project.animation.upscaler} pixelsSubRhythmHits={pixelsSubRhythmHits} teddyLipSync={teddyLipSync} subtitles={viewportSubtitles} spectrumBands={coverSpectrum.bands} stereoLeftBands={coverSpectrum.leftBands} stereoRightBands={coverSpectrum.rightBands} stereoWidth={coverSpectrum.stereoWidth} stereoLeftPulse={coverSpectrum.leftPulse} stereoRightPulse={coverSpectrum.rightPulse} audioPulse={coverSpectrum.pulse} rhythmPulse={rhythmPulse} globalBpm={globalBpm} trajectorySegments={trajectory.segments} projectSeed={store.project.project.seed} motionKinds={trajectory.objectMotionKinds} impactResponses={impactResponses} onRendererReady={onRendererReady} onSelectObject={handleSelectObject} />}
+        <WorkspaceResizeHandle side="right" width={workspacePanelWidths.right} onResize={(width) => resizeWorkspaceSide("right", width)} onReset={() => resizeWorkspaceSide("right", DEFAULT_WORKSPACE_PANEL_WIDTHS.right)} />
+        {upscalerMode ? <UpscalerInspector /> : staticWatermarkMode ? <StaticWatermarkInspector /> : portraitLandscapeMode ? <PortraitLandscapeInspector /> : backgroundAutoMode ? null : <InspectorPanel name={store.project.project.name} aspectRatio={store.project.canvas.aspectRatio} event={selectedMusicEvent} events={store.project.events} duration={duration} availableObjectTypes={availableObjectTypes} onRename={store.renameProject} onAspectRatio={store.setAspectRatio} onSelectObject={(id) => handleSelectObject(id)} onChangeObjectType={handleChangeObjectType} onUpdateEvent={handleUpdateEvent} onDeleteEvent={store.deleteEvent} />}
+      </div>
+      {upscalerMode ? null : <Timeline peaks={imported?.waveform ?? store.project.analysis.waveform} events={store.project.events} beats={analysis.result?.beats ?? store.project.events.map((event) => event.timeSeconds)} subtitleOnly={subtitleVideoMode || pixelsSubMode} showPhonemes={store.project.animation.modeId === "teddySing"} phonemes={store.project.animation.modeId === "teddySing" ? store.project.animation.teddySing.phonemeCues : []} selectedPhonemeId={selectedPhonemeId} subtitles={timelineSubtitles} selectedSubtitleId={selectedSubtitleId} selectedEventId={store.selectedEventId} selectedEventIds={store.selectedEventIds} compositorLayers={portraitCompositorLayers} timelineHeight={timelineHeight} currentTime={audio.currentTime} duration={duration} playing={audio.playing} looping={audio.looping} onResizeHeight={resizeTimelineHeight} onPlayPause={playPause} onStop={stop} onSeek={seek} onLoop={audio.setLooping} onSelectPhoneme={(id) => { setSelectedPhonemeId(id); setSelectedSubtitleId(null); if (id) useProjectStore.getState().selectEvent(null); }} onDeletePhoneme={(id) => store.deleteTeddySingPhoneme(id)} onSplitPhoneme={(id, time) => store.splitTeddySingPhoneme(id, time)} onAddSubtitle={(time) => { const id = store.addSubtitleCue(time); setSelectedSubtitleId(id); setSelectedPhonemeId(null); }} onSelectSubtitle={(id) => { setSelectedSubtitleId(id); setSelectedPhonemeId(null); if (id) useProjectStore.getState().selectEvent(null); }} onMoveSubtitle={store.moveSubtitleCue} onResizeSubtitle={store.resizeSubtitleCue} onDeleteSubtitle={store.deleteSubtitleCue} onSplitSubtitle={store.splitSubtitleCue} onSelectEvent={handleSelectMusicEvent} onAddEvent={addElementAtBeat} onMoveEvent={store.moveEvent} onDeleteEvent={store.deleteEvent} onDeleteEvents={store.deleteEvents} onMoveCompositorLayer={movePortraitCompositorLayer} />}</>}
     <footer className="statusbar"><span className={audio.error || analysis.error ? "status-error" : ""}>{audio.error ?? analysis.error ?? store.status}</span><span>{videoEditorMode ? `${videoEditorSettings.clips.length} clip · ${videoEditorSettings.tracks.length} tracce · ${videoEditorDuration.toFixed(2)} s · ${videoEditorSettings.outputWidth} × ${videoEditorSettings.outputHeight}` : audio.playing ? `${audio.previewFps.toFixed(0)} FPS · ${audio.droppedFrames} drop · drift ${audio.driftMs.toFixed(1)} ms` : analysis.result ? `${analysis.result.globalBpm?.toFixed(1) ?? "—"} BPM · ${store.project.events.filter((event) => event.action !== "nearMiss" && event.action !== "freeFall").length} rimbalzi · percorso emozionale${analysis.cached ? " · cache" : ""}` : imported ? `${imported.metadata.sampleRate} Hz · ${imported.metadata.channels} ch · ${imported.metadata.codec}` : "Fase 8 · Preview audio-master"}</span></footer>
     <ApplicationAssistant context={{ modeId: animationMode.id, modeLabel: animationMode.label, aspectRatio: store.project.canvas.aspectRatio, hasAudio: Boolean(imported), analysisReady: Boolean(analysis.result) }} />
-    {exportState.open ? <ExportDialog duration={videoEditorMode ? videoEditorDuration : exportDuration} aspectRatio={store.project.canvas.aspectRatio === "16:9" ? "16:9" : "9:16"} videoEditor={videoEditorMode ? { compositionWidth: videoEditorSettings.outputWidth, compositionHeight: videoEditorSettings.outputHeight } : undefined} backgroundAuto={backgroundAutoMode ? { sourceWidth: store.project.animation.backgroundAuto.sourceWidth, sourceHeight: store.project.animation.backgroundAuto.sourceHeight } : undefined} offlineExportProfile={portraitLandscapeMode ? { title: "Esporta From 9:16 to 16:9", defaultResolution: "3840x2160", defaultFps: 60, recommendation: "4K · 3840 × 2160 consigliato: il video verticale 1080p conserva quasi interamente i suoi 1920 pixel di altezza e le aree laterali acquistano dettaglio reale." } : undefined} sourceVideoExport={staticWatermarkMode ? { label: "Static Watermark Remover" } : undefined} {...(proSubtitlesMode ? { proSubtitles: { backgroundMode: store.project.animation.proSubtitles.backgroundMode, backgroundColor: store.project.animation.proSubtitles.backgroundColor, exportFormat: store.project.animation.proSubtitles.exportFormat, hasSourceVideo: Boolean(store.project.animation.proSubtitles.videoUrl) } } : {})} running={exportState.running} progress={exportState.progress} currentFrame={exportState.currentFrame} totalFrames={exportState.totalFrames} error={exportState.error} onClose={exportState.hide} onCancel={exportState.cancel} onStart={(settings) => void startExport(settings)} /> : null}
+    {exportState.open ? <ExportDialog duration={videoEditorMode ? videoEditorDuration : exportDuration} aspectRatio={store.project.canvas.aspectRatio === "16:9" ? "16:9" : "9:16"} videoEditor={videoEditorMode ? { compositionWidth: videoEditorSettings.outputWidth, compositionHeight: videoEditorSettings.outputHeight } : undefined} backgroundAuto={backgroundAutoMode ? { sourceWidth: store.project.animation.backgroundAuto.sourceWidth, sourceHeight: store.project.animation.backgroundAuto.sourceHeight } : undefined} offlineExportProfile={portraitLandscapeMode ? { title: "Esporta From 9:16 to 16:9", defaultResolution: "3840x2160", defaultFps: 60, recommendation: "4K · 3840 × 2160 consigliato: il video verticale 1080p conserva quasi interamente i suoi 1920 pixel di altezza e le aree laterali acquistano dettaglio reale." } : undefined} sourceVideoExport={staticWatermarkMode ? { label: "Static Watermark Remover" } : undefined} {...(proSubtitlesMode ? { proSubtitles: { backgroundMode: store.project.animation.proSubtitles.backgroundMode, backgroundColor: store.project.animation.proSubtitles.backgroundColor, exportFormat: store.project.animation.proSubtitles.exportFormat, hasSourceVideo: Boolean(store.project.animation.proSubtitles.videoUrl) } } : {})} running={exportState.running} progress={exportState.progress} currentFrame={exportState.currentFrame} totalFrames={exportState.totalFrames} phase={exportState.phase} phaseLabel={exportState.phaseLabel} stageProgress={exportState.stageProgress} stageCurrentFrame={exportState.stageCurrentFrame} stageTotalFrames={exportState.stageTotalFrames} processedBytes={exportState.processedBytes} totalBytes={exportState.totalBytes} indeterminate={exportState.indeterminate} elapsedMs={exportState.elapsedMs} estimatedRemainingMs={exportState.estimatedRemainingMs} error={exportState.error} onClose={exportState.hide} onCancel={exportState.cancel} onStart={(settings) => void startExport(settings)} /> : null}
   </div>;
 }

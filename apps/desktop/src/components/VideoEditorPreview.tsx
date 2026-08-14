@@ -18,6 +18,7 @@ export function VideoEditorPreview() {
   const mediaRack = useRef<HTMLDivElement>(null);
   const presentedClipIds = useRef<ReadonlySet<string>>(new Set());
   const playbackAttempt = useRef(0);
+  const backingRatio = useRef<number | null>(null);
   const [sizeRevision, setSizeRevision] = useState(0);
   const [sourceRevision, setSourceRevision] = useState(0);
   const [starting, setStarting] = useState(false);
@@ -139,20 +140,25 @@ export function VideoEditorPreview() {
         height: bounds.height - parseFloat(computed.paddingTop || "0") - parseFloat(computed.paddingBottom || "0") - 2
       };
       const ratio = settingsRef.current.outputWidth / Math.max(1, settingsRef.current.outputHeight);
-      let width = Math.min(available.width, available.height * ratio);
-      let height = width / ratio;
+      const width = Math.min(available.width, available.height * ratio);
+      const height = width / ratio;
       if (width <= 0 || height <= 0) return;
       frameElement.style.width = `${Math.floor(width)}px`;
       frameElement.style.height = `${Math.floor(height)}px`;
       frameElement.style.aspectRatio = `${settingsRef.current.outputWidth} / ${settingsRef.current.outputHeight}`;
-      const density = Math.min(1.5, Math.max(1, window.devicePixelRatio || 1));
-      const renderScale = Math.min(
-        density,
-        previewMaximumDimension / Math.max(width, height)
-      );
-      width = Math.max(2, Math.round(width * renderScale));
-      height = Math.max(2, Math.round(height * renderScale));
-      if (target.width !== width || target.height !== height) { target.width = width; target.height = height; setSizeRevision((value) => value + 1); }
+      // Keep the backing store stable while the dock is resized. CSS scales the
+      // composition without reallocating the canvas, preventing a one-frame flash.
+      const nextRatio = settingsRef.current.outputWidth / Math.max(1, settingsRef.current.outputHeight);
+      if (target.width === 0 || target.height === 0 || backingRatio.current === null || Math.abs(backingRatio.current - nextRatio) > 1e-6) {
+        const density = Math.min(1.5, Math.max(1, window.devicePixelRatio || 1));
+        const renderScale = Math.min(density, previewMaximumDimension / Math.max(width, height));
+        const backingWidth = Math.max(2, Math.round(width * renderScale));
+        const backingHeight = Math.max(2, Math.round(height * renderScale));
+        target.width = backingWidth;
+        target.height = backingHeight;
+        backingRatio.current = nextRatio;
+        setSizeRevision((value) => value + 1);
+      }
     };
     const scheduleResize = () => {
       if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame);

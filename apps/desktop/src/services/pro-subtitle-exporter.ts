@@ -50,6 +50,12 @@ export interface ProSubtitleExportSettings {
   backgroundColor: string;
   sourceVideoUrl?: string | null;
   sourceVideoName?: string | null;
+  sourceVideoFile?: Blob | null;
+  /** Optional source-relative range used by Video Editor artifact jobs. */
+  sourceStartSeconds?: number;
+  sourceDurationSeconds?: number;
+  /** Keep the encoded Blob in memory for insertion into Video Editor. */
+  suppressDownload?: boolean;
   subtitleCues: readonly ProSubtitleCue[];
   subtitleSettings: ProSubtitleSettings;
   /**
@@ -103,6 +109,7 @@ export interface ProSubtitleExportResult {
   sourceFrameCount?: number;
   encodedFrameCount?: number;
   copiedAudioPacketCount?: number;
+  blob?: Blob;
 }
 
 export interface ProSubtitleFrameTiming {
@@ -347,6 +354,22 @@ function validateSettings(settings: ProSubtitleExportSettings): void {
   if (!hasVisibleCue) {
     throw new Error("Nessun sottotitolo visibile nell’intervallo da esportare. Controlla testo e timestamp della timeline.");
   }
+}
+
+/** Rebase project cues into the local clock of a selected source fragment. */
+export function rebaseProSubtitleCues(
+  cues: readonly ProSubtitleCue[],
+  sourceStartSeconds: number,
+  sourceDurationSeconds: number
+): ProSubtitleCue[] {
+  const start = Math.max(0, Number.isFinite(sourceStartSeconds) ? sourceStartSeconds : 0);
+  const duration = Math.max(0, Number.isFinite(sourceDurationSeconds) ? sourceDurationSeconds : 0);
+  return cues.flatMap((cue) => {
+    const localStart = Math.max(0, cue.startSeconds - start);
+    const localEnd = Math.min(duration, cue.endSeconds - start);
+    if (localEnd <= localStart || !cue.text.trim()) return [];
+    return [{ ...cue, startSeconds: localStart, endSeconds: localEnd }];
+  });
 }
 
 function safeName(value: string): string {
@@ -732,7 +755,11 @@ async function countPresentedVideoFrames(
   return count;
 }
 
-async function fetchSourceVideo(url: string, signal: AbortSignal): Promise<Blob> {
+async function fetchSourceVideo(url: string, signal: AbortSignal, sourceBlob?: Blob | null): Promise<Blob> {
+  if (sourceBlob) {
+    if (sourceBlob.size === 0) throw new Error("Il video originale caricato è vuoto.");
+    return sourceBlob;
+  }
   let response: Response;
   try {
     response = await fetch(url, { signal });
@@ -852,7 +879,6 @@ async function exportCompleteProSubtitleVideo(
   };
 
   try {
-    validateSettings(settings);
     const sourceVideoUrl = settings.sourceVideoUrl?.trim();
     if (!sourceVideoUrl) {
       throw new Error("Carica prima il video originale da sottotitolare.");
@@ -861,9 +887,9 @@ async function exportCompleteProSubtitleVideo(
 
     // Keep the save picker inside the click's transient activation. All media
     // probing and codec checks happen only after the user selected a target.
-    const directRequest = beginCompleteVideoDirectSaveRequest(settings);
+    const directRequest = settings.suppressDownload ? null : beginCompleteVideoDirectSaveRequest(settings);
     const [blob, directHandle] = await Promise.all([
-      fetchSourceVideo(sourceVideoUrl, signal),
+      fetchSourceVideo(sourceVideoUrl, signal, settings.sourceVideoFile),
       directRequest?.handlePromise ?? Promise.resolve(null)
     ]);
     throwIfAborted(signal);
@@ -905,14 +931,39 @@ async function exportCompleteProSubtitleVideo(
       throw new Error("La timeline del video originale non contiene un intervallo esportabile.");
     }
 
+    const fullSourceDuration = endTimestamp - startTimestamp;
+    const requestedStart = Number.isFinite(settings.sourceStartSeconds)
+      ? Math.max(0, settings.sourceStartSeconds ?? 0)
+      : 0;
+    const requestedDuration = Number.isFinite(settings.sourceDurationSeconds)
+      ? Math.max(0, settings.sourceDurationSeconds ?? 0)
+      : fullSourceDuration;
+    const sourceStartOffset = Math.min(requestedStart, Math.max(0, fullSourceDuration - 1e-9));
+    const sourceStartTimestamp = startTimestamp + sourceStartOffset;
+    const sourceEndTimestamp = Math.min(
+      endTimestamp,
+      sourceStartTimestamp + Math.max(1 / 1_000_000, requestedDuration)
+    );
+    const sourceDuration = sourceEndTimestamp - sourceStartTimestamp;
+    if (!(sourceDuration > 0)) throw new Error("Il frammento selezionato non contiene un intervallo esportabile.");
+    const localSubtitleCues = rebaseProSubtitleCues(
+      settings.subtitleCues,
+      sourceStartOffset,
+      sourceDuration
+    );
+    const localSettings: ProSubtitleExportSettings = {
+      ...settings,
+      durationSeconds: sourceDuration,
+      subtitleCues: localSubtitleCues
+    };
+    validateSettings(localSettings);
     const sourceFrameCount = await countPresentedVideoFrames(
       videoTrack,
-      startTimestamp,
-      endTimestamp,
+      sourceStartTimestamp,
+      sourceEndTimestamp,
       signal
     );
     assertCompleteVideoFrameIntegrity(sourceFrameCount, sourceFrameCount);
-    const sourceDuration = endTimestamp - startTimestamp;
     const sourceFps = sourceFrameCount / sourceDuration;
     const [averageBitrate, peakBitrate] = await Promise.all([
       videoTrack.getAverageBitrate(),
@@ -928,7 +979,7 @@ async function exportCompleteProSubtitleVideo(
       fileName,
       descriptor,
       {
-        ...settings,
+        ...localSettings,
         width: sourceWidth,
         height: sourceHeight,
         fps: sourceFps,
@@ -977,7 +1028,7 @@ async function exportCompleteProSubtitleVideo(
       input,
       output,
       tracks: "primary",
-      trim: { start: startTimestamp, end: endTimestamp },
+      trim: { start: sourceStartTimestamp, end: sourceEndTimestamp },
       video: {
         codec: "avc",
         bitrate: targetBitrate,
@@ -1002,12 +1053,12 @@ async function exportCompleteProSubtitleVideo(
           sample.draw(context, 0, 0, sourceWidth, sourceHeight);
           renderProSubtitleCompositionFrame(
             context,
-            settings.subtitleCues,
-            settings.subtitleSettings,
+            localSettings.subtitleCues,
+            localSettings.subtitleSettings,
             {
               timeSeconds: Math.min(
                 sourceDuration - Number.EPSILON,
-                sample.timestamp + sample.duration / 2
+                Math.max(0, sample.timestamp - sourceStartTimestamp) + sample.duration / 2
               ),
               width: sourceWidth,
               height: sourceHeight,
@@ -1062,8 +1113,8 @@ async function exportCompleteProSubtitleVideo(
         operations.push(copyOriginalAudioPackets(
           audioTrack,
           originalAudioSource,
-          startTimestamp,
-          endTimestamp,
+          sourceStartTimestamp,
+          sourceEndTimestamp,
           signal
         ).then((audit) => { copiedAudioAudit = audit; }));
       }
@@ -1102,7 +1153,12 @@ async function exportCompleteProSubtitleVideo(
       signal.removeEventListener("abort", abortConversion);
     }
 
-    if (exportTarget.bufferTarget) {
+    let artifactBlob: Blob | null = null;
+    if (settings.suppressDownload) {
+      await exportTarget.finish();
+      artifactBlob = await exportTarget.getFinalBlob();
+      if (!artifactBlob) throw new Error("Pro Subtitles non ha prodotto l’artifact video.");
+    } else if (exportTarget.bufferTarget) {
       if (!exportTarget.bufferTarget.buffer) {
         throw new Error("L’encoder non ha prodotto alcun file video.");
       }
@@ -1117,7 +1173,8 @@ async function exportCompleteProSubtitleVideo(
       usedOpaqueWebmFallback: false,
       sourceFrameCount,
       encodedFrameCount,
-      copiedAudioPacketCount: copiedAudioAudit.packetCount
+      copiedAudioPacketCount: copiedAudioAudit.packetCount,
+      ...(artifactBlob ? { blob: artifactBlob } : {})
     };
   } catch (error) {
     if (
@@ -1322,7 +1379,12 @@ export async function exportProSubtitleVideo(
     );
     finalized = true;
 
-    if (exportTarget.bufferTarget) {
+    let artifactBlob: Blob | null = null;
+    if (settings.suppressDownload) {
+      await exportTarget.finish();
+      artifactBlob = await exportTarget.getFinalBlob();
+      if (!artifactBlob) throw new Error("Pro Subtitles non ha prodotto l’artifact layer.");
+    } else if (exportTarget.bufferTarget) {
       if (!exportTarget.bufferTarget.buffer) {
         throw new Error("L’encoder non ha prodotto alcun file video.");
       }
@@ -1336,7 +1398,8 @@ export async function exportProSubtitleVideo(
     return {
       format: plan.descriptor,
       fileName,
-      usedOpaqueWebmFallback: plan.usedOpaqueWebmFallback
+      usedOpaqueWebmFallback: plan.usedOpaqueWebmFallback,
+      ...(artifactBlob ? { blob: artifactBlob } : {})
     };
   } catch (error) {
     if (error instanceof DOMException && (error.name === "QuotaExceededError" || error.message.toLowerCase().includes("storage quota"))) {
@@ -1368,4 +1431,30 @@ export async function exportProSubtitleVideo(
       }
     }
   }
+}
+
+/**
+ * Adapter for Video Editor jobs. It intentionally reuses the complete-video
+ * compositor (including original audio and frame audit) while returning the
+ * final Blob instead of opening a download dialog.
+ */
+export async function processProSubtitleVideo(
+  settings: ProSubtitleExportSettings,
+  renderer: SharedViewportRenderer,
+  signal: AbortSignal,
+  onProgress: (progress: ExportProgress) => void
+): Promise<ProSubtitleExportResult & { blob: Blob }> {
+  const result = await exportProSubtitleVideo(
+    {
+      ...settings,
+      outputMode: "completeVideo",
+      suppressDownload: true
+    },
+    renderer,
+    () => undefined,
+    signal,
+    onProgress
+  );
+  if (!result.blob) throw new Error("Pro Subtitles non ha prodotto un artifact video.");
+  return result as ProSubtitleExportResult & { blob: Blob };
 }

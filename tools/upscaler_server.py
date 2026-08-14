@@ -20,6 +20,7 @@ import time
 import types
 import urllib.request
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 import cv2
@@ -63,10 +64,16 @@ lock = threading.Lock()
 video_job_lock = threading.Lock()
 video_jobs: dict[str, dict[str, object]] = {}
 cancelled_video_clients: dict[str, float] = {}
+interpolation_job_lock = threading.Lock()
+interpolation_jobs: dict[str, dict[str, object]] = {}
+interpolation_processes: dict[str, subprocess.Popen[object]] = {}
+cancelled_interpolation_clients: dict[str, float] = {}
 event_log_lock = threading.Lock()
 EVENT_LOG = VIDEO_TEMP_ROOT / "upscaler-events.jsonl"
 READY_JOB_RETENTION_SECONDS = int(os.environ.get("MLSM_UPSCALER_READY_TTL", 30 * 60))
 FAILED_JOB_RETENTION_SECONDS = int(os.environ.get("MLSM_UPSCALER_FAILED_TTL", 5 * 60))
+INTERPOLATION_READY_RETENTION_SECONDS = int(os.environ.get("MLSM_INTERPOLATION_READY_TTL", 30 * 60))
+INTERPOLATION_FAILED_RETENTION_SECONDS = int(os.environ.get("MLSM_INTERPOLATION_FAILED_TTL", 5 * 60))
 
 RIFE_WEIGHTS = Path(os.environ.get("DSAS_RIFE_WEIGHTS", CACHE.parent / "rife"))
 INTERPOLATION_METHODS = ("blend", "motion", "rife")
@@ -74,6 +81,10 @@ INTERPOLATION_METHODS = ("blend", "motion", "rife")
 # non è una restrizione editoriale.
 INTERPOLATION_MAX_BYTES = int(os.environ.get("DSAS_INTERPOLATION_MAX_BYTES", 4 * 1024 ** 3))
 INTERPOLATION_TIMEOUT_SECONDS = int(os.environ.get("DSAS_INTERPOLATION_TIMEOUT", 3600))
+INTERPOLATION_PROCESS_GRACE_SECONDS = float(os.environ.get("DSAS_INTERPOLATION_PROCESS_GRACE", "3"))
+INTERPOLATION_FRAME_TOLERANCE = 1
+INTERPOLATION_FPS_RELATIVE_TOLERANCE = .01
+INTERPOLATION_DURATION_TOLERANCE_SECONDS = .05
 
 app = FastAPI(title="MLSM Studio Upscaler", docs_url=None, redoc_url=None)
 app.add_middleware(CORSMiddleware, allow_origin_regex=r"^(https?://(localhost|127\.0\.0\.1)(:\d+)?|tauri://localhost|https://tauri\.localhost)$", allow_methods=["GET", "POST", "DELETE"], allow_headers=["*"])
@@ -106,8 +117,42 @@ def cleanup_video_job(job_id: str, reason: str = "cleanup") -> None:
     log_upscaler_event("backend", "job-cleaned", jobId=job_id, workspace=workspace, reason=reason)
 
 
+def cleanup_interpolation_job(job_id: str, reason: str = "cleanup") -> None:
+    """Remove one interpolation workspace, never the service temp root."""
+    with interpolation_job_lock:
+        item = interpolation_jobs.get(job_id)
+        process = interpolation_processes.get(job_id)
+    if item is None:
+        return
+    if process is not None and not _terminate_subprocess(process):
+        log_upscaler_event("backend", "interpolation-cleanup-deferred", jobId=job_id, reason=reason)
+        schedule_interpolation_job_cleanup(job_id, 1, reason)
+        return
+    with interpolation_job_lock:
+        item = interpolation_jobs.pop(job_id, None)
+        interpolation_processes.pop(job_id, None)
+    if item is None:
+        return
+    workspace_value = str(item.get("tempDirectory", ""))
+    if not workspace_value:
+        return
+    root = VIDEO_TEMP_ROOT.resolve()
+    workspace = Path(workspace_value).resolve()
+    if workspace.parent != root:
+        log_upscaler_event("backend", "interpolation-cleanup-refused", jobId=job_id, workspace=workspace, reason=reason)
+        return
+    shutil.rmtree(workspace, ignore_errors=True)
+    log_upscaler_event("backend", "interpolation-job-cleaned", jobId=job_id, workspace=workspace, reason=reason)
+
+
 def schedule_video_job_cleanup(job_id: str, delay_seconds: int, reason: str) -> None:
     timer = threading.Timer(delay_seconds, cleanup_video_job, args=(job_id, reason))
+    timer.daemon = True
+    timer.start()
+
+
+def schedule_interpolation_job_cleanup(job_id: str, delay_seconds: int, reason: str) -> None:
+    timer = threading.Timer(delay_seconds, cleanup_interpolation_job, args=(job_id, reason))
     timer.daemon = True
     timer.start()
 
@@ -117,6 +162,13 @@ def purge_stale_video_temp() -> None:
     with video_job_lock:
         video_jobs.clear()
         cancelled_video_clients.clear()
+    with interpolation_job_lock:
+        interpolation_jobs.clear()
+        processes = list(interpolation_processes.values())
+        interpolation_processes.clear()
+        cancelled_interpolation_clients.clear()
+    for process in processes:
+        _terminate_subprocess(process)
     VIDEO_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
     for child in VIDEO_TEMP_ROOT.iterdir():
         if child.is_dir():
@@ -364,13 +416,13 @@ def rife_available() -> bool:
 
 def interpolation_capabilities() -> dict[str, object]:
     binary = ffmpeg_binary()
-    return {"ffmpeg": bool(binary), "ffmpegPath": binary or "", "rife": rife_available(), "device": str(device_from("auto"))}
+    return {"ffmpeg": bool(binary), "ffmpegPath": binary or "", "rife": rife_available(), "jobs": True, "jobApi": True, "device": str(device_from("auto"))}
 
 
 @app.get("/health")
 def health():
     return {
-        "ok": True, "apiVersion": 2, "capabilities": {"imageUpscale": True, "videoJobs": True},
+        "ok": True, "apiVersion": 3, "capabilities": {"imageUpscale": True, "videoJobs": True, "interpolationJobs": True},
         **hardware(), "interpolation": interpolation_capabilities(), "videoTempDirectory": str(VIDEO_TEMP_ROOT)
     }
 
@@ -809,6 +861,86 @@ def minterpolate_filter(target_fps: float, method: str) -> str:
     )
 
 
+def expected_minterpolate_frame_count(source_frames: int, source_fps: float, target_fps: float) -> int:
+    """Minimum complete output produced by ffmpeg's `minterpolate` timeline.
+
+    The filter needs the next two source frames before it can synthesise an
+    output timestamp.  Consequently a valid N-frame input produces
+    floor((N - 2) * target/source) + 1 frames, not N * target/source.
+    """
+    if source_frames < 3:
+        raise ValueError("Servono almeno tre frame sorgente per verificare l'interpolazione")
+    if not math.isfinite(source_fps) or source_fps <= 0 or not math.isfinite(target_fps) or target_fps <= source_fps:
+        raise ValueError("Frame rate non validi per la verifica dell'interpolazione")
+    return math.floor((source_frames - 2) * target_fps / source_fps) + 1
+
+
+def validate_interpolation_audit(
+    *, source_frames: int, source_fps: float, source_duration: float,
+    output_frames: int, output_fps: float, output_duration: float, target_fps: float,
+) -> None:
+    """Reject duplicated-rate or truncated outputs before they can be delivered."""
+    expected_frames = expected_minterpolate_frame_count(source_frames, source_fps, target_fps)
+    if not math.isfinite(output_fps) or abs(output_fps - target_fps) > max(.05, target_fps * INTERPOLATION_FPS_RELATIVE_TOLERANCE):
+        raise RuntimeError(f"Frame rate interpolato non valido: ottenuti {output_fps:g} fps, target {target_fps:g} fps")
+    if output_frames < expected_frames - INTERPOLATION_FRAME_TOLERANCE:
+        raise RuntimeError(f"Conteggio interpolato incompleto: ottenuti {output_frames} frame, attesi almeno {expected_frames - INTERPOLATION_FRAME_TOLERANCE}")
+    if not math.isfinite(output_duration) or output_duration <= 0:
+        raise RuntimeError("Durata del risultato interpolato non valida")
+    # `minterpolate` legitimately loses the two-frame look-ahead tail.  Accept
+    # that explicit tail and at most two target-frame/timebase rounding units.
+    expected_duration = expected_frames / target_fps
+    duration_tolerance = max(INTERPOLATION_DURATION_TOLERANCE_SECONDS, 2 / target_fps)
+    if output_duration + duration_tolerance < expected_duration:
+        raise RuntimeError(f"Durata interpolata troncata: ottenuti {output_duration:g} s, attesi circa {expected_duration:g} s")
+    minimum_from_source = max(0.0, source_duration - 2 / source_fps)
+    if output_duration + duration_tolerance < minimum_from_source:
+        raise RuntimeError(f"Durata interpolata troncata rispetto alla sorgente: ottenuti {output_duration:g} s, sorgente {source_duration:g} s")
+
+
+def _terminate_subprocess(process: subprocess.Popen[object], grace_seconds: float = INTERPOLATION_PROCESS_GRACE_SECONDS) -> bool:
+    """Terminate a worker, then force-kill it after a bounded grace period."""
+    try:
+        if process.poll() is not None:
+            return True
+        process.terminate()
+        try:
+            process.wait(timeout=max(0.0, grace_seconds))
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=max(1.0, grace_seconds))
+    except (OSError, ProcessLookupError, subprocess.TimeoutExpired):
+        # The process may have exited concurrently with DELETE/cleanup.  A final
+        # best-effort kill is safe and cleanup never proceeds while it is alive.
+        try:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=max(1.0, grace_seconds))
+        except (OSError, ProcessLookupError, subprocess.TimeoutExpired):
+            pass
+    return process.poll() is not None
+
+
+def _wait_for_interpolation_process(
+    process: subprocess.Popen[object], *, timeout_seconds: float,
+    cancelled: Callable[[], bool] | None = None,
+) -> int:
+    """Wait responsively so cancellation and timeout always stop the worker."""
+    deadline = time.monotonic() + max(0.0, timeout_seconds)
+    while True:
+        if cancelled and cancelled():
+            _terminate_subprocess(process)
+            raise InterruptedError("Interpolazione annullata")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            _terminate_subprocess(process)
+            raise TimeoutError("L'interpolazione non è terminata entro il tempo massimo.")
+        try:
+            return process.wait(timeout=min(.1, remaining))
+        except subprocess.TimeoutExpired:
+            continue
+
+
 def run_ffmpeg(source: Path, destination: Path, target_fps: float, method: str) -> str:
     binary = ffmpeg_binary()
     if not binary:
@@ -834,18 +966,332 @@ def run_ffmpeg(source: Path, destination: Path, target_fps: float, method: str) 
     return f"ffmpeg · {method}"
 
 
-def run_rife(source: Path, destination: Path, target_fps: float) -> str:
-    """RIFE reuses the GPU stack already loaded for upscaling; weights stay user-provided."""
-    if not rife_available():
-        raise HTTPException(409, f"Pesi RIFE non presenti in {RIFE_WEIGHTS}. Copiali lì oppure scegli la stima del movimento ffmpeg.")
+def _update_interpolation_job(job_id: str, **patch: object) -> None:
+    with interpolation_job_lock:
+        item = interpolation_jobs.get(job_id)
+        if item is not None:
+            item.update(patch)
+
+
+def _interpolation_job_cancelled(job_id: str) -> bool:
+    with interpolation_job_lock:
+        item = interpolation_jobs.get(job_id)
+        return bool(item and item.get("cancelRequested"))
+
+
+def _interpolation_probe(path: Path) -> tuple[int, float, float]:
+    """Return encoded frames, average frame rate and video duration."""
+    probe = ffprobe_binary()
+    if not probe:
+        raise RuntimeError("ffprobe non disponibile: impossibile verificare l'interpolazione")
+    result = subprocess.run([
+        probe, "-v", "error", "-select_streams", "v:0", "-count_frames",
+        "-show_entries", "stream=nb_read_frames,avg_frame_rate,duration:format=duration", "-of", "json", str(path)
+    ], capture_output=True, check=False)
+    if result.returncode != 0:
+        raise RuntimeError("ffprobe non riesce a verificare il risultato interpolato")
+    try:
+        payload = json.loads(result.stdout or b"{}")
+        stream = payload.get("streams", [])[0]
+        frames = int(stream.get("nb_read_frames") or 0)
+        rate = str(stream.get("avg_frame_rate") or "0/1")
+        numerator, denominator = rate.split("/", 1)
+        fps = float(numerator) / float(denominator) if float(denominator) else 0.0
+        duration = float(stream.get("duration") or payload.get("format", {}).get("duration") or 0)
+    except (IndexError, KeyError, TypeError, ValueError, ZeroDivisionError) as error:
+        raise RuntimeError("ffprobe non ha restituito i metadati del risultato interpolato") from error
+    return frames, fps, duration
+
+
+def _run_ffmpeg_interpolation_job(job_id: str, source: Path, destination: Path, target_fps: float, method: str, expected_frames: int) -> str:
+    """Run ffmpeg with machine-readable progress and cooperative cancellation."""
+    binary = ffmpeg_binary()
+    if not binary:
+        raise RuntimeError("ffmpeg non trovato nel PATH. Installalo con `brew install ffmpeg` e riavvia il servizio.")
+    command = [
+        binary, "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", str(source),
+        "-filter:v", minterpolate_filter(target_fps, method), "-r", f"{target_fps:g}",
+        "-c:v", "libx264", "-preset", "slow", "-crf", "16", "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart", "-c:a", "copy", "-progress", "pipe:1", str(destination)
+    ]
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
+    with interpolation_job_lock:
+        item = interpolation_jobs.get(job_id)
+        if item is not None:
+            item["processId"] = process.pid
+    started = time.monotonic()
+    try:
+        assert process.stdout is not None
+        for raw_line in process.stdout:
+            if time.monotonic() - started > INTERPOLATION_TIMEOUT_SECONDS:
+                process.kill()
+                process.wait(timeout=3)
+                raise TimeoutError("ffmpeg non ha terminato l'interpolazione entro il tempo massimo.")
+            if _interpolation_job_cancelled(job_id):
+                process.terminate()
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=3)
+                raise InterruptedError("Interpolazione annullata")
+            line = raw_line.strip()
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            elapsed = time.monotonic() - started
+            if key == "frame":
+                frame = max(0, int(float(value or 0)))
+                fraction = min(1.0, frame / max(1, expected_frames))
+                _update_interpolation_job(job_id, currentFrame=frame, totalFrames=expected_frames, progress=fraction, stageProgress=fraction, elapsedSeconds=elapsed, estimatedRemainingSeconds=(elapsed / frame * (expected_frames - frame)) if frame else None, indeterminate=False)
+            elif key == "total_size":
+                size = max(0, int(float(value or 0)))
+                _update_interpolation_job(job_id, processedBytes=size, bytesProcessed=size, elapsedSeconds=elapsed)
+            elif key == "progress" and value == "end":
+                _update_interpolation_job(job_id, progress=1.0, stageProgress=1.0, currentFrame=expected_frames, totalFrames=expected_frames, elapsedSeconds=elapsed, estimatedRemainingSeconds=0)
+        returncode = process.wait(timeout=INTERPOLATION_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired as error:
+        process.kill()
+        process.wait(timeout=3)
+        raise TimeoutError("ffmpeg non ha terminato l'interpolazione entro il tempo massimo.") from error
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=3)
+    if returncode != 0:
+        detail = (process.stderr.read() if process.stderr else "").strip()[-600:]
+        raise RuntimeError(f"ffmpeg ha restituito un errore: {detail or 'nessun dettaglio disponibile'}")
+    return f"ffmpeg · {method}"
+
+
+def _rife_worker_command(source: Path, destination: Path, target_fps: float) -> list[str]:
+    return [
+        sys.executable, str(Path(__file__).resolve()), "--rife-worker",
+        str(source), str(destination), f"{target_fps:g}", str(RIFE_WEIGHTS), str(device_from("auto")),
+    ]
+
+
+def _run_rife_worker(source: Path, destination: Path, target_fps: float, weights: Path, device: str) -> None:
     try:
         from rife_interpolate import interpolate_file  # type: ignore[import-not-found]
     except ImportError as error:
-        raise HTTPException(503, "Runtime RIFE non installato in questo ambiente. Usa la stima del movimento ffmpeg.") from error
-    interpolate_file(str(source), str(destination), target_fps=target_fps, weights=str(RIFE_WEIGHTS), device=str(device_from("auto")))
+        raise RuntimeError("Runtime RIFE non installato in questo ambiente. Usa la stima del movimento ffmpeg.") from error
+    interpolate_file(str(source), str(destination), target_fps=target_fps, weights=str(weights), device=device)
+
+
+def _run_isolated_rife(source: Path, destination: Path, target_fps: float, job_id: str | None = None) -> str:
+    """Run the callable-only RIFE runtime in a killable worker process."""
+    if not rife_available():
+        raise HTTPException(409, f"Pesi RIFE non presenti in {RIFE_WEIGHTS}. Copiali lì oppure scegli la stima del movimento ffmpeg.")
+    log_path = destination.with_suffix(".rife-worker.log")
+    with log_path.open("w+b") as worker_log:
+        process = subprocess.Popen(_rife_worker_command(source, destination, target_fps), stdout=subprocess.DEVNULL, stderr=worker_log)
+        if job_id:
+            with interpolation_job_lock:
+                interpolation_processes[job_id] = process
+                item = interpolation_jobs.get(job_id)
+                if item is not None:
+                    item["processId"] = process.pid
+        try:
+            returncode = _wait_for_interpolation_process(
+                process,
+                timeout_seconds=INTERPOLATION_TIMEOUT_SECONDS,
+                cancelled=(lambda: _interpolation_job_cancelled(job_id)) if job_id else None,
+            )
+            if job_id and _interpolation_job_cancelled(job_id):
+                raise InterruptedError("Interpolazione annullata")
+            if returncode != 0:
+                worker_log.flush()
+                worker_log.seek(0)
+                detail = worker_log.read().decode("utf-8", "replace").strip()[-600:]
+                raise RuntimeError(f"RIFE ha restituito un errore: {detail or 'nessun dettaglio disponibile'}")
+        finally:
+            if job_id:
+                with interpolation_job_lock:
+                    if interpolation_processes.get(job_id) is process:
+                        interpolation_processes.pop(job_id, None)
+            if process.poll() is None:
+                _terminate_subprocess(process)
+    log_path.unlink(missing_ok=True)
     if not destination.exists() or destination.stat().st_size == 0:
         raise HTTPException(500, "Il runtime RIFE non ha prodotto un file utilizzabile.")
     return f"rife · {device_from('auto')}"
+
+
+def run_rife(source: Path, destination: Path, target_fps: float) -> str:
+    """Legacy endpoint wrapper; it remains synchronous but RIFE stays isolated."""
+    return _run_isolated_rife(source, destination, target_fps)
+
+
+def process_interpolation_job(job_id: str) -> None:
+    with interpolation_job_lock:
+        job = dict(interpolation_jobs.get(job_id) or {})
+    if not job:
+        return
+    source = Path(str(job["sourcePath"]))
+    destination = Path(str(job["tempDirectory"])) / "interpolated.mp4"
+    started = time.monotonic()
+    try:
+        source_fps = float(job["sourceFps"])
+        target_fps = float(job["targetFps"])
+        source_frames, probed_source_fps, source_duration = _interpolation_probe(source)
+        if abs(probed_source_fps - source_fps) > max(.05, source_fps * INTERPOLATION_FPS_RELATIVE_TOLERANCE):
+            raise RuntimeError(f"Frame rate sorgente non coerente: dichiarati {source_fps:g} fps, rilevati {probed_source_fps:g} fps")
+        expected = expected_minterpolate_frame_count(source_frames, source_fps, target_fps)
+        _update_interpolation_job(job_id, sourceFrames=source_frames, totalFrames=expected, stageTotalFrames=expected, phase="interpolating", phaseLabel="Interpolazione dei fotogrammi", progress=0.0, stageProgress=0.0)
+        if _interpolation_job_cancelled(job_id):
+            raise InterruptedError("Interpolazione annullata")
+        method = str(job["method"])
+        if method == "rife":
+            # RIFE runtimes generally expose no frame callback.  Mark this honestly
+            # as indeterminate and still check cancellation at the boundaries.
+            _update_interpolation_job(job_id, indeterminate=True, progress=0.0, stageProgress=None, phaseLabel="RIFE · elaborazione GPU in corso")
+            backend = _run_isolated_rife(source, destination, target_fps, job_id)
+        else:
+            backend = _run_ffmpeg_interpolation_job(job_id, source, destination, target_fps, method, expected)
+        if _interpolation_job_cancelled(job_id):
+            raise InterruptedError("Interpolazione annullata")
+        _update_interpolation_job(job_id, phase="verifying", phaseLabel="Verifica del file interpolato", progress=1.0, stageProgress=1.0, indeterminate=False)
+        if not destination.exists() or destination.stat().st_size <= 0:
+            raise RuntimeError("L'interpolazione non ha prodotto un file utilizzabile.")
+        frames, fps, duration = _interpolation_probe(destination)
+        validate_interpolation_audit(
+            source_frames=source_frames, source_fps=source_fps, source_duration=source_duration,
+            output_frames=frames, output_fps=fps, output_duration=duration, target_fps=target_fps,
+        )
+        _update_interpolation_job(job_id, phase="ready", phaseLabel="Interpolazione completata", progress=1.0, stageProgress=1.0, currentFrame=frames, totalFrames=frames, resultPath=str(destination), resultBytes=destination.stat().st_size, processedBytes=destination.stat().st_size, bytesProcessed=destination.stat().st_size, outputFps=fps, backend=backend, elapsedSeconds=time.monotonic() - started, estimatedRemainingSeconds=0, indeterminate=False)
+        schedule_interpolation_job_cleanup(job_id, INTERPOLATION_READY_RETENTION_SECONDS, "interpolation-ready-expired")
+    except InterruptedError:
+        _update_interpolation_job(job_id, phase="cancelled", phaseLabel="Interpolazione annullata", indeterminate=False, cancelled=True)
+        cleanup_interpolation_job(job_id, "interpolation-cancelled")
+    except Exception as error:
+        _update_interpolation_job(job_id, phase="error", phaseLabel="Interpolazione interrotta", error=str(error), indeterminate=False)
+        log_upscaler_event("backend", "interpolation-job-error", jobId=job_id, error=str(error))
+        schedule_interpolation_job_cleanup(job_id, INTERPOLATION_FAILED_RETENTION_SECONDS, "interpolation-failed-expired")
+
+
+async def _stream_upload_limited(file: UploadFile, destination: Path, max_bytes: int = INTERPOLATION_MAX_BYTES) -> int:
+    """Persist an upload without ever writing or retaining bytes beyond the cap."""
+    written = 0
+    try:
+        with destination.open("wb") as output:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                next_size = written + len(chunk)
+                if next_size > max_bytes:
+                    raise HTTPException(413, "File troppo grande per il servizio di interpolazione")
+                output.write(chunk)
+                written = next_size
+        if written <= 0:
+            raise HTTPException(400, "File video vuoto")
+        return written
+    except BaseException:
+        destination.unlink(missing_ok=True)
+        raise
+
+
+@app.post("/interpolation/jobs")
+@app.post("/interpolate/jobs")
+async def create_interpolation_job(
+    file: UploadFile = File(...), source_fps: float = Form(...), target_fps: float = Form(...),
+    method: str = Form("motion"), client_id: str = Form("")
+):
+    if method not in INTERPOLATION_METHODS:
+        raise HTTPException(400, "Metodo di interpolazione sconosciuto")
+    if not 1 <= source_fps <= 480 or not 1 <= target_fps <= 480 or target_fps <= source_fps:
+        raise HTTPException(400, "Frame rate fuori dai limiti o target non superiore alla sorgente")
+    if method == "rife" and not rife_available():
+        raise HTTPException(409, "Pesi RIFE non presenti nel servizio locale")
+    if method != "rife" and not ffmpeg_binary():
+        raise HTTPException(503, "ffmpeg non disponibile nel servizio locale")
+    job_id = f"interpolation-{uuid.uuid4().hex}"
+    workspace = VIDEO_TEMP_ROOT / job_id
+    workspace.mkdir(parents=True, exist_ok=False)
+    source = workspace / (Path(file.filename or "source.mp4").stem + ".mp4")
+    try:
+        source_bytes = await _stream_upload_limited(file, source)
+    except BaseException:
+        shutil.rmtree(workspace, ignore_errors=True)
+        raise
+    finally:
+        await file.close()
+    with interpolation_job_lock:
+        if client_id and client_id in cancelled_interpolation_clients:
+            shutil.rmtree(workspace, ignore_errors=True)
+            raise HTTPException(409, "La pagina che ha creato il job non è più attiva")
+        record: dict[str, object] = {
+            "id": job_id, "phase": "queued", "phaseLabel": "Job di interpolazione in coda", "progress": 0.0, "stageProgress": 0.0,
+            "currentFrame": 0, "totalFrames": 0, "sourceFps": source_fps, "targetFps": target_fps, "method": method,
+            "tempDirectory": str(workspace), "sourcePath": str(source), "clientId": client_id,
+            "cancelRequested": False, "cancelled": False, "indeterminate": method == "rife", "processedBytes": 0, "totalBytes": source_bytes
+        }
+        interpolation_jobs[job_id] = record
+    log_upscaler_event("backend", "interpolation-job-created", jobId=job_id, sourceBytes=source_bytes, targetFps=target_fps, method=method)
+    threading.Thread(target=process_interpolation_job, args=(job_id,), daemon=True).start()
+    return record
+
+
+@app.delete("/interpolation/clients/{client_id}")
+@app.delete("/interpolate/clients/{client_id}")
+def release_interpolation_client(client_id: str):
+    with interpolation_job_lock:
+        cancelled_interpolation_clients[client_id] = time.time()
+        released = []
+        processes = []
+        for job_id, item in interpolation_jobs.items():
+            if item.get("clientId") == client_id:
+                item["cancelRequested"] = True
+                released.append(job_id)
+                process = interpolation_processes.get(job_id)
+                if process is not None:
+                    processes.append(process)
+    for process in processes:
+        _terminate_subprocess(process)
+    return {"released": released}
+
+
+@app.get("/interpolation/jobs/{job_id}")
+@app.get("/interpolate/jobs/{job_id}")
+def interpolation_job_status(job_id: str):
+    with interpolation_job_lock:
+        item = interpolation_jobs.get(job_id)
+        if item is None:
+            raise HTTPException(404, "Job di interpolazione non trovato")
+        return dict(item)
+
+
+@app.delete("/interpolation/jobs/{job_id}")
+@app.delete("/interpolate/jobs/{job_id}")
+def cancel_interpolation_job(job_id: str):
+    with interpolation_job_lock:
+        item = interpolation_jobs.get(job_id)
+        if item is None:
+            raise HTTPException(404, "Job di interpolazione non trovato")
+        item["cancelRequested"] = True
+        snapshot = dict(item)
+        process = interpolation_processes.get(job_id)
+    if process is not None:
+        _terminate_subprocess(process)
+    if snapshot.get("phase") in ("ready", "error", "cancelled"):
+        cleanup_interpolation_job(job_id, "client-release")
+    return snapshot
+
+
+@app.get("/interpolation/jobs/{job_id}/result")
+@app.get("/interpolate/jobs/{job_id}/result")
+def interpolation_job_result(job_id: str):
+    with interpolation_job_lock:
+        item = dict(interpolation_jobs.get(job_id) or {})
+    if not item:
+        raise HTTPException(404, "Job di interpolazione non trovato")
+    if item.get("phase") != "ready":
+        raise HTTPException(409, "Il risultato dell'interpolazione non è ancora pronto")
+    path = Path(str(item.get("resultPath", "")))
+    if not path.exists():
+        raise HTTPException(410, "Il risultato dell'interpolazione non è più disponibile")
+    return FileResponse(path, media_type="video/mp4", filename="mlsm-interpolated-video.mp4", background=BackgroundTask(cleanup_interpolation_job, job_id, "download-complete"))
 
 
 @app.post("/interpolate")
@@ -856,18 +1302,24 @@ async def interpolate(file: UploadFile = File(...), source_fps: float = Form(...
         raise HTTPException(400, "Frame rate fuori dai limiti supportati (1-480)")
     if target_fps <= source_fps:
         raise HTTPException(400, "Il frame rate di destinazione deve superare quello di partenza")
-    payload = await file.read()
-    if not payload:
-        raise HTTPException(400, "File vuoto")
-    if len(payload) > INTERPOLATION_MAX_BYTES:
-        raise HTTPException(413, "File troppo grande per il servizio di interpolazione")
     with tempfile.TemporaryDirectory(prefix="mlsm-interpolate-") as workspace:
         source = Path(workspace) / "source.mp4"
         destination = Path(workspace) / "interpolated.mp4"
-        source.write_bytes(payload)
+        try:
+            await _stream_upload_limited(file, source)
+        finally:
+            await file.close()
+        source_frames, probed_source_fps, source_duration = _interpolation_probe(source)
+        if abs(probed_source_fps - source_fps) > max(.05, source_fps * INTERPOLATION_FPS_RELATIVE_TOLERANCE):
+            raise HTTPException(400, f"Frame rate sorgente non coerente: dichiarati {source_fps:g} fps, rilevati {probed_source_fps:g} fps")
         backend = run_rife(source, destination, target_fps) if method == "rife" else run_ffmpeg(source, destination, target_fps, method)
         if not destination.exists() or destination.stat().st_size == 0:
             raise HTTPException(500, "L'interpolazione non ha prodotto un file utilizzabile.")
+        frames, fps, duration = _interpolation_probe(destination)
+        validate_interpolation_audit(
+            source_frames=source_frames, source_fps=source_fps, source_duration=source_duration,
+            output_frames=frames, output_fps=fps, output_duration=duration, target_fps=target_fps,
+        )
         return Response(
             destination.read_bytes(),
             media_type="video/mp4",
@@ -880,4 +1332,11 @@ async def interpolate(file: UploadFile = File(...), source_fps: float = Form(...
 
 
 if __name__ == "__main__":
+    if len(sys.argv) == 7 and sys.argv[1] == "--rife-worker":
+        try:
+            _run_rife_worker(Path(sys.argv[2]), Path(sys.argv[3]), float(sys.argv[4]), Path(sys.argv[5]), sys.argv[6])
+        except Exception as error:
+            print(str(error), file=sys.stderr, flush=True)
+            raise SystemExit(1) from error
+        raise SystemExit(0)
     uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("DSAS_UPSCALER_PORT", "8765")), log_level="info")

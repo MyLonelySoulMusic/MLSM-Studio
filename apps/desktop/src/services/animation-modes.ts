@@ -101,8 +101,8 @@ export const animationModes: readonly AnimationModeDefinition[] = [{
   defaultBaseObjectTypes: ["platform"]
 }, {
   id: "backgroundAuto",
-  label: "Background Auto Animation",
-  description: "Rileva automaticamente gli oggetti nella cover e li circonda con più Circular Spectrum audio-reattivi, mantenendo il risultato esportabile offline.",
+  label: "Circular Spectrum Auto Detector",
+  description: "Rileva tutte le classi COCO nella cover e combina cerchi Circular Spectrum audio-reattivi rilevati o posizionati manualmente, con export offline identico alla preview.",
   generator: "backgroundAuto",
   panel: "backgroundAuto",
   objectTypes: [],

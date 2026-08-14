@@ -26,6 +26,10 @@ export interface StaticWatermarkExportSettings {
   sourceVideoUrl: string;
   referenceImageUrl: string;
   watermarkSettings: WatermarkSettings;
+  suppressDownload?: boolean;
+  sourceVideoFile?: Blob | null;
+  sourceStartSeconds?: number;
+  sourceDurationSeconds?: number;
 }
 
 export interface StaticWatermarkExportResult {
@@ -35,6 +39,7 @@ export interface StaticWatermarkExportResult {
   sourceFrameCount: number;
   encodedFrameCount: number;
   audioPacketCount: number;
+  blob?: Blob;
 }
 
 export interface ExportTarget {
@@ -76,7 +81,11 @@ function loadImage(url: string, signal: AbortSignal): Promise<HTMLImageElement> 
   });
 }
 
-export async function fetchVideo(url: string, signal: AbortSignal): Promise<Blob> {
+export async function fetchVideo(url: string, signal: AbortSignal, sourceVideoFile?: Blob | null): Promise<Blob> {
+  if (sourceVideoFile) {
+    if (!sourceVideoFile.size) throw new Error("Il video sorgente è vuoto.");
+    return sourceVideoFile;
+  }
   const response = await fetch(url, { signal }).catch((error: unknown) => { if (error instanceof DOMException && error.name === "AbortError") throw error; throw new Error("Il video sorgente non è più accessibile. Ricaricalo e riprova."); });
   if (!response.ok) throw new Error(`Impossibile leggere il video sorgente (HTTP ${response.status}).`);
   const blob = await response.blob();
@@ -179,11 +188,11 @@ export function downloadBuffer(buffer: ArrayBuffer, fileName: string): void { co
 
 export async function exportStaticWatermarkVideo(settings: StaticWatermarkExportSettings, signal: AbortSignal, onProgress: (progress: ExportProgress) => void): Promise<StaticWatermarkExportResult> {
   const fileName = `${safeName(settings.projectName)}-watermark-removed.mp4`;
-  const handlePromise = beginDirectSave(fileName);
+  const handlePromise = settings.suppressDownload ? null : beginDirectSave(fileName);
   const startedAt = performance.now(); let input: Input | null = null; let output: Output | null = null; let conversion: Conversion | null = null; let target: ExportTarget | null = null; let finalized = false; let composed = 0; let sourceFrameCount = 0;
   try {
     throwIfAborted(signal);
-    const [videoBlob, reference, directHandle] = await Promise.all([fetchVideo(settings.sourceVideoUrl, signal), loadImage(settings.referenceImageUrl, signal), handlePromise ?? Promise.resolve(null)]);
+    const [videoBlob, reference, directHandle] = await Promise.all([fetchVideo(settings.sourceVideoUrl, signal, settings.sourceVideoFile), loadImage(settings.referenceImageUrl, signal), handlePromise ?? Promise.resolve(null)]);
     input = new Input({ formats: ALL_FORMATS, source: new BlobSource(videoBlob, { maxCacheSize: 32 * 1024 ** 2 }) });
     if (!await input.canRead()) throw new Error("Il contenitore del video sorgente non è supportato.");
     const [videoTrack, audioTrack] = await Promise.all([input.getPrimaryVideoTrack(), input.getPrimaryAudioTrack()]);
@@ -191,9 +200,13 @@ export async function exportStaticWatermarkVideo(settings: StaticWatermarkExport
     if (!await videoTrack.canDecode()) throw new Error("Il browser non riesce a decodificare la traccia video sorgente.");
     const tracks = audioTrack ? [videoTrack, audioTrack] : [videoTrack];
     const [width, height, firstTimestamp, endTimestamp, averageBitrate, peakBitrate] = await Promise.all([videoTrack.getDisplayWidth(), videoTrack.getDisplayHeight(), input.getFirstTimestamp(tracks), input.computeDuration(tracks), videoTrack.getAverageBitrate(), videoTrack.getBitrate()]);
-    const startTimestamp = Math.max(0, firstTimestamp); const duration = endTimestamp - startTimestamp;
+    const startTimestamp = Math.max(0, firstTimestamp); const fullDuration = endTimestamp - startTimestamp;
+    const sourceStartOffset = Math.max(0, Math.min(settings.sourceStartSeconds ?? 0, Math.max(0, fullDuration - 1e-9)));
+    const selectedStartTimestamp = startTimestamp + sourceStartOffset;
+    const duration = Math.min(fullDuration - sourceStartOffset, Math.max(1e-6, settings.sourceDurationSeconds ?? fullDuration));
+    const selectedEndTimestamp = selectedStartTimestamp + duration;
     if (!(width > 0 && height > 0 && duration > 0)) throw new Error("Dimensioni o durata del video sorgente non valide.");
-    sourceFrameCount = await frameCount(videoTrack, startTimestamp, endTimestamp, signal); assertStaticWatermarkFrameIntegrity(sourceFrameCount, sourceFrameCount);
+    sourceFrameCount = await frameCount(videoTrack, selectedStartTimestamp, selectedEndTimestamp, signal); assertStaticWatermarkFrameIntegrity(sourceFrameCount, sourceFrameCount);
     const sourceFps = sourceFrameCount / duration; const sourceBitrate = averageBitrate ?? peakBitrate ?? 0;
     const targetBitrate = Math.round(Math.max(recordingBitrate(width, height, sourceFps, settings.quality), sourceBitrate * (settings.quality === "maximum" ? 1.35 : 1.12)));
     target = await createTarget(fileName, directHandle, targetBitrate / 8 * duration * 1.12);
@@ -211,7 +224,7 @@ export async function exportStaticWatermarkVideo(settings: StaticWatermarkExport
       output.addAudioTrack(originalAudioSource, { ...(name ? { name } : {}), disposition });
     }
     conversion = await Conversion.init({
-      input, output, tracks: "primary", trim: { start: startTimestamp, end: endTimestamp },
+      input, output, tracks: "primary", trim: { start: selectedStartTimestamp, end: selectedEndTimestamp },
       video: {
         codec: "avc", bitrate: targetBitrate, alpha: "discard", keyFrameInterval: 2, hardwareAcceleration: "no-preference", forceTranscode: true, allowRotationMetadata: false, processedWidth: width, processedHeight: height,
         process: (sample) => {
@@ -232,7 +245,7 @@ export async function exportStaticWatermarkVideo(settings: StaticWatermarkExport
       await waitWithTimeout(output.start(), 60_000, "L’encoder non è partito entro 60 secondi.", signal);
       const operations: Array<Promise<unknown>> = [conversion.execute()];
       let copiedAudioPackets = 0;
-      if (audioTrack && originalAudioSource) operations.push(copyOriginalAudio(audioTrack, originalAudioSource, startTimestamp, endTimestamp, signal).then((count) => { copiedAudioPackets = count; }));
+      if (audioTrack && originalAudioSource) operations.push(copyOriginalAudio(audioTrack, originalAudioSource, selectedStartTimestamp, selectedEndTimestamp, signal).then((count) => { copiedAudioPackets = count; }));
       const results = await Promise.allSettled(operations);
       const failure = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
       if (failure) throw failure.reason;
@@ -242,8 +255,8 @@ export async function exportStaticWatermarkVideo(settings: StaticWatermarkExport
       const final = await audit(blob, Boolean(audioTrack), signal); assertStaticWatermarkFrameIntegrity(sourceFrameCount, final.videoFrames);
       if (audioTrack && final.audioPackets !== copiedAudioPackets) throw new Error(`Controllo audio fallito: copiati ${copiedAudioPackets} pacchetti, riletti ${final.audioPackets}.`);
       finalized = true;
-      if (target.buffer?.buffer) downloadBuffer(target.buffer.buffer, fileName); else await target.finish();
-      return { fileName, width, height, sourceFrameCount, encodedFrameCount: final.videoFrames, audioPacketCount: final.audioPackets };
+      if (!settings.suppressDownload) { if (target.buffer?.buffer) downloadBuffer(target.buffer.buffer, fileName); else await target.finish(); }
+      return { fileName, width, height, sourceFrameCount, encodedFrameCount: final.videoFrames, audioPacketCount: final.audioPackets, blob };
     } finally { signal.removeEventListener("abort", abort); }
   } catch (error) {
     if (error instanceof DOMException && (error.name === "QuotaExceededError" || error.message.toLowerCase().includes("storage quota"))) throw new Error("Spazio temporaneo del browser insufficiente. Scegli direttamente un file di destinazione con Chrome/Edge oppure libera spazio e riprova.");
@@ -252,4 +265,10 @@ export async function exportStaticWatermarkVideo(settings: StaticWatermarkExport
     input?.dispose();
     if (finalized) await target?.cleanup(); else { await conversion?.cancel().catch(() => undefined); await output?.cancel().catch(() => undefined); await target?.abortPartial(); await target?.invalidateFinal().catch(() => undefined); await target?.cleanup(); }
   }
+}
+
+export async function processStaticWatermarkVideo(settings: StaticWatermarkExportSettings, signal: AbortSignal, onProgress: (progress: ExportProgress) => void): Promise<StaticWatermarkExportResult & { blob: Blob }> {
+  const result = await exportStaticWatermarkVideo({ ...settings, suppressDownload: true }, signal, onProgress);
+  if (!result.blob) throw new Error("Watermark Remover non ha prodotto un artifact video.");
+  return result as StaticWatermarkExportResult & { blob: Blob };
 }
