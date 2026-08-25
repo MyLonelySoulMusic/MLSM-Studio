@@ -110,7 +110,7 @@ export function VideoEditorInspector() {
   const isImage = asset?.kind === "image";
   const isVideo = asset?.kind === "video";
   const hasAudio = asset ? asset.kind === "audio" || asset.hasAudio : false;
-  const maximumDuration = clip && asset ? videoEditorClipMaximumDuration(clip, asset) : 0;
+  const maximumDuration = clip && asset ? videoEditorClipMaximumDuration(clip, asset, settings.timebase) : 0;
   const transform = clip?.transform ?? { x: 0, y: 0, scale: 1, rotation: 0 };
   const imageShadow: VideoEditorImageShadow = clip?.imageShadow ?? defaultVideoEditorImageShadow;
   const clipEffects = clip ? settings.effectClips.filter((item) => item.target.kind === "clip" && item.target.clipId === clip.id) : [];

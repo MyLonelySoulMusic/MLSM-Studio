@@ -89,6 +89,20 @@ function drawEnhanced(context: CanvasRenderingContext2D, source: CanvasImageSour
   correctionOverlay(context, width, height, settings);
 }
 
+/**
+ * Draws a lightweight batch-card preview. This deliberately uses the same
+ * correction pipeline as the live preview, but never invokes an AI model (or
+ * comparison/blend compositing): cards should remain cheap and deterministic.
+ */
+export function renderUpscalerThumbnail(target: CanvasRenderingContext2D | HTMLCanvasElement, source: CanvasImageSource, settings: UpscalerSettings): void {
+  const context = typeof HTMLCanvasElement !== "undefined" && target instanceof HTMLCanvasElement ? target.getContext("2d", { alpha: false }) : target as CanvasRenderingContext2D;
+  if (!context) return;
+  const width = Math.max(1, context.canvas.width || settings.finalWidth || settings.sourceWidth || 1);
+  const height = Math.max(1, context.canvas.height || settings.finalHeight || settings.sourceHeight || 1);
+  context.clearRect(0, 0, width, height);
+  drawEnhanced(context, source, width, height, settings);
+}
+
 export function createUpscalerFrameRenderer(width: number, height: number) {
   const original = document.createElement("canvas"); original.width = width; original.height = height;
   const enhanced = document.createElement("canvas"); enhanced.width = width; enhanced.height = height;

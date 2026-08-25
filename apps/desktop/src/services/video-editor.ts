@@ -1,5 +1,5 @@
 import type { RhythmBallProject } from "@rbs/project-schema";
-import { videoEditorClipSourceTimeAtLocalSeconds, videoEditorClipTimelineDurationForSource, videoEditorClipTimelineTimeForSourceTime, videoEditorSpeedAtFrame, videoEditorSplitSpeed, videoEditorTrimSpeed } from "./video-editor-speed";
+import { videoEditorClipSourceDuration, videoEditorClipSourceTimeAtLocalSeconds, videoEditorClipTimelineDurationForSource, videoEditorClipTimelineTimeForSourceTime, videoEditorSpeedAtFrame, videoEditorSplitSpeed, videoEditorTrimSpeed } from "./video-editor-speed";
 
 type SchemaVideoEditorSettings = RhythmBallProject["animation"]["videoEditor"];
 type SchemaVideoEditorAsset = SchemaVideoEditorSettings["assets"][number];
@@ -9,7 +9,7 @@ export type VideoEditorSettings = Omit<SchemaVideoEditorSettings, "assets" | "cl
 // the store hydrates them before persistence while UI helpers remain source-compatible.
 export type VideoEditorAsset = Omit<SchemaVideoEditorAsset, "sourceFrameCount" | "sourceRate" | "frameIdentityId" | "timingMode"> & Partial<Pick<SchemaVideoEditorAsset, "sourceFrameCount" | "sourceRate" | "frameIdentityId" | "timingMode">>;
 export type VideoEditorTrack = VideoEditorSettings["tracks"][number];
-export type VideoEditorClip = Omit<SchemaVideoEditorClip, "speed" | "imageShadow"> & Partial<Pick<SchemaVideoEditorClip, "speed" | "imageShadow">>;
+export type VideoEditorClip = Omit<SchemaVideoEditorClip, "speed" | "imageShadow" | "reversed"> & Partial<Pick<SchemaVideoEditorClip, "speed" | "imageShadow" | "reversed">>;
 export type VideoEditorEffectClip = VideoEditorSettings["effectClips"][number];
 export type VideoEditorAdjustments = VideoEditorClip["adjustments"];
 export type VideoEditorBlendMode = VideoEditorClip["blendMode"];
@@ -167,7 +167,10 @@ export function videoEditorAssetIsStill(asset: VideoEditorAsset | null): boolean
 
 export function videoEditorClipMaximumDuration(clip: VideoEditorClip, asset: VideoEditorAsset | null, timebase: VideoEditorTimebase = { fpsNumerator: 60, fpsDenominator: 1, dropFrame: false }): number {
   if (videoEditorAssetIsStill(asset)) return videoEditorMaximumImageSeconds;
-  return Math.max(videoEditorMinimumClipSeconds, round(videoEditorClipTimelineDurationForSource(asset!.durationSeconds - clip.sourceInSeconds, clip.speed, timebase)));
+  const availableSource = clip.reversed
+    ? Math.min(asset!.durationSeconds, clip.sourceInSeconds + videoEditorClipSourceDuration(clip, timebase))
+    : asset!.durationSeconds - clip.sourceInSeconds;
+  return Math.max(videoEditorMinimumClipSeconds, round(videoEditorClipTimelineDurationForSource(availableSource, clip.speed, timebase)));
 }
 
 /**
@@ -244,7 +247,11 @@ export function videoEditorTrimClip(settings: VideoEditorSettings, clipId: strin
   if (edge === "start") {
     // Un fermo immagine può crescere fino all’origine della timeline; un video si
     // ferma dove finisce il materiale già consumato dal punto di attacco.
-    const upstreamTimeline = clip.sourceInSeconds / videoEditorSpeedAtFrame(clip.speed, .5);
+    const consumedSource = videoEditorClipSourceDuration(clip, settings.timebase);
+    const sourceRoom = clip.reversed
+      ? Math.max(0, (asset?.durationSeconds ?? consumedSource) - clip.sourceInSeconds - consumedSource)
+      : clip.sourceInSeconds;
+    const upstreamTimeline = sourceRoom / videoEditorSpeedAtFrame(clip.speed, .5);
     const earliest = still ? Math.max(0, clipEnd - videoEditorMaximumImageSeconds) : Math.max(0, clip.startSeconds - upstreamTimeline);
     const startSeconds = clamp(snapped, earliest, clipEnd - videoEditorMinimumClipSeconds);
     const frameRate = videoEditorFrameRate(settings.timebase);
@@ -255,7 +262,7 @@ export function videoEditorTrimClip(settings: VideoEditorSettings, clipId: strin
       ...clip,
       startSeconds: round(startSeconds),
       durationSeconds: round(clipEnd - startSeconds),
-      sourceInSeconds: still ? clip.sourceInSeconds : round(Math.max(0, startSeconds < clip.startSeconds
+      sourceInSeconds: still || clip.reversed ? clip.sourceInSeconds : round(Math.max(0, startSeconds < clip.startSeconds
         ? clip.sourceInSeconds + (startSeconds - clip.startSeconds) * videoEditorSpeedAtFrame(clip.speed, 0)
         : videoEditorSourceTime(clip, startSeconds, settings.timebase))),
       ...(speed ? { speed } : {})
@@ -266,7 +273,11 @@ export function videoEditorTrimClip(settings: VideoEditorSettings, clipId: strin
   const durationSeconds = round(endSeconds - clip.startSeconds);
   const durationFrames = durationSeconds * videoEditorFrameRate(settings.timebase);
   const speed = videoEditorTrimSpeed(clip.speed, 0, durationFrames);
-  return { ...clip, durationSeconds, ...(speed ? { speed } : {}) };
+  const sourceInSeconds = clip.reversed
+    ? round(Math.max(0, clip.sourceInSeconds + videoEditorClipSourceDuration(clip, settings.timebase)
+      - videoEditorClipSourceDuration({ ...clip, durationSeconds, ...(speed ? { speed } : {}) }, settings.timebase)))
+    : clip.sourceInSeconds;
+  return { ...clip, durationSeconds, sourceInSeconds, ...(speed ? { speed } : {}) };
 }
 
 /** Taglia la clip nel punto richiesto e restituisce le due metà, dissolvenze incluse. */
@@ -283,6 +294,7 @@ export function videoEditorSplitClip(clip: VideoEditorClip, requestedTime: numbe
   const [leftSpeed, rightSpeed] = videoEditorSplitSpeed(clip.speed, localFrame);
   const left: VideoEditorClip = {
     ...clip,
+    sourceInSeconds: clip.reversed ? sourceAtCut : clip.sourceInSeconds,
     durationSeconds: leftDuration,
     fadeInSeconds: Math.min(clip.fadeInSeconds, leftDuration),
     fadeOutSeconds: 0,
@@ -295,7 +307,7 @@ export function videoEditorSplitClip(clip: VideoEditorClip, requestedTime: numbe
     id: newClipId,
     startSeconds: cut,
     durationSeconds: rightDuration,
-    sourceInSeconds: sourceAtCut,
+    sourceInSeconds: clip.reversed ? clip.sourceInSeconds : sourceAtCut,
     fadeInSeconds: 0,
     fadeOutSeconds: Math.min(clip.fadeOutSeconds, rightDuration),
     audioFadeInSeconds: 0,
@@ -339,10 +351,10 @@ export function videoEditorFrameAlignmentReason(settings: VideoEditorSettings, r
   if (!Number.isInteger(videoEditorFrameRate(settings.timebase) / sourceRate)) return "Il frame rate sorgente non è rappresentabile esattamente nel timebase del progetto.";
   const reference = videoEditorClip(settings, referenceClipId)!;
   if (Math.abs(videoEditorQuantizeTime(reference.startSeconds, settings.timebase) - reference.startSeconds) > 1e-7) return "La clip di riferimento non è sulla griglia frame del progetto: quantizzala prima dell’allineamento esatto.";
-  const referenceOrdinal = Math.round(reference.sourceInSeconds * sourceRate);
+  const referenceOrdinal = Math.min(first.sourceFrameCount - 1, Math.round(videoEditorSourceTime(reference, reference.startSeconds, settings.timebase) * sourceRate));
   for (const id of targetClipIds) {
     const target = videoEditorClip(settings, id)!;
-    const targetOrdinal = Math.round(target.sourceInSeconds * sourceRate);
+    const targetOrdinal = Math.min(first.sourceFrameCount - 1, Math.round(videoEditorSourceTime(target, target.startSeconds, settings.timebase) * sourceRate));
     if (reference.startSeconds + (targetOrdinal - referenceOrdinal) / sourceRate < 0) return "L’allineamento esatto richiederebbe una posizione negativa in timeline.";
   }
   return null;
@@ -375,7 +387,7 @@ export function videoEditorAlignClipsByFrame(settings: VideoEditorSettings, refe
   if (!Number.isInteger(projectRate / rate)) return null;
   const sourceOrdinal = (clip: VideoEditorClip, asset: VideoEditorAsset): number => {
     const rate = asset.sourceRate ?? sourceRate;
-    return Math.max(0, Math.min(frameCount - 1, Math.round(clip.sourceInSeconds * rate.numerator / rate.denominator)));
+    return Math.max(0, Math.min(frameCount - 1, Math.round(videoEditorSourceTime(clip, clip.startSeconds, settings.timebase) * rate.numerator / rate.denominator)));
   };
   const referenceOrdinal = sourceOrdinal(reference, referenceAsset);
   const targetOrdinals = targets.map((target, index) => sourceOrdinal(target, metadata[index]!));
@@ -411,7 +423,8 @@ export function videoEditorSyncClips(settings: VideoEditorSettings, referenceCli
     if (!asset?.beats.length) return [];
     const clipEnd = videoEditorClipEnd(clip);
     return asset.beats
-      .map((beat) => round(clip.startSeconds + (beat - clip.sourceInSeconds)))
+      .map((beat) => videoEditorClipTimelineTimeForSourceTime(clip, beat, settings.timebase))
+      .filter((time): time is number => time !== null)
       .filter((time) => time >= clip.startSeconds && time <= clipEnd);
   };
 

@@ -1,6 +1,8 @@
 import type { ExportProgress } from "@rbs/export-engine";
 import {
   ALL_FORMATS,
+  AudioSample,
+  AudioSampleSource,
   BlobSource,
   BufferTarget,
   CanvasSink,
@@ -32,7 +34,7 @@ export type ExportMediaFit = "cover" | "contain" | "fill";
 export interface OfflineSceneExportSettings {
   width: number;
   height: number;
-  aspectRatio: "9:16" | "16:9";
+  aspectRatio: "9:16" | "16:9" | "1:1" | "4:5" | "custom";
   fps: number;
   durationSeconds: number;
   projectName: string;
@@ -43,6 +45,7 @@ export interface OfflineSceneExportSettings {
   sourceDuration: number;
   backgroundDimming?: number;
   backgroundFit?: ExportMediaFit;
+  audioLeadIn?: { durationSeconds: number; events: Array<{ timeSeconds: number; kind: "slide" | "door" | "play" }>;includeSourceAudio?:boolean };
 }
 
 export interface OfflineSceneExportResult {
@@ -111,15 +114,22 @@ export function assertOfflineFrameIntegrity(expected: number, encoded: number): 
   if (expected !== encoded) throw new Error(`Controllo anti-drop fallito: attesi ${expected} frame, codificati ${encoded}. Il file incompleto non è stato consegnato.`);
 }
 
-export function assertOfflineAspectRatio(aspectRatio: "9:16" | "16:9", width: number, height: number): void {
+export function assertOfflineAspectRatio(aspectRatio: "9:16" | "16:9" | "1:1" | "4:5" | "custom", width: number, height: number): void {
   const validDimensions = Number.isInteger(width) && Number.isInteger(height) && width > 0 && height > 0;
-  const matches = aspectRatio === "9:16" ? width * 16 === height * 9 : width * 9 === height * 16;
+  const matches = aspectRatio === "9:16" ? width * 16 === height * 9 : aspectRatio === "16:9" ? width * 9 === height * 16 : aspectRatio === "1:1" ? width === height : aspectRatio === "4:5" ? width * 5 === height * 4 : true;
   if (!validDimensions || !matches) throw new Error(`Risoluzione ${width} × ${height} incompatibile con il formato ${aspectRatio} selezionato.`);
 }
 
 function abortError(): DOMException { return new DOMException("Esportazione annullata", "AbortError"); }
 function throwIfAborted(signal: AbortSignal): void { if (signal.aborted) throw abortError(); }
 function safeName(value: string): string { return value.normalize("NFKD").replace(/[^a-zA-Z0-9-_]+/g, "-").replace(/^-+|-+$/g, "") || "mlsm-studio"; }
+
+export function cassetteMechanicalLeadIn(sampleRate: number, channels: number, durationSeconds: number, events: Array<{ timeSeconds: number; kind: "slide" | "door" | "play" }>): Float32Array {
+  const frames = Math.ceil(durationSeconds * sampleRate); const data = new Float32Array(frames * channels);
+  const noise = (index: number) => { const value = Math.sin(index * 12.9898) * 43758.5453; return (value - Math.floor(value)) * 2 - 1; };
+  events.forEach((event, eventIndex) => { const start = Math.floor(event.timeSeconds * sampleRate); const length = Math.floor(sampleRate * (event.kind === "slide" ? .32 : event.kind === "door" ? .16 : .09)); for (let frame = 0; frame < length && start + frame < frames; frame += 1) { const t = frame / sampleRate; const envelope = Math.pow(1 - frame / Math.max(1, length), event.kind === "slide" ? 1.8 : 4); const tone = event.kind === "slide" ? Math.sin(t * Math.PI * 2 * 86) * .16 + noise(frame + eventIndex * 991) * .12 : event.kind === "door" ? Math.sin(t * Math.PI * 2 * 132) * .34 + noise(frame) * .09 : Math.sin(t * Math.PI * 2 * 920) * .24 + noise(frame) * .06; for (let channel = 0; channel < channels; channel += 1) data[(start + frame) * channels + channel] = tone * envelope; } });
+  return data;
+}
 
 function waitWithTimeout<T>(promise: Promise<T>, milliseconds: number, message: string, signal: AbortSignal): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -292,7 +302,7 @@ export async function exportOfflineSceneVideo(settings: OfflineSceneExportSettin
   const handlePromise = directSave(fileName);
   const quality: Quality = settings.quality === "maximum" ? QUALITY_VERY_HIGH : QUALITY_HIGH;
   const startedAt = performance.now();
-  let target: OfflineTarget | null = null; let output: Output | null = null; let conversion: Conversion | null = null;
+  let target: OfflineTarget | null = null; let output: Output | null = null; let conversion: Conversion | null = null;let effectsAudioSource:AudioSampleSource|null=null;
   let sourceInput: Input | null = null; let backgroundInput: Input | null = null; let finalized = false; let verified = false;
   try {
     throwIfAborted(signal);
@@ -308,7 +318,8 @@ export async function exportOfflineSceneVideo(settings: OfflineSceneExportSettin
     const sourceBlob = await sourceResponse.blob(); if (!sourceBlob.size) throw new Error("La sorgente audio/video è vuota.");
     sourceInput = new Input({ formats: ALL_FORMATS, source: new BlobSource(sourceBlob, { maxCacheSize: 32 * 1024 ** 2 }) });
     const audioTrack = await sourceInput.getPrimaryAudioTrack();
-    if (audioTrack && !await canEncodeAudio("aac", { bitrate: 320_000 })) throw new Error("L’encoder AAC offline non è disponibile su questo dispositivo.");
+    const includeSourceAudio=settings.audioLeadIn?.includeSourceAudio!==false;const expectAudio=Boolean((audioTrack&&includeSourceAudio)||settings.audioLeadIn);
+    if (expectAudio && !await canEncodeAudio("aac", { bitrate: 320_000 })) throw new Error("L’encoder AAC offline non è disponibile su questo dispositivo.");
     const audioDuration = audioTrack ? await audioTrack.computeDuration({ skipLiveWait: true }) : 0;
     const duration = settings.durationSeconds;
     const totalFrames = offlineFrameCount(duration, settings.fps);
@@ -333,16 +344,17 @@ export async function exportOfflineSceneVideo(settings: OfflineSceneExportSettin
     output = new Output({ format: new Mp4OutputFormat(), target: target.target });
     const videoSource = new CanvasSource(canvas, { codec: "avc", bitrate: quality, alpha: "discard", latencyMode: "quality", hardwareAcceleration: "prefer-hardware", keyFrameInterval: 2, contentHint: "animation" });
     output.addVideoTrack(videoSource, { frameRate: settings.fps });
-    if (audioTrack) {
-      conversion = await Conversion.init({ input: sourceInput, output, tracks: "primary", trim: { start: 0, end: Math.min(duration, audioDuration) }, video: { discard: true }, audio: { codec: "aac", bitrate: 320_000, forceTranscode: true }, composable: true, showWarnings: false });
+    if (audioTrack&&includeSourceAudio) {
+      const leadIn = settings.audioLeadIn; let emittedLeadIn = false;
+      conversion = await Conversion.init({ input: sourceInput, output, tracks: "primary", trim: { start: 0, end: Math.min(settings.sourceDuration, audioDuration) }, video: { discard: true }, audio: leadIn ? { codec: "aac", bitrate: 320_000, forceTranscode: true, sampleFormat: "f32", process: (sample: AudioSample) => { sample.setTimestamp(sample.timestamp + leadIn.durationSeconds); if (emittedLeadIn) return sample; emittedLeadIn = true; const data = cassetteMechanicalLeadIn(sample.sampleRate, sample.numberOfChannels, leadIn.durationSeconds, leadIn.events); return [new AudioSample({ data, format: "f32", numberOfChannels: sample.numberOfChannels, sampleRate: sample.sampleRate, timestamp: 0 }), sample]; } } : { codec: "aac", bitrate: 320_000, forceTranscode: true }, composable: true, showWarnings: false });
       if (!conversion.isValid || !conversion.utilizedTracks.includes(audioTrack)) throw new Error("La traccia audio non può essere codificata senza riproduzione live.");
-    }
-    const abort = () => { void conversion?.cancel(); void output?.cancel(); };
+    }else if(settings.audioLeadIn){effectsAudioSource=new AudioSampleSource({codec:"aac",bitrate:320_000});output.addAudioTrack(effectsAudioSource);}
+    const abort = () => { void conversion?.cancel();effectsAudioSource?.close(); void output?.cancel(); };
     signal.addEventListener("abort", abort, { once: true });
     renderer.setExportSize(settings.width, settings.height);
     try {
       await waitWithTimeout(output.start(), 60_000, "L’encoder offline non è partito entro 60 secondi.", signal);
-      const audioPromise = conversion?.execute() ?? Promise.resolve(); let encodedFrames = 0;
+      const audioPromise = conversion?.execute() ?? (effectsAudioSource&&settings.audioLeadIn?(async()=>{const sampleRate=48_000,channels=2;const data=cassetteMechanicalLeadIn(sampleRate,channels,settings.audioLeadIn!.durationSeconds,settings.audioLeadIn!.events);await effectsAudioSource!.add(new AudioSample({data,format:"f32",numberOfChannels:channels,sampleRate,timestamp:0}));effectsAudioSource!.close();})():Promise.resolve()); let encodedFrames = 0;
       for (let frameIndex = 0; frameIndex < totalFrames; frameIndex += 1) {
         throwIfAborted(signal);
         const timing = offlineFrameTiming(frameIndex, duration, settings.fps);
@@ -369,9 +381,9 @@ export async function exportOfflineSceneVideo(settings: OfflineSceneExportSettin
       await waitWithTimeout(output.finalize(), 240_000, "La finalizzazione MP4 non è terminata entro 240 secondi.", signal);
       finalized = true;
       const blob = await target.finalBlob(); if (!blob?.size) throw new Error("L’encoder non ha prodotto un file verificabile.");
-      const finalAudit = await audit(blob, Boolean(audioTrack), signal);
+      const finalAudit = await audit(blob, expectAudio, signal);
       assertOfflineFrameIntegrity(totalFrames, finalAudit.videoFrames);
-      if (audioTrack && finalAudit.audioPackets <= 0) throw new Error("Controllo audio fallito: nessun pacchetto nel file finale.");
+      if (expectAudio && finalAudit.audioPackets <= 0) throw new Error("Controllo audio fallito: nessun pacchetto nel file finale.");
       if (target.buffer) downloadBuffer(target.buffer.buffer!, fileName); else await target.finish();
       verified = true;
       return { fileName, formatLabel: "MP4 · H.264/AAC offline verificato", encodedFrameCount: encodedFrames, audioPacketCount: finalAudit.audioPackets, width: settings.width, height: settings.height, fps: settings.fps };

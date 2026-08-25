@@ -7,7 +7,8 @@ const { resolve } = require("node:path");
 const root = resolve(__dirname, "..");
 const runtimes = {
   upscaler: { directory: ".venv", requirements: "requirements-upscaler.txt" },
-  "ai-quantizer": { directory: ".venv-ai-quantizer", requirements: "tools/ai-quantizer/requirements.txt" }
+  "ai-quantizer": { directory: ".venv-ai-quantizer", requirements: "tools/ai-quantizer/requirements.txt" },
+  "song-player": { directory: ".venv-song-player", requirements: "tools/song-player/requirements.txt" }
 };
 
 function venvPython(directory, platform = process.platform) {
@@ -39,7 +40,8 @@ function setup(name, { dryRun = false } = {}) {
   const config = runtimes[name];
   if (!config) throw new Error(`Runtime sconosciuto: ${name}`);
   const isAiq = name === "ai-quantizer";
-  const progress = (value, message) => { if (isAiq) console.log(`[AIQ_PROGRESS] ${value}|${message}`); };
+  const progressPrefix = isAiq ? "AIQ_PROGRESS" : name === "song-player" ? "SONG_PLAYER_PROGRESS" : null;
+  const progress = (value, message) => { if (progressPrefix) console.log(`[${progressPrefix}] ${value}|${message}`); };
   progress(5, "Verifica di Python 3.11");
   const python = findPython();
   const target = venvPython(config.directory);
@@ -51,7 +53,32 @@ function setup(name, { dryRun = false } = {}) {
   run(target, ["-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"], { dryRun });
   progress(42, "Installazione delle dipendenze Python");
   run(target, ["-m", "pip", "install", "--requirement", config.requirements], { dryRun });
+  if (name === "upscaler" && !dryRun) {
+    const check = spawnSync(target, ["-c", "import json; from tools.rife_runtime.adapter import get_rife_capabilities; c=get_rife_capabilities(run_self_test=True); print(json.dumps(c)); raise SystemExit(0 if c.get('ready') and c.get('verified') and c.get('selfTest') else 1)"], { cwd: root, encoding: "utf8" });
+    if (check.stdout) console.log(`RIFE capability: ${check.stdout.trim()}`);
+    if (check.status !== 0) console.warn("RIFE capability non verificabile; Motion/Blend restano disponibili.");
+  }
   if (isAiq && !dryRun) writeFileSync(resolve(root, config.directory, ".mlsm-aiq-ready"), "ready\n");
+  if (name === "song-player" && !dryRun) {
+    progress(82, "Verifica del worker Song Player");
+    const check = spawnSync(target, ["tools/song-player/worker.py"], {
+      cwd: root,
+      encoding: "utf8",
+      input: '{"protocolVersion":1,"action":"capabilities"}\n'
+    });
+    if (check.stdout) console.log(`Song Player capability: ${check.stdout.trim()}`);
+    let capability;
+    try {
+      const lastLine = check.stdout.trim().split(/\r?\n/).filter(Boolean).at(-1);
+      capability = JSON.parse(lastLine);
+    } catch { capability = null; }
+    if (check.status !== 0 || capability?.type !== "result" || capability?.result?.ready !== true || capability?.result?.features?.separateVocals !== true) {
+      throw new Error("Il worker Song Player non ha superato la verifica capabilities.");
+    }
+    progress(91, "Download e verifica del modello Demucs htdemucs");
+    const model = spawnSync(target, ["-c", "from demucs.pretrained import get_model; get_model('htdemucs'); print('Demucs htdemucs pronto')"], { cwd: root, encoding: "utf8", stdio: "inherit" });
+    if (model.status !== 0) throw new Error("Il modello Demucs htdemucs non è stato scaricato o verificato.");
+  }
   progress(100, "Ambiente Python pronto");
   console.log(`${name}: ambiente pronto in ${resolve(root, config.directory)}`);
 }

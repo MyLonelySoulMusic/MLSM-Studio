@@ -42,16 +42,17 @@ npm run dev
 
 L’indirizzo predefinito è `http://localhost:1420`. L’avvio è sempre esplicito; build e test non lasciano server attivi.
 
-## Le quattro aree
+## Le cinque aree
 
 ![Home delle aree](docs/screenshots/02-home-areas.png)
 
 | Area | Cosa contiene |
 | --- | --- |
-| **Sound Animation** | Dieci modalità per scene 3D, visualizer, storie pixel, orsacchiotti e sottotitoli animati. |
+| **Sound Animation** | Undici modalità per scene 3D, visualizer, storie pixel, orsacchiotti e sottotitoli animati. |
 | **Photo & Video Studio** | Rimozione di watermark statici e upscaling AI/Canvas di immagini e video. |
 | **Video Editor** | Montaggio multitraccia con livelli equivalenti, effetti, correzione colore e export offline. |
 | **Music** | AI Quantizer integrato per quantizzazione, allineamento stem, restauro e analisi forense. |
+| **LongCat Video** | Generazione locale Text-to-Video, Image-to-Video e Video Continuation tramite la pipeline ufficiale Meituan. |
 
 Il pulsante **Home** riporta sempre alla scelta delle aree. **Memory** apre l’archivio semantico locale; **Supportami** mostra i canali dell’artista; lingua e tema si cambiano dalla barra superiore.
 
@@ -73,6 +74,7 @@ Il pulsante **Home** riporta sempre alla scelta delle aree. **Memory** apre l’
 - [Photo & Video Studio](docs/photo-video-studio.md)
 - [Video Editor](docs/video-editor.md)
 - [Music · AI Quantizer](docs/music.md)
+- [LongCat Video](docs/longcat-video.md)
 - [Memory](docs/memory.md)
 - [Export offline](docs/export.md)
 - [Installazione e sviluppo](docs/development.md)

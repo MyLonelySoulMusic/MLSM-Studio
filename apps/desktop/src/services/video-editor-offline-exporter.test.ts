@@ -3,6 +3,7 @@ import {
   assertVideoEditorInterpolationIntegrity,
   assertVideoEditorFrameIntegrity,
   expectedVideoEditorInterpolationFrameCount,
+  videoEditorAudioSourceOffset,
   videoEditorAudioConsumedSourceSeconds,
   videoEditorAudioRateAutomation,
   videoEditorInterpolationExportProgress,
@@ -66,6 +67,22 @@ describe("Video Editor · tempi dell’export offline", () => {
     expect(audioConsumed).toBeCloseTo(sourceDuration, 12);
     expect(videoEditorSourceTime(clip, end, settings.timebase) - clip.sourceInSeconds).toBeCloseTo(sourceDuration, 12);
     expect(toolRange).toEqual({
+      sourceStartSeconds: 3,
+      sourceDurationSeconds: expect.closeTo(sourceDuration, 12),
+      sourceEndSeconds: expect.closeTo(3 + sourceDuration, 12)
+    });
+  });
+
+  it("mappa lo stesso intervallo in ordine inverso per video, mix audio e tool", () => {
+    const settings = createProject().animation.videoEditor;
+    const clip = { ...rampClip("custom", 1.01), startSeconds: .010, sourceInSeconds: 3, reversed: true };
+    const end = clip.startSeconds + clip.durationSeconds;
+    const sourceDuration = videoEditorClipSourceDuration(clip, settings.timebase);
+
+    expect(videoEditorSourceTime(clip, clip.startSeconds, settings.timebase)).toBeCloseTo(3 + sourceDuration, 12);
+    expect(videoEditorSourceTime(clip, end, settings.timebase)).toBeCloseTo(3, 12);
+    expect(videoEditorAudioSourceOffset(clip, settings, 10)).toBeCloseTo(10 - 3 - sourceDuration, 12);
+    expect(videoEditorToolSourceRange(clip, settings.timebase)).toEqual({
       sourceStartSeconds: 3,
       sourceDurationSeconds: expect.closeTo(sourceDuration, 12),
       sourceEndSeconds: expect.closeTo(3 + sourceDuration, 12)

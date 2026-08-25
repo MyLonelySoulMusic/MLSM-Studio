@@ -12,7 +12,7 @@
     "canvas": { "$ref": "#/$defs/canvas" },
     "analysis": { "$ref": "#/$defs/analysis" },
     "events": { "type": "array", "items": { "$ref": "#/$defs/musicEvent" } },
-    "animation": { "type": "object", "additionalProperties": true, "required": ["modeId", "baseObjectTypes"], "properties": { "modeId": { "type": "string", "minLength": 1 }, "baseObjectTypes": { "type": "array", "minItems": 1, "items": { "enum": ["drum", "kick", "snare", "cymbal", "piano", "guitar", "strings", "peg", "platform", "block", "spring", "pebble"] } }, "newYorkStreets": { "type": "object", "additionalProperties": true }, "portraitLandscape": { "$ref": "#/$defs/portraitLandscape" }, "backgroundAuto": { "$ref": "#/$defs/backgroundAuto" } } },
+    "animation": { "type": "object", "additionalProperties": true, "required": ["modeId", "baseObjectTypes"], "properties": { "modeId": { "type": "string", "minLength": 1 }, "baseObjectTypes": { "type": "array", "minItems": 1, "items": { "enum": ["drum", "kick", "snare", "cymbal", "piano", "guitar", "strings", "peg", "platform", "block", "spring", "pebble"] } }, "newYorkStreets": { "type": "object", "additionalProperties": true }, "portraitLandscape": { "$ref": "#/$defs/portraitLandscape" }, "backgroundAuto": { "$ref": "#/$defs/backgroundAuto" }, "upscaler": { "$ref": "#/$defs/upscaler" }, "frameBooster": { "$ref": "#/$defs/frameBooster" }, "songPlayer": { "$ref": "#/$defs/songPlayer" }, "cassetteDesk": { "$ref": "#/$defs/cassetteDesk" } } },
     "ball": { "$ref": "#/$defs/ball" },
     "objects": { "type": "array", "items": { "$ref": "#/$defs/sceneObject" } },
     "trajectorySegments": { "type": "array", "items": { "$ref": "#/$defs/trajectorySegment" } },
@@ -173,6 +173,60 @@
         "placementMode": { "enum": ["detected", "manual"] }, "detectionId": { "type": ["string", "null"], "minLength": 1 }, "centerX": { "$ref": "#/$defs/unit" }, "centerY": { "$ref": "#/$defs/unit" }, "diameter": { "type": "number", "minimum": 0.05, "maximum": 1 }, "paletteMode": { "enum": ["auto", "manual"] },
         "palette": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "string" } }, "intensity": { "type": "number", "minimum": 0, "maximum": 3 }, "scale": { "type": "number", "minimum": 0.25, "maximum": 3 }, "opacity": { "type": "number", "minimum": 0, "maximum": 1 }, "collisionParticles": { "type": "boolean" }, "centerSpectrumEnabled": { "type": "boolean" }, "stereoSidesEnabled": { "type": "boolean" }, "subtitlesEnabled": { "type": "boolean" }, "radialSpectrumEnabled": { "type": "boolean" }, "rotationSpeed": { "type": "number", "minimum": 0, "maximum": 1 }
       }
+    },
+    "upscaler": {
+      "type": "object", "additionalProperties": true,
+      "properties": { "remote": { "$ref": "#/$defs/upscalerRemote" } }
+    },
+    "upscalerRemote": {
+      "type": "object", "additionalProperties": false, "required": ["enabled", "endpoints", "model", "frameRetries"],
+      "properties": {
+        "enabled": { "type": "boolean" }, "model": { "type": "string", "maxLength": 200 },
+        "frameRetries": { "type": "integer", "minimum": 0, "maximum": 6 },
+        "endpoints": { "type": "array", "maxItems": 16, "items": { "$ref": "#/$defs/upscalerRemoteEndpoint" } }
+      }
+    },
+    "upscalerRemoteEndpoint": {
+      "type": "object", "additionalProperties": false, "required": ["id", "label", "url", "enabled"],
+      "properties": { "id": { "$ref": "#/$defs/nonEmptyString" }, "label": { "type": "string", "maxLength": 100 }, "url": { "type": "string", "format": "uri", "maxLength": 2048 }, "enabled": { "type": "boolean" } }
+    },
+    "frameBooster": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "sourceUrl": { "type": ["string", "null"] }, "sourceName": { "type": "string", "maxLength": 500 }, "sourceWidth": { "type": "integer", "minimum": 0 }, "sourceHeight": { "type": "integer", "minimum": 0 }, "sourceDurationSeconds": { "type": "number", "minimum": 0 }, "sourceFps": { "type": ["number", "null"], "exclusiveMinimum": 0 }, "sourceFrameCount": { "type": ["integer", "null"], "minimum": 0 }, "sourceHasAudio": { "type": "boolean" },
+        "method": { "enum": ["rife", "motion", "blend"] }, "targetMode": { "enum": ["multiplier", "fps"] }, "targetMultiplier": { "enum": [2, 3, 4, 5] }, "targetFps": { "type": "number", "exclusiveMinimum": 0, "maximum": 480 }, "device": { "enum": ["auto", "mps", "cuda", "cpu"] }, "rifeModel": { "enum": ["rife-v4.25", "rife-v4.26"] }, "scale": { "enum": [0.5, 1, 2] }, "precision": { "enum": ["auto", "fp32", "fp16"] }, "sceneCut": { "type": "boolean" }, "quality": { "enum": ["balanced", "high"] }, "lastOutput": { "type": ["object", "null"] }
+      }
+    },
+    "cassetteDesk": {
+      "type": "object", "additionalProperties": false,
+      "required": ["coverImageUrl", "title", "artist", "stereoStyle", "autoPalette", "palette", "waveformColorMode", "waveformColor", "displaySpectrumColorMode", "displaySpectrumColor", "stereoBodyColorMode", "stereoBodyColor", "pianoColorMode", "pianoColor", "deskColorMode", "deskColor", "introDurationSeconds", "vocalToleranceCents", "tempoDetectionMode", "manualBpm", "halfTime", "keyDetectionMode", "manualKeyRoot", "manualKeyMode", "showWaveform", "showPiano", "showTrackInfo"],
+      "properties": {
+        "coverImageUrl": { "type": ["string", "null"], "not": { "type": "string", "pattern": "^blob:" } }, "title": { "type": "string", "maxLength": 160 }, "artist": { "type": "string", "maxLength": 160 }, "stereoStyle": { "enum": ["classic", "poster"] }, "autoPalette": { "type": "boolean" },
+        "palette": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "string" } }, "waveformColorMode": { "enum": ["auto", "manual"] }, "waveformColor": { "type": "string" }, "displaySpectrumColorMode": { "enum": ["auto", "manual"] }, "displaySpectrumColor": { "type": "string" }, "stereoBodyColorMode": { "enum": ["auto", "manual"] }, "stereoBodyColor": { "type": "string" }, "pianoColorMode": { "enum": ["auto", "manual"] }, "pianoColor": { "type": "string" }, "deskColorMode": { "enum": ["auto", "manual"] }, "deskColor": { "type": "string" },
+        "introDurationSeconds": { "type": "number", "minimum": 3.6, "maximum": 8 }, "vocalToleranceCents": { "type": "number", "minimum": 10, "maximum": 100 }, "tempoDetectionMode": { "enum": ["auto", "manual"] }, "manualBpm": { "type": "number", "minimum": 20, "maximum": 300 }, "halfTime": { "type": "boolean" }, "keyDetectionMode": { "enum": ["auto", "manual"] }, "manualKeyRoot": { "type": "integer", "minimum": 0, "maximum": 11 }, "manualKeyMode": { "enum": ["major", "minor"] }, "showWaveform": { "type": "boolean" }, "showPiano": { "type": "boolean" }, "showTrackInfo": { "type": "boolean" }
+      }
+    },
+    "songPlayer": {
+      "$comment": "Canonical persisted Song Player output. The TypeScript parser remains the migration authority and supplies these defaults for legacy projects.",
+      "type": "object", "additionalProperties": false, "required": ["assets", "fullTrackAssetId", "coverImageUrl", "backgroundImageUrl", "backgroundFit", "title", "artist", "coverStyle", "autoPalette", "palette", "spectrumPaletteMode", "spectrumPalette", "spectrogramPaletteMode", "spectrogramPalette", "spectrumGain", "spectrogramOpacity", "metadataVisible", "match"],
+      "properties": {
+        "assets": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/songPlayerAsset" } },
+        "fullTrackAssetId": { "type": ["string", "null"], "minLength": 1 },
+        "coverImageUrl": { "type": ["string", "null"], "not": { "type": "string", "pattern": "^blob:" } }, "backgroundImageUrl": { "type": ["string", "null"], "not": { "type": "string", "pattern": "^blob:" } }, "backgroundFit": { "enum": ["cover", "contain"] },
+        "title": { "type": "string", "maxLength": 160 }, "artist": { "type": "string", "maxLength": 160 }, "coverStyle": { "enum": ["flat", "cube"] }, "autoPalette": { "type": "boolean" },
+        "palette": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "string" } },
+        "spectrumPaletteMode": { "enum": ["auto", "manual"] }, "spectrumPalette": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "string" } },
+        "spectrogramPaletteMode": { "enum": ["auto", "manual"] }, "spectrogramPalette": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "string" } },
+        "spectrumGain": { "type": "number", "minimum": 0, "maximum": 3 }, "spectrogramOpacity": { "type": "number", "minimum": 0, "maximum": 1 }, "metadataVisible": { "type": "boolean" }, "match": { "$ref": "#/$defs/songPlayerMatch" }
+      }
+    },
+    "songPlayerAsset": {
+      "type": "object", "additionalProperties": false, "required": ["id", "kind", "source", "sourcePath", "fileName", "mimeType", "hash", "durationSeconds", "sampleRate", "channels", "fileSize", "provider"],
+      "properties": { "id": { "$ref": "#/$defs/nonEmptyString" }, "kind": { "const": "fullTrack" }, "source": { "enum": ["localImport", "youtubeDownload"] }, "sourcePath": { "$ref": "#/$defs/nonEmptyString" }, "fileName": { "$ref": "#/$defs/nonEmptyString" }, "mimeType": { "$ref": "#/$defs/nonEmptyString" }, "hash": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" }, "durationSeconds": { "type": "number", "exclusiveMinimum": 0 }, "sampleRate": { "type": "integer", "minimum": 1 }, "channels": { "type": "integer", "minimum": 1 }, "fileSize": { "type": "integer", "minimum": 1 }, "provider": { "type": "object", "additionalProperties": false, "required": ["sourceUrl", "videoId", "title"], "properties": { "sourceUrl": { "type": ["string", "null"], "format": "uri" }, "videoId": { "type": ["string", "null"], "minLength": 1 }, "title": { "type": ["string", "null"], "minLength": 1 } } } }
+    },
+    "songPlayerMatch": {
+      "type": "object", "additionalProperties": false, "required": ["state", "fragmentHash", "fullTrackHash", "selectedOffsetMs", "confidence", "candidates", "resolution", "error", "analyzedAt"],
+      "properties": { "state": { "enum": ["idle", "running", "matched", "ambiguous", "manual", "failed"] }, "fragmentHash": { "type": "string", "pattern": "^(?:|[a-fA-F0-9]{64})$" }, "fullTrackHash": { "type": "string", "pattern": "^(?:|[a-fA-F0-9]{64})$" }, "selectedOffsetMs": { "type": "integer", "minimum": 0, "maximum": 7200000 }, "confidence": { "type": "number", "minimum": 0, "maximum": 1 }, "candidates": { "type": "array", "maxItems": 5, "items": { "type": "object", "additionalProperties": false, "required": ["offsetMs", "score"], "properties": { "offsetMs": { "type": "integer", "minimum": 0, "maximum": 7200000 }, "score": { "type": "number", "minimum": 0, "maximum": 1 } } } }, "resolution": { "enum": ["auto", "manual"] }, "error": { "type": ["string", "null"], "maxLength": 500 }, "analyzedAt": { "type": ["string", "null"], "format": "date-time" } }
     },
     "exportPreset": {
       "type": "object", "additionalProperties": false, "required": ["id", "name", "format", "codec", "width", "height", "fps", "audioMode"],

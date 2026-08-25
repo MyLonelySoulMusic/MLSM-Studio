@@ -1,16 +1,25 @@
 import json
 import asyncio
+import hashlib
+import inspect
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
 import unittest
 from unittest import mock
 from pathlib import Path
+
+import cv2
+import numpy as np
 
 from fastapi import HTTPException
 from tools import upscaler_server
 from tools.upscaler_server import (
     _frame_extraction_filter,
+    _interpolation_media_audit,
+    _resolve_interpolation_rates,
     _rotation_value,
     _stream_upload_limited,
     _terminate_subprocess,
@@ -74,6 +83,21 @@ class FfprobeGeometryTests(unittest.TestCase):
         self.assertEqual(geometry["display_height"], 1920)
         self.assertAlmostEqual(float(geometry["display_aspect_ratio"]), 9 / 16)
 
+    def test_interpolation_audit_reports_display_geometry_for_rotated_phone_video(self) -> None:
+        payload = {"streams": [{
+            "codec_type": "video", "width": 1920, "height": 1080,
+            "sample_aspect_ratio": "1:1", "avg_frame_rate": "30/1",
+            "nb_read_frames": "60", "duration": "2.0",
+            "side_data_list": [{"rotation": -90}],
+        }], "format": {"duration": "2.0"}}
+        completed = subprocess.CompletedProcess(["ffprobe"], 0, stdout=json.dumps(payload).encode(), stderr=b"")
+        with mock.patch.object(upscaler_server, "ffprobe_binary", return_value="ffprobe"), mock.patch.object(upscaler_server.subprocess, "run", return_value=completed):
+            audit = _interpolation_media_audit(Path("phone.mov"))
+        self.assertEqual((audit["width"], audit["height"]), (1080, 1920))
+        self.assertEqual((audit["codedWidth"], audit["codedHeight"]), (1920, 1080))
+        self.assertEqual(audit["rotation"], 270)
+        self.assertAlmostEqual(float(audit["displayAspectRatio"]), 9 / 16)
+
     @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg/ffprobe non disponibili")
     def test_extraction_uses_post_autorotation_sample_aspect_ratio(self) -> None:
         ffmpeg = str(shutil.which("ffmpeg"))
@@ -111,6 +135,178 @@ class FfprobeGeometryTests(unittest.TestCase):
 
 
 class InterpolationJobTests(unittest.TestCase):
+    class CancelOnFirstPollProcess:
+        """Small Popen fixture that requests cancellation while being polled."""
+
+        pid = 9182
+
+        def __init__(self, job_id: str) -> None:
+            self.job_id = job_id
+            self.alive = True
+            self.terminated = False
+            self.stdout = None
+            self.stderr = None
+            self.poll_count = 0
+
+        def poll(self):
+            self.poll_count += 1
+            if self.poll_count == 1:
+                with upscaler_server.interpolation_job_lock:
+                    upscaler_server.interpolation_jobs[self.job_id]["cancelRequested"] = True
+            return None if self.alive else -15
+
+        def wait(self, timeout=None):
+            return self.poll()
+
+        def terminate(self) -> None:
+            self.terminated = True
+            self.alive = False
+
+        def kill(self) -> None:
+            self.terminated = True
+            self.alive = False
+
+    def _with_cancellable_job(self, job_id: str = "interpolation-runner-cancel") -> None:
+        with upscaler_server.interpolation_job_lock:
+            upscaler_server.interpolation_jobs[job_id] = {
+                "id": job_id, "phase": "interpolating", "cancelRequested": False,
+            }
+
+    def _remove_job(self, job_id: str) -> None:
+        with upscaler_server.interpolation_job_lock:
+            upscaler_server.interpolation_jobs.pop(job_id, None)
+            upscaler_server.interpolation_processes.pop(job_id, None)
+
+    def test_job_runner_cancels_ffprobe_probe_and_cleans_registry(self) -> None:
+        job_id = "interpolation-probe-cancel"
+        process = self.CancelOnFirstPollProcess(job_id)
+        self._with_cancellable_job(job_id)
+        try:
+            with mock.patch.object(upscaler_server, "ffprobe_binary", return_value="ffprobe"), mock.patch.object(upscaler_server.subprocess, "Popen", return_value=process):
+                with self.assertRaises(InterruptedError):
+                    upscaler_server._interpolation_probe(Path("source.mp4"), job_id)
+            self.assertTrue(process.terminated)
+            with upscaler_server.interpolation_job_lock:
+                self.assertNotIn(job_id, upscaler_server.interpolation_processes)
+        finally:
+            self._remove_job(job_id)
+
+    def test_job_runner_cancels_motion_and_blend_without_live_process(self) -> None:
+        for method in ("motion", "blend"):
+            job_id = f"interpolation-{method}-cancel"
+            process = self.CancelOnFirstPollProcess(job_id)
+            self._with_cancellable_job(job_id)
+            try:
+                with mock.patch.object(upscaler_server, "ffmpeg_binary", return_value="ffmpeg"), mock.patch.object(upscaler_server.subprocess, "Popen", return_value=process):
+                    with self.assertRaises(InterruptedError):
+                        upscaler_server._run_ffmpeg_interpolation_job(job_id, Path("source.mp4"), Path("output.mp4"), 60, method, 120)
+                self.assertTrue(process.terminated)
+                with upscaler_server.interpolation_job_lock:
+                    self.assertNotIn(job_id, upscaler_server.interpolation_processes)
+            finally:
+                self._remove_job(job_id)
+
+    def test_job_runner_cancels_media_audit_without_live_process(self) -> None:
+        job_id = "interpolation-audit-cancel"
+        process = self.CancelOnFirstPollProcess(job_id)
+        self._with_cancellable_job(job_id)
+        try:
+            with mock.patch.object(upscaler_server, "ffprobe_binary", return_value="ffprobe"), mock.patch.object(upscaler_server.subprocess, "Popen", return_value=process):
+                with self.assertRaises(InterruptedError):
+                    upscaler_server._interpolation_media_audit(Path("output.mp4"), job_id)
+            self.assertTrue(process.terminated)
+            with upscaler_server.interpolation_job_lock:
+                self.assertNotIn(job_id, upscaler_server.interpolation_processes)
+        finally:
+            self._remove_job(job_id)
+
+    def test_job_runner_cancels_audio_remux_and_removes_partial_temp(self) -> None:
+        job_id = "interpolation-remux-cancel"
+        process = self.CancelOnFirstPollProcess(job_id)
+        self._with_cancellable_job(job_id)
+        with tempfile.TemporaryDirectory(prefix="mlsm-remux-cancel-") as temporary:
+            root = Path(temporary)
+            source = root / "source.mp4"
+            destination = root / "destination.mp4"
+            source.write_bytes(b"source")
+            destination.write_bytes(b"video")
+            temporary_result = destination.with_suffix(".audio-remux.mp4")
+            try:
+                with mock.patch.object(upscaler_server, "ffmpeg_binary", return_value="ffmpeg"), mock.patch.object(upscaler_server.subprocess, "Popen", return_value=process):
+                    with self.assertRaises(InterruptedError):
+                        upscaler_server._remux_interpolation_audio(source, destination, job_id)
+                self.assertTrue(process.terminated)
+                self.assertFalse(temporary_result.exists())
+                with upscaler_server.interpolation_job_lock:
+                    self.assertNotIn(job_id, upscaler_server.interpolation_processes)
+            finally:
+                self._remove_job(job_id)
+
+    def test_job_runner_terminates_when_cancel_arrives_during_wait(self) -> None:
+        job_id = "interpolation-wait-cancel"
+        self._with_cancellable_job(job_id)
+        wait_started = threading.Event()
+
+        class WaitingProcess:
+            pid = 7211
+
+            def __init__(self) -> None:
+                self.alive = True
+                self.terminated = False
+                self.stdout = None
+                self.stderr = None
+
+            def poll(self):
+                return None if self.alive else -15
+
+            def wait(self, timeout=None):
+                wait_started.set()
+                # Simulate a blocking wait that returns its timeout while the
+                # DELETE request races in another thread.
+                time.sleep(.01)
+                if self.alive:
+                    raise subprocess.TimeoutExpired("ffprobe", timeout)
+                return -15
+
+            def terminate(self) -> None:
+                self.terminated = True
+                self.alive = False
+
+            def kill(self) -> None:
+                self.terminated = True
+                self.alive = False
+
+        process = WaitingProcess()
+
+        def cancel_during_wait() -> None:
+            self.assertTrue(wait_started.wait(timeout=1))
+            with upscaler_server.interpolation_job_lock:
+                upscaler_server.interpolation_jobs[job_id]["cancelRequested"] = True
+
+        canceller = threading.Thread(target=cancel_during_wait)
+        canceller.start()
+        try:
+            with mock.patch.object(upscaler_server.subprocess, "Popen", return_value=process):
+                with self.assertRaises(InterruptedError):
+                    upscaler_server._run_interpolation_subprocess(job_id, ["ffprobe", "source.mp4"])
+            canceller.join(timeout=1)
+            self.assertFalse(canceller.is_alive())
+            self.assertTrue(process.terminated)
+            with upscaler_server.interpolation_job_lock:
+                self.assertNotIn(job_id, upscaler_server.interpolation_processes)
+        finally:
+            self._remove_job(job_id)
+
+    def test_multiplier_rates_are_derived_from_authoritative_probe(self) -> None:
+        source, target = _resolve_interpolation_rates(
+            probed_source_fps=30000 / 1001,
+            declared_source_fps=30,
+            target_fps=None,
+            target_multiplier=2,
+        )
+        self.assertAlmostEqual(source, 30000 / 1001)
+        self.assertAlmostEqual(target, 60000 / 1001)
+
     def test_motion_filter_synthesises_frames_and_blend_stays_explicit(self) -> None:
         motion = minterpolate_filter(120, "motion")
         self.assertIn("mi_mode=mci", motion)
@@ -255,6 +451,691 @@ class InterpolationJobTests(unittest.TestCase):
         with mock.patch.object(upscaler_server, "device_from", return_value="cpu"):
             command = upscaler_server._rife_worker_command(Path("source.mp4"), Path("result.mp4"), 60)
         self.assertEqual(command[1:3], [str(Path(upscaler_server.__file__).resolve()), "--rife-worker"])
+
+    def test_isolated_rife_uses_the_explicitly_validated_device(self) -> None:
+        class FinishedProcess:
+            pid = 42
+
+            def poll(self): return 0
+            def wait(self, timeout=None): return 0
+            def terminate(self): raise AssertionError("finished process must not be terminated")
+            def kill(self): raise AssertionError("finished process must not be killed")
+
+        with tempfile.TemporaryDirectory(prefix="mlsm-rife-device-") as temporary:
+            destination = Path(temporary) / "result.mp4"
+            destination.write_bytes(b"video")
+            with mock.patch.object(upscaler_server, "validate_rife_request", return_value={"device": "cuda", "precision": "fp16"}), mock.patch.object(upscaler_server, "_rife_worker_command", return_value=["worker"]) as worker_command, mock.patch.object(upscaler_server.subprocess, "Popen", return_value=FinishedProcess()):
+                backend = upscaler_server._run_isolated_rife(Path("source.mp4"), destination, 60, device="auto", precision="auto")
+        worker_command.assert_called_once_with(Path("source.mp4"), destination, 60, "cuda", "fp16", "rife-v4.26")
+        self.assertEqual(backend, "rife · cuda/fp16")
+
+
+class RemoteVideoJobPersistenceTests(unittest.TestCase):
+    @staticmethod
+    def _create_remote_video_job(file, *, client_id: str, checkpoint_policy: str):
+        return upscaler_server.create_video_upscale_job(
+            file=file,
+            model="canvas",
+            backend="auto",
+            tile=256,
+            width=128,
+            height=72,
+            tta=False,
+            quality="maximum",
+            client_id=client_id,
+            preserve_aspect_ratio=True,
+            remote_config=json.dumps({
+                "endpoints": ["https://colab.gradio.live"],
+                "model": "remote-x4",
+                "retries": 2,
+            }),
+            adjustments="{}",
+            checkpoint_policy=checkpoint_policy,
+        )
+
+    def test_remote_checkpoint_reuse_requires_explicit_resume_and_identical_bytes(self) -> None:
+        first_bytes = b"video-one"
+        same_bytes = bytes(first_bytes)
+        different_same_size_bytes = b"video-two"
+        first_hash = hashlib.sha256(first_bytes).hexdigest()
+        same_hash = hashlib.sha256(same_bytes).hexdigest()
+        different_hash = hashlib.sha256(different_same_size_bytes).hexdigest()
+        item = {
+            "id": "cached-job",
+            "remote": True,
+            "phase": "error",
+            "sourceHash": first_hash,
+            "model": "remote-x4",
+            "completedFrames": 20,
+        }
+
+        self.assertEqual(len(first_bytes), len(different_same_size_bytes))
+        self.assertEqual(first_hash, same_hash)
+        self.assertNotEqual(first_hash, different_hash)
+        self.assertIs(
+            upscaler_server.select_remote_video_job_candidate(
+                [item], source_hash=same_hash, model="remote-x4",
+                render_settings={}, checkpoint_policy="resume",
+            ),
+            item,
+        )
+        self.assertIsNone(upscaler_server.select_remote_video_job_candidate(
+            [item], source_hash=same_hash, model="remote-x4",
+            render_settings={}, checkpoint_policy="restart",
+        ))
+        self.assertIsNone(upscaler_server.select_remote_video_job_candidate(
+            [item], source_hash=different_hash, model="remote-x4",
+            render_settings={}, checkpoint_policy="resume",
+        ))
+
+    def test_video_route_defaults_to_restart_and_rejects_unknown_policy(self) -> None:
+        parameter = inspect.signature(upscaler_server.create_video_upscale_job).parameters["checkpoint_policy"]
+        self.assertEqual(parameter.default.default, "restart")
+        self.assertEqual(upscaler_server.normalize_remote_checkpoint_policy(" RESUME "), "resume")
+        with self.assertRaisesRegex(ValueError, "resume.*restart"):
+            upscaler_server.normalize_remote_checkpoint_policy("automatic")
+
+    def test_reuse_prefers_a_verified_ready_artifact_over_newer_failed_checkpoints(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="mlsm-ready-reuse-") as temporary:
+            result = Path(temporary) / "upscaled-video.mp4"
+            result.write_bytes(b"verified")
+            ready = {"phase": "ready", "resultPath": str(result), "completedFrames": 30, "manifestRevision": 2}
+            failed = {"phase": "error", "completedFrames": 30, "manifestRevision": 999}
+            self.assertGreater(upscaler_server.remote_video_job_reuse_rank(ready), upscaler_server.remote_video_job_reuse_rank(failed))
+
+    def test_resolution_change_reuses_remote_ai_checkpoints(self) -> None:
+        item = {
+            "id": "nearly-complete",
+            "remote": True,
+            "phase": "error",
+            "sourceHash": "same-video",
+            "model": "RealESRGAN_x4plus_anime_6B",
+            "requestedWidth": 720,
+            "requestedHeight": 1280,
+            "width": 720,
+            "height": 1280,
+            "preserveAspectRatio": True,
+            "quality": "maximum",
+            "adjustmentsKey": "old",
+            "currentFrame": 359,
+            "completedFrames": 359,
+            "totalFrames": 361,
+        }
+        render_settings = {
+            "requestedWidth": 2160,
+            "requestedHeight": 3840,
+            "width": 2160,
+            "height": 3840,
+            "preserveAspectRatio": True,
+            "quality": "maximum",
+            "adjustments": {"sharpness": 12.0},
+            "adjustmentsKey": "new",
+            "backend": "auto",
+            "tile": 256,
+            "tta": False,
+        }
+
+        self.assertTrue(upscaler_server.remote_video_job_checkpoint_matches(
+            item,
+            source_hash="same-video",
+            model="RealESRGAN_x4plus_anime_6B",
+        ))
+        should_resume = upscaler_server.prepare_remote_video_job_reuse(
+            item,
+            render_settings=render_settings,
+            endpoints=["https://new.gradio.live"],
+            retries=3,
+            client_id="new-client",
+        )
+
+        self.assertTrue(should_resume)
+        self.assertEqual(item["phase"], "queued")
+        self.assertEqual(item["phaseLabel"], "Ripresa dai frame AI salvati")
+        self.assertEqual(item["completedFrames"], 359)
+        self.assertEqual(item["requestedWidth"], 2160)
+        self.assertEqual(item["requestedHeight"], 3840)
+        self.assertEqual(item["remoteEndpoints"], ["https://new.gradio.live"])
+
+    def test_reuse_prefers_359_old_size_frames_over_13_new_size_frames(self) -> None:
+        render_settings = {"requestedWidth": 2160, "requestedHeight": 3840}
+        nearly_complete_old_size = {
+            "phase": "error",
+            "completedFrames": 359,
+            "manifestRevision": 20,
+            "requestedWidth": 720,
+            "requestedHeight": 1280,
+        }
+        barely_started_new_size = {
+            "phase": "cancelled",
+            "completedFrames": 13,
+            "manifestRevision": 30,
+            **render_settings,
+        }
+
+        self.assertGreater(
+            upscaler_server.remote_video_job_candidate_rank(
+                nearly_complete_old_size, render_settings
+            ),
+            upscaler_server.remote_video_job_candidate_rank(
+                barely_started_new_size, render_settings
+            ),
+        )
+
+    def test_exact_ready_remote_render_is_returned_without_processing(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="mlsm-ready-render-") as temporary:
+            result = Path(temporary) / "upscaled-video.mp4"
+            result.write_bytes(b"verified")
+            render_settings = {
+                "requestedWidth": 2160,
+                "requestedHeight": 3840,
+                "adjustmentsKey": "same",
+            }
+            item = {
+                "remote": True,
+                "phase": "ready",
+                "resultPath": str(result),
+                **render_settings,
+            }
+
+            should_resume = upscaler_server.prepare_remote_video_job_reuse(
+                item,
+                render_settings=render_settings,
+                endpoints=["https://new.gradio.live"],
+                retries=2,
+                client_id="new-client",
+            )
+
+        self.assertFalse(should_resume)
+        self.assertEqual(item["phase"], "ready")
+        self.assertEqual(item["resultPath"], str(result))
+
+    def test_result_response_does_not_delete_before_native_save_can_copy(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="mlsm-result-retention-") as temporary:
+            result = Path(temporary) / "upscaled-video.mp4"; result.write_bytes(b"video")
+            with upscaler_server.video_job_lock:
+                upscaler_server.video_jobs["ready-local"] = {"id": "ready-local", "phase": "ready", "remote": False, "resultPath": str(result)}
+            try:
+                response = upscaler_server.video_upscale_job_result("ready-local")
+                self.assertIsNone(response.background)
+                self.assertTrue(result.exists())
+            finally:
+                with upscaler_server.video_job_lock:
+                    upscaler_server.video_jobs.pop("ready-local", None)
+
+    def test_adjustments_are_validated_and_change_real_pixels(self) -> None:
+        parsed = upscaler_server.parse_upscaler_adjustments(json.dumps({"exposure": 1, "contrast": 25, "saturation": -30, "sharpness": 40}))
+        source = np.full((8, 8, 3), 80, dtype=np.uint8)
+        output = upscaler_server.apply_upscaler_adjustments(source, parsed)
+        self.assertEqual(output.shape, source.shape)
+        self.assertGreater(float(output.mean()), float(source.mean()))
+        with self.assertRaises(ValueError):
+            upscaler_server.parse_upscaler_adjustments('{"exposure":"bright"}')
+
+    def test_remote_manifest_restores_an_interrupted_job_as_resumable(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="mlsm-remote-job-") as temporary:
+            root = Path(temporary)
+            workspace = root / "job-one"
+            record = {
+                "id": "job-one", "remote": True, "phase": "upscaling", "phaseLabel": "Frame 4/10",
+                "tempDirectory": str(workspace), "sourcePath": str(workspace / "source.mp4"),
+                "originalFramesDirectory": str(workspace / "original-frames"), "upscaledFramesDirectory": str(workspace / "upscaled-frames"),
+                "currentFrame": 4, "totalFrames": 10, "cancelRequested": False,
+            }
+            with mock.patch.object(upscaler_server, "REMOTE_VIDEO_ROOT", root):
+                with upscaler_server.video_job_lock:
+                    upscaler_server.video_jobs["job-one"] = record
+                upscaler_server.persist_remote_video_job(record)
+                with upscaler_server.video_job_lock:
+                    upscaler_server.video_jobs.pop("job-one", None)
+                upscaler_server.restore_remote_video_jobs()
+                with upscaler_server.video_job_lock:
+                    restored = dict(upscaler_server.video_jobs.pop("job-one"))
+            self.assertEqual(restored["phase"], "error")
+            self.assertTrue(restored["resumable"])
+            self.assertEqual(restored["currentFrame"], 4)
+
+    def test_remote_cache_clear_deletes_terminal_jobs_and_orphans_but_keeps_root(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="mlsm-remote-cache-clear-") as temporary:
+            root = Path(temporary) / "remote-video-jobs"
+            root.mkdir()
+            first = root / "first-job"; first.mkdir(); (first / "job.json").write_bytes(b"manifest")
+            orphan = root / "orphan-job"; orphan.mkdir(); (orphan / "frame.png").write_bytes(b"frame")
+            expected_bytes = len(b"manifest") + len(b"frame")
+            records = {
+                "first-job": {"id": "first-job", "remote": True, "phase": "ready", "tempDirectory": str(first)},
+                "missing-job": {"id": "missing-job", "remote": True, "phase": "error", "tempDirectory": str(root / "missing-job")},
+            }
+            with upscaler_server.video_job_lock:
+                previous_jobs = dict(upscaler_server.video_jobs)
+                upscaler_server.video_jobs.clear()
+                upscaler_server.video_jobs.update(records)
+            with upscaler_server.remote_manifest_lock:
+                previous_revisions = dict(upscaler_server.remote_manifest_written_revision)
+                previous_writes = dict(upscaler_server.remote_manifest_last_write)
+                upscaler_server.remote_manifest_written_revision.update({"first-job": 4, "missing-job": 2, "unrelated": 8})
+                upscaler_server.remote_manifest_last_write.update({"first-job": 1.0, "missing-job": 1.0, "unrelated": 1.0})
+            try:
+                with mock.patch.object(upscaler_server, "REMOTE_VIDEO_ROOT", root), mock.patch.object(upscaler_server, "log_upscaler_event"):
+                    before = upscaler_server.remote_video_cache_status()
+                    result = upscaler_server.clear_remote_video_cache()
+                self.assertEqual(before["jobs"], 2)
+                self.assertEqual(before["entries"], 2)
+                self.assertEqual(before["bytes"], expected_bytes)
+                self.assertEqual(result["removedJobs"], 2)
+                self.assertEqual(result["deletedEntries"], 2)
+                self.assertEqual(result["removedBytes"], expected_bytes)
+                self.assertTrue(root.is_dir())
+                self.assertEqual(list(root.iterdir()), [])
+                with upscaler_server.video_job_lock:
+                    self.assertNotIn("first-job", upscaler_server.video_jobs)
+                    self.assertNotIn("missing-job", upscaler_server.video_jobs)
+                with upscaler_server.remote_manifest_lock:
+                    self.assertNotIn("first-job", upscaler_server.remote_manifest_written_revision)
+                    self.assertNotIn("missing-job", upscaler_server.remote_manifest_written_revision)
+                    self.assertEqual(upscaler_server.remote_manifest_written_revision["unrelated"], 8)
+            finally:
+                with upscaler_server.video_job_lock:
+                    upscaler_server.video_jobs.clear()
+                    upscaler_server.video_jobs.update(previous_jobs)
+                with upscaler_server.remote_manifest_lock:
+                    upscaler_server.remote_manifest_written_revision.clear()
+                    upscaler_server.remote_manifest_written_revision.update(previous_revisions)
+                    upscaler_server.remote_manifest_last_write.clear()
+                    upscaler_server.remote_manifest_last_write.update(previous_writes)
+
+    def test_stale_manifest_writer_cannot_recreate_cache_after_clear(self) -> None:
+        class GateLock:
+            def __init__(self) -> None:
+                self.inner = threading.Lock()
+                self.writer_waiting = threading.Event()
+                self.release_writer = threading.Event()
+
+            def __enter__(self):
+                if threading.current_thread().name == "stale-manifest-writer":
+                    self.writer_waiting.set()
+                    if not self.release_writer.wait(timeout=2):
+                        raise TimeoutError("writer non rilasciato dal test")
+                self.inner.acquire()
+                return self
+
+            def __exit__(self, _type, _value, _traceback) -> None:
+                self.inner.release()
+
+        with tempfile.TemporaryDirectory(prefix="mlsm-stale-manifest-") as temporary:
+            root = Path(temporary) / "remote-video-jobs"; root.mkdir()
+            workspace = root / "terminal-job"; workspace.mkdir(); (workspace / "result.mp4").write_bytes(b"video")
+            record = {
+                "id": "terminal-job", "remote": True, "phase": "ready",
+                "tempDirectory": str(workspace), "manifestRevision": 7,
+            }
+            snapshot = dict(record)
+            with upscaler_server.video_job_lock:
+                previous_jobs = dict(upscaler_server.video_jobs)
+                upscaler_server.video_jobs.clear()
+                upscaler_server.video_jobs["terminal-job"] = record
+            with upscaler_server.remote_manifest_lock:
+                previous_revisions = dict(upscaler_server.remote_manifest_written_revision)
+                previous_writes = dict(upscaler_server.remote_manifest_last_write)
+                upscaler_server.remote_manifest_written_revision.clear()
+                upscaler_server.remote_manifest_last_write.clear()
+            gate = GateLock()
+            writer_errors: list[BaseException] = []
+
+            def stale_writer() -> None:
+                try:
+                    upscaler_server.persist_remote_video_job(snapshot)
+                except BaseException as error:
+                    writer_errors.append(error)
+
+            writer = threading.Thread(target=stale_writer, name="stale-manifest-writer")
+            try:
+                with mock.patch.object(upscaler_server, "REMOTE_VIDEO_ROOT", root), mock.patch.object(upscaler_server, "video_job_lock", gate), mock.patch.object(upscaler_server, "log_upscaler_event"):
+                    writer.start()
+                    self.assertTrue(gate.writer_waiting.wait(timeout=1))
+                    result = upscaler_server.clear_remote_video_cache()
+                    self.assertEqual(result["removedJobs"], 1)
+                    self.assertEqual(list(root.iterdir()), [])
+                    gate.release_writer.set()
+                    writer.join(timeout=2)
+                self.assertFalse(writer.is_alive())
+                self.assertEqual(writer_errors, [])
+                self.assertEqual(list(root.iterdir()), [])
+                self.assertFalse((workspace / "job.json").exists())
+            finally:
+                gate.release_writer.set()
+                writer.join(timeout=2)
+                with upscaler_server.video_job_lock:
+                    upscaler_server.video_jobs.clear()
+                    upscaler_server.video_jobs.update(previous_jobs)
+                with upscaler_server.remote_manifest_lock:
+                    upscaler_server.remote_manifest_written_revision.clear()
+                    upscaler_server.remote_manifest_written_revision.update(previous_revisions)
+                    upscaler_server.remote_manifest_last_write.clear()
+                    upscaler_server.remote_manifest_last_write.update(previous_writes)
+
+    def test_remote_cache_clear_refuses_active_job_without_deleting_files(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="mlsm-remote-cache-active-") as temporary:
+            root = Path(temporary) / "remote-video-jobs"; root.mkdir()
+            workspace = root / "active-job"; workspace.mkdir(); source = workspace / "source.mp4"; source.write_bytes(b"video")
+            with upscaler_server.video_job_lock:
+                previous_jobs = dict(upscaler_server.video_jobs)
+                upscaler_server.video_jobs.clear()
+                upscaler_server.video_jobs["active-job"] = {
+                    "id": "active-job", "remote": True, "phase": "upscaling", "tempDirectory": str(workspace),
+                }
+            try:
+                with mock.patch.object(upscaler_server, "REMOTE_VIDEO_ROOT", root):
+                    with self.assertRaises(HTTPException) as raised:
+                        upscaler_server.clear_remote_video_cache()
+                self.assertEqual(raised.exception.status_code, 409)
+                self.assertTrue(source.is_file())
+                with upscaler_server.video_job_lock:
+                    self.assertIn("active-job", upscaler_server.video_jobs)
+            finally:
+                with upscaler_server.video_job_lock:
+                    upscaler_server.video_jobs.clear()
+                    upscaler_server.video_jobs.update(previous_jobs)
+
+    def test_remote_cache_clear_refuses_a_deferred_upload_and_client_cancel_cleans_it(self) -> None:
+        class DeferredUpload:
+            filename = "deferred.mp4"
+
+            def __init__(self) -> None:
+                self.started = asyncio.Event()
+                self.release = asyncio.Event()
+                self.sent = False
+                self.closed = False
+
+            async def read(self, _size: int) -> bytes:
+                if self.sent:
+                    return b""
+                self.started.set()
+                await self.release.wait()
+                self.sent = True
+                return b"deferred-video"
+
+            async def close(self) -> None:
+                self.closed = True
+
+        with tempfile.TemporaryDirectory(prefix="mlsm-remote-cache-upload-") as temporary:
+            root = Path(temporary) / "remote-video-jobs"; root.mkdir()
+            upload = DeferredUpload()
+            with upscaler_server.video_job_lock:
+                previous_jobs = dict(upscaler_server.video_jobs)
+                previous_cancelled = dict(upscaler_server.cancelled_video_clients)
+                upscaler_server.video_jobs.clear()
+                upscaler_server.cancelled_video_clients.clear()
+
+            async def scenario() -> None:
+                task = asyncio.create_task(self._create_remote_video_job(
+                    upload, client_id="deferred-client", checkpoint_policy="restart"
+                ))
+                await upload.started.wait()
+                with self.assertRaises(HTTPException) as clear_error:
+                    upscaler_server.clear_remote_video_cache()
+                self.assertEqual(clear_error.exception.status_code, 409)
+                status = upscaler_server.remote_video_cache_status()
+                self.assertEqual(status["activeJobs"], 1)
+                released = upscaler_server.release_video_upscale_client("deferred-client")
+                self.assertEqual(len(released["released"]), 1)
+                upload.release.set()
+                with self.assertRaises(HTTPException) as upload_error:
+                    await task
+                self.assertEqual(upload_error.exception.status_code, 409)
+
+            try:
+                with mock.patch.object(upscaler_server, "REMOTE_VIDEO_ROOT", root), mock.patch.object(upscaler_server, "normalize_endpoint", side_effect=lambda value: value), mock.patch.object(upscaler_server, "ffmpeg_binary", return_value="ffmpeg"), mock.patch.object(upscaler_server, "probe_video_geometry", return_value={"display_aspect_ratio": 16 / 9}), mock.patch.object(upscaler_server, "log_upscaler_event"):
+                    asyncio.run(scenario())
+                self.assertTrue(upload.closed)
+                self.assertEqual(list(root.iterdir()), [])
+                with upscaler_server.video_job_lock:
+                    self.assertEqual(upscaler_server.video_jobs, {})
+            finally:
+                with upscaler_server.video_job_lock:
+                    upscaler_server.video_jobs.clear()
+                    upscaler_server.video_jobs.update(previous_jobs)
+                    upscaler_server.cancelled_video_clients.clear()
+                    upscaler_server.cancelled_video_clients.update(previous_cancelled)
+
+    def test_remote_upload_and_probe_failures_remove_placeholder_and_workspace(self) -> None:
+        class Upload:
+            filename = "broken.mp4"
+
+            def __init__(self, *, fail_read: bool) -> None:
+                self.fail_read = fail_read
+                self.sent = False
+                self.closed = False
+
+            async def read(self, _size: int) -> bytes:
+                if self.fail_read:
+                    raise RuntimeError("upload interrotto")
+                if self.sent:
+                    return b""
+                self.sent = True
+                return b"invalid-video"
+
+            async def close(self) -> None:
+                self.closed = True
+
+        with tempfile.TemporaryDirectory(prefix="mlsm-remote-upload-failures-") as temporary:
+            base = Path(temporary)
+            with upscaler_server.video_job_lock:
+                previous_jobs = dict(upscaler_server.video_jobs)
+                upscaler_server.video_jobs.clear()
+            try:
+                for failure in ("upload", "probe"):
+                    with self.subTest(failure=failure):
+                        root = base / failure; root.mkdir()
+                        upload = Upload(fail_read=failure == "upload")
+                        probe = RuntimeError("probe fallito") if failure == "probe" else {"display_aspect_ratio": 16 / 9}
+                        with mock.patch.object(upscaler_server, "REMOTE_VIDEO_ROOT", root), mock.patch.object(upscaler_server, "normalize_endpoint", side_effect=lambda value: value), mock.patch.object(upscaler_server, "ffmpeg_binary", return_value="ffmpeg"), mock.patch.object(upscaler_server, "probe_video_geometry", side_effect=probe if isinstance(probe, Exception) else None, return_value=None if isinstance(probe, Exception) else probe), mock.patch.object(upscaler_server, "log_upscaler_event"):
+                            if failure == "upload":
+                                with self.assertRaisesRegex(RuntimeError, "upload interrotto"):
+                                    asyncio.run(self._create_remote_video_job(upload, client_id=f"{failure}-client", checkpoint_policy="restart"))
+                            else:
+                                with self.assertRaises(HTTPException) as raised:
+                                    asyncio.run(self._create_remote_video_job(upload, client_id=f"{failure}-client", checkpoint_policy="restart"))
+                                self.assertEqual(raised.exception.status_code, 400)
+                        self.assertTrue(upload.closed)
+                        self.assertEqual(list(root.iterdir()), [])
+                        with upscaler_server.video_job_lock:
+                            self.assertEqual(upscaler_server.video_jobs, {})
+            finally:
+                with upscaler_server.video_job_lock:
+                    upscaler_server.video_jobs.clear()
+                    upscaler_server.video_jobs.update(previous_jobs)
+
+    def test_resume_replaces_upload_placeholder_without_a_cache_visibility_gap(self) -> None:
+        class Upload:
+            filename = "same.mp4"
+
+            def __init__(self, content: bytes) -> None:
+                self.content = content
+                self.sent = False
+
+            async def read(self, _size: int) -> bytes:
+                if self.sent:
+                    return b""
+                self.sent = True
+                return self.content
+
+            async def close(self) -> None:
+                return None
+
+        content = b"same-video-content"
+        digest = hashlib.sha256(content).hexdigest()
+        with tempfile.TemporaryDirectory(prefix="mlsm-remote-resume-upload-") as temporary:
+            root = Path(temporary) / "remote-video-jobs"; root.mkdir()
+            cached = root / "cached-job"; cached.mkdir(); (cached / "source.mp4").write_bytes(content)
+            cached_record = {
+                "id": "cached-job", "remote": True, "phase": "error",
+                "tempDirectory": str(cached), "sourcePath": str(cached / "source.mp4"),
+                "sourceHash": digest, "sourceName": "same.mp4", "sourceBytes": len(content),
+                "model": "remote-x4", "currentFrame": 4, "completedFrames": 4,
+                "requestedWidth": 128, "requestedHeight": 72,
+            }
+            with upscaler_server.video_job_lock:
+                previous_jobs = dict(upscaler_server.video_jobs)
+                upscaler_server.video_jobs.clear()
+                upscaler_server.video_jobs["cached-job"] = cached_record
+            try:
+                with mock.patch.object(upscaler_server, "REMOTE_VIDEO_ROOT", root), mock.patch.object(upscaler_server, "normalize_endpoint", side_effect=lambda value: value), mock.patch.object(upscaler_server, "ffmpeg_binary", return_value="ffmpeg"), mock.patch.object(upscaler_server, "probe_video_geometry", return_value={"display_aspect_ratio": 16 / 9}), mock.patch.object(upscaler_server.threading, "Thread") as thread, mock.patch.object(upscaler_server, "log_upscaler_event"):
+                    result = asyncio.run(self._create_remote_video_job(
+                        Upload(content), client_id="resume-client", checkpoint_policy="resume"
+                    ))
+                self.assertEqual(result["id"], "cached-job")
+                self.assertEqual(result["phase"], "queued")
+                self.assertEqual(result["checkpointPolicy"], "resume")
+                self.assertEqual([path.name for path in root.iterdir()], ["cached-job"])
+                with upscaler_server.video_job_lock:
+                    self.assertEqual(list(upscaler_server.video_jobs), ["cached-job"])
+                thread.assert_called_once()
+                thread.return_value.start.assert_called_once()
+            finally:
+                with upscaler_server.video_job_lock:
+                    upscaler_server.video_jobs.clear()
+                    upscaler_server.video_jobs.update(previous_jobs)
+
+    def test_cancel_between_probe_and_resume_selection_cannot_reset_the_cancellation(self) -> None:
+        class Upload:
+            filename = "same.mp4"
+
+            def __init__(self, content: bytes) -> None:
+                self.content = content
+                self.sent = False
+
+            async def read(self, _size: int) -> bytes:
+                if self.sent:
+                    return b""
+                self.sent = True
+                return self.content
+
+            async def close(self) -> None:
+                return None
+
+        content = b"same-video-content"
+        digest = hashlib.sha256(content).hexdigest()
+        with tempfile.TemporaryDirectory(prefix="mlsm-remote-late-cancel-") as temporary:
+            root = Path(temporary) / "remote-video-jobs"; root.mkdir()
+            cached = root / "cached-job"; cached.mkdir(); (cached / "source.mp4").write_bytes(content)
+            cached_record = {
+                "id": "cached-job", "remote": True, "phase": "error",
+                "tempDirectory": str(cached), "sourcePath": str(cached / "source.mp4"),
+                "sourceHash": digest, "sourceName": "same.mp4", "sourceBytes": len(content),
+                "model": "remote-x4", "currentFrame": 4, "completedFrames": 4,
+            }
+            with upscaler_server.video_job_lock:
+                previous_jobs = dict(upscaler_server.video_jobs)
+                previous_cancelled = dict(upscaler_server.cancelled_video_clients)
+                upscaler_server.video_jobs.clear()
+                upscaler_server.video_jobs["cached-job"] = cached_record
+                upscaler_server.cancelled_video_clients.clear()
+
+            def cancel_after_early_check(_source: str, event: str, **_details) -> None:
+                if event == "upload-verified":
+                    upscaler_server.release_video_upscale_client("late-cancel-client")
+
+            try:
+                with mock.patch.object(upscaler_server, "REMOTE_VIDEO_ROOT", root), mock.patch.object(upscaler_server, "normalize_endpoint", side_effect=lambda value: value), mock.patch.object(upscaler_server, "ffmpeg_binary", return_value="ffmpeg"), mock.patch.object(upscaler_server, "probe_video_geometry", return_value={"display_aspect_ratio": 16 / 9}), mock.patch.object(upscaler_server.threading, "Thread") as thread, mock.patch.object(upscaler_server, "log_upscaler_event", side_effect=cancel_after_early_check):
+                    with self.assertRaises(HTTPException) as raised:
+                        asyncio.run(self._create_remote_video_job(
+                            Upload(content), client_id="late-cancel-client", checkpoint_policy="resume"
+                        ))
+                self.assertEqual(raised.exception.status_code, 409)
+                self.assertEqual(cached_record["phase"], "error")
+                self.assertEqual([path.name for path in root.iterdir()], ["cached-job"])
+                with upscaler_server.video_job_lock:
+                    self.assertEqual(list(upscaler_server.video_jobs), ["cached-job"])
+                thread.assert_not_called()
+            finally:
+                with upscaler_server.video_job_lock:
+                    upscaler_server.video_jobs.clear()
+                    upscaler_server.video_jobs.update(previous_jobs)
+                    upscaler_server.cancelled_video_clients.clear()
+                    upscaler_server.cancelled_video_clients.update(previous_cancelled)
+
+    def test_remote_cache_clear_refuses_workspace_outside_root(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="mlsm-remote-cache-safety-") as temporary:
+            base = Path(temporary); root = base / "remote-video-jobs"; root.mkdir()
+            outside = base / "outside-job"; outside.mkdir(); protected = outside / "keep.txt"; protected.write_text("keep", encoding="utf-8")
+            with upscaler_server.video_job_lock:
+                previous_jobs = dict(upscaler_server.video_jobs)
+                upscaler_server.video_jobs.clear()
+                upscaler_server.video_jobs["outside-job"] = {
+                    "id": "outside-job", "remote": True, "phase": "error", "tempDirectory": str(outside),
+                }
+            try:
+                with mock.patch.object(upscaler_server, "REMOTE_VIDEO_ROOT", root):
+                    with self.assertRaises(HTTPException) as raised:
+                        upscaler_server.clear_remote_video_cache()
+                self.assertEqual(raised.exception.status_code, 409)
+                self.assertTrue(protected.is_file())
+                self.assertTrue(root.is_dir())
+            finally:
+                with upscaler_server.video_job_lock:
+                    upscaler_server.video_jobs.clear()
+                    upscaler_server.video_jobs.update(previous_jobs)
+
+    def test_remote_catalog_route_delegates_all_endpoints(self) -> None:
+        expected = {"ok": True, "models": [{"name": "x4"}], "endpoints": []}
+        with mock.patch.object(upscaler_server, "aggregate_catalog", return_value=expected) as aggregate:
+            self.assertEqual(upscaler_server.remote_upscale_catalog({"endpoints": ["https://a.gradio.live", "https://b.gradio.live"]}), expected)
+        aggregate.assert_called_once_with(["https://a.gradio.live", "https://b.gradio.live"])
+
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg/ffprobe non disponibili")
+    def test_colab_frames_are_reconstructed_with_audio_and_exposed_as_result(self) -> None:
+        ffmpeg = str(shutil.which("ffmpeg"))
+        with tempfile.TemporaryDirectory(prefix="mlsm-remote-reconstruct-") as temporary:
+            root = Path(temporary); workspace = root / "job-colab"; workspace.mkdir()
+            source = workspace / "source.mp4"
+            subprocess.run([
+                ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=64x36:rate=30:duration=1",
+                "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100:duration=0.72", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", str(source),
+            ], check=True, capture_output=True)
+            job = {
+                "id": "job-colab", "phase": "queued", "phaseLabel": "Job in coda", "progress": 0,
+                "currentFrame": 0, "totalFrames": 0, "tempDirectory": str(workspace), "sourcePath": str(source),
+                "originalFramesDirectory": str(workspace / "original-frames"), "upscaledFramesDirectory": str(workspace / "upscaled-frames"),
+                "model": "remote-x2", "backend": "auto", "tile": 256, "width": 128, "height": 72, "tta": False,
+                "quality": "high", "cancelRequested": False, "cancelled": False, "remote": True, "resumable": True,
+                "error": "stale failure from a previous reconstruction",
+                "remoteEndpoints": ["https://colab.gradio.live"], "remoteRetries": 1,
+                "adjustments": upscaler_server.parse_upscaler_adjustments('{"contrast":20,"saturation":15}'),
+            }
+            with upscaler_server.video_job_lock:
+                upscaler_server.video_jobs["job-colab"] = job
+
+            def distribute(frames, _endpoints, _model, destination, **callbacks):
+                for index, frame in enumerate(frames, start=1):
+                    callbacks["on_endpoint"]("https://colab.gradio.live", "busy", frame)
+                    image = cv2.imread(str(frame), cv2.IMREAD_COLOR)
+                    self.assertIsNotNone(image)
+                    target = destination / frame.name
+                    cv2.imwrite(str(target), cv2.resize(image, (128, 72), interpolation=cv2.INTER_LANCZOS4))
+                    callbacks["on_progress"](index, len(frames), "https://colab.gradio.live", target)
+                    callbacks["on_endpoint"]("https://colab.gradio.live", "idle", frame)
+                return len(frames), []
+
+            try:
+                with mock.patch.object(upscaler_server, "REMOTE_VIDEO_ROOT", root), mock.patch.object(upscaler_server, "distribute_frames", side_effect=distribute):
+                    upscaler_server.process_video_upscale_job("job-colab")
+                    status = upscaler_server.video_upscale_job_status("job-colab")
+                    response = upscaler_server.video_upscale_job_result("job-colab")
+                self.assertEqual(status["phase"], "ready")
+                self.assertIsNone(status["error"])
+                self.assertEqual(status["currentFrame"], status["totalFrames"])
+                self.assertEqual(status["encodedFrameCount"], status["totalFrames"])
+                self.assertEqual(status["totalFrames"], 30)
+                self.assertAlmostEqual(status["durationSeconds"], 1, delta=.05)
+                self.assertTrue(status["audioRestored"])
+                self.assertGreater(status["audioPacketCount"], 0)
+                self.assertEqual(Path(status["resultPath"]), response.path)
+                self.assertGreater(Path(response.path).stat().st_size, 0)
+                self.assertEqual(len(list((workspace / "rendered-frames").glob("frame-*.png"))), status["totalFrames"])
+            finally:
+                with upscaler_server.video_job_lock:
+                    upscaler_server.video_jobs.pop("job-colab", None)
 
 
 if __name__ == "__main__":

@@ -55,7 +55,7 @@ export const videoEditorInterpolationCommand = "npm run upscaler:server";
 
 const healthTimeoutMs = 2_500;
 
-interface HealthPayload { interpolation?: { ffmpeg?: boolean; rife?: boolean; jobs?: boolean; device?: string } }
+interface HealthPayload { interpolation?: { ffmpeg?: boolean; rife?: boolean | { ready?: boolean; verified?: boolean }; jobs?: boolean; device?: string } }
 
 export async function videoEditorInterpolationHealth(): Promise<VideoEditorInterpolationHealth | null> {
   try {
@@ -65,7 +65,8 @@ export async function videoEditorInterpolationHealth(): Promise<VideoEditorInter
     if (!response.ok) return null;
     const payload = await response.json() as HealthPayload;
     const info = payload.interpolation ?? {};
-    return { available: Boolean(info.ffmpeg || info.rife), ffmpeg: Boolean(info.ffmpeg), rife: Boolean(info.rife), ...(info.jobs === undefined ? {} : { jobs: Boolean(info.jobs) }), device: info.device ?? "cpu" };
+    const rife = typeof info.rife === "object" ? Boolean(info.rife.ready && info.rife.verified) : Boolean(info.rife);
+    return { available: Boolean(info.ffmpeg || rife), ffmpeg: Boolean(info.ffmpeg), rife, ...(info.jobs === undefined ? {} : { jobs: Boolean(info.jobs) }), device: info.device ?? "cpu" };
   } catch {
     // Servizio assente: l’export continua al frame rate reso, senza interpolazione.
     return null;

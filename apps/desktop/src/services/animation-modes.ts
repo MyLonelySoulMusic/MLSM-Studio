@@ -5,8 +5,8 @@ export interface AnimationModeDefinition {
   id: string;
   label: string;
   description: string;
-  generator: "instrumentalFalling" | "newYorkStreets" | "coverSphere" | "stereoUnfold" | "walkingCube" | "portraitLandscape" | "teddyWalk" | "teddySing" | "proSubtitles" | "pixelsSub" | "backgroundAuto" | "staticWatermark" | "upscaler" | "videoEditor" | "aiQuantizer";
-  panel: "instrumentalObjects" | "newYorkStreets" | "coverSphere" | "stereoUnfold" | "walkingCube" | "portraitLandscape" | "teddyWalk" | "teddySing" | "proSubtitles" | "pixelsSub" | "backgroundAuto" | "staticWatermark" | "upscaler" | "videoEditor" | "aiQuantizer";
+  generator: "instrumentalFalling" | "newYorkStreets" | "coverSphere" | "stereoUnfold" | "walkingCube" | "portraitLandscape" | "teddyWalk" | "teddySing" | "proSubtitles" | "pixelsSub" | "backgroundAuto" | "staticWatermark" | "upscaler" | "frameBooster" | "videoEditor" | "songPlayer" | "cassetteDesk" | "aiQuantizer";
+  panel: "instrumentalObjects" | "newYorkStreets" | "coverSphere" | "stereoUnfold" | "walkingCube" | "portraitLandscape" | "teddyWalk" | "teddySing" | "proSubtitles" | "pixelsSub" | "backgroundAuto" | "staticWatermark" | "upscaler" | "frameBooster" | "videoEditor" | "songPlayer" | "cassetteDesk" | "aiQuantizer";
   objectTypes: readonly AnimationModeObjectType[];
   defaultBaseObjectTypes: readonly SceneObjectType[];
 }
@@ -124,11 +124,35 @@ export const animationModes: readonly AnimationModeDefinition[] = [{
   objectTypes: [],
   defaultBaseObjectTypes: ["platform"]
 }, {
+  id: "frameBooster",
+  label: "Frame Booster",
+  description: "Aumenta i fotogrammi di un video con RIFE verificato, MPS Apple, CUDA o filtri FFmpeg senza alterare rapporto, risoluzione o audio.",
+  generator: "frameBooster",
+  panel: "frameBooster",
+  objectTypes: [],
+  defaultBaseObjectTypes: ["platform"]
+}, {
   id: "videoEditor",
   label: "Video Editor",
   description: "Montaggio professionale multitraccia: pool media, timeline con calamita, taglio, dissolvenze, modalità di fusione, correzione colore, analisi delle battute ed export con interpolazione dei frame.",
   generator: "videoEditor",
   panel: "videoEditor",
+  objectTypes: [],
+  defaultBaseObjectTypes: ["platform"]
+}, {
+  id: "cassetteDesk",
+  label: "Cassette Desk",
+  description: "Una musicassetta prende vita su una scrivania indie, entra nello stereo e avvia il brano con waveform, tonalità, BPM e tastiera della voce.",
+  generator: "cassetteDesk",
+  panel: "cassetteDesk",
+  objectTypes: [],
+  defaultBaseObjectTypes: ["platform"]
+}, {
+  id: "songPlayer",
+  label: "Song Player",
+  description: "Visualizza il frammento nel contesto della traccia completa, con cover, spettrogramma e allineamento verificabile.",
+  generator: "songPlayer",
+  panel: "songPlayer",
   objectTypes: [],
   defaultBaseObjectTypes: ["platform"]
 }, {
@@ -153,13 +177,13 @@ export interface AnimationCategory { id: AnimationCategoryId; groups: readonly A
 export const animationCategories: readonly AnimationCategory[] = [{
   id: "soundAnimation",
   groups: [
-    { id: "visualizers", modeIds: ["instrumentalFalling", "coverSphere", "stereoUnfold", "walkingCube", "portraitLandscape", "backgroundAuto"] },
+    { id: "visualizers", modeIds: ["instrumentalFalling", "coverSphere", "stereoUnfold", "walkingCube", "portraitLandscape", "backgroundAuto", "cassetteDesk", "songPlayer"] },
     { id: "stories", modeIds: ["teddyWalk", "teddySing"] },
     { id: "typography", modeIds: ["proSubtitles", "pixelsSub"] }
   ]
 }, {
   id: "photoVideoStudio",
-  groups: [{ id: "restoration", modeIds: ["staticWatermark", "upscaler"] }]
+  groups: [{ id: "restoration", modeIds: ["staticWatermark", "upscaler", "frameBooster"] }]
 }, {
   id: "videoEditor",
   groups: [{ id: "editing", modeIds: ["videoEditor"] }]

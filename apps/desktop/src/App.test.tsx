@@ -1,13 +1,27 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createProject } from "@rbs/project-schema";
 import { useAudioStore } from "./store/audio-store";
 import { useSceneStore } from "./store/scene-store";
 import { useProjectStore } from "./store/project-store";
+import { useUpscalerBatchStore } from "./store/upscaler-batch-store";
+import { resetUpscalerRuntimeForProjectReplacement } from "./services/upscaler-batch-lifecycle";
+import { getUpscalerSourceFile, registerUpscalerSourceFile } from "./services/upscaler-source-file";
 const viewportMock = vi.hoisted(() => ({
   props: null as { subtitles?: { enabled?: boolean } } | null
 }));
 const videoEditorPreviewMock = vi.hoisted(() => ({ mounts: 0 }));
+const projectRepositoryMock = vi.hoisted(() => ({ chooseForLoad: vi.fn(), load: vi.fn(), filePath: null as string | null }));
+vi.mock("./services/tauri-project-repository", () => ({
+  TauriProjectRepository: class {
+    constructor(_path: string | null) { void _path; }
+    get filePath() { return projectRepositoryMock.filePath; }
+    chooseForLoad() { return projectRepositoryMock.chooseForLoad(); }
+    load() { return projectRepositoryMock.load(); }
+    save() { return Promise.resolve(); }
+  }
+}));
 vi.mock("./components/Viewport", () => ({
   Viewport: (props: { subtitles?: { enabled?: boolean } }) => {
     viewportMock.props = props;
@@ -31,8 +45,62 @@ describe("App", () => {
     const picker = screen.getByRole("combobox", { name: "Modalità animazione" });
     expect(within(picker).queryByRole("option", { name: "New York Streets" })).not.toBeInTheDocument();
   });
-  beforeEach(() => { viewportMock.props = null; videoEditorPreviewMock.mounts = 0; useProjectStore.getState().newProject(); localStorage.clear(); });
-  afterEach(() => { cleanup(); useAudioStore.getState().reset(); useSceneStore.getState().reset(); });
+  beforeEach(() => { viewportMock.props = null; videoEditorPreviewMock.mounts = 0; projectRepositoryMock.filePath = null; projectRepositoryMock.chooseForLoad.mockReset(); projectRepositoryMock.load.mockReset(); resetUpscalerRuntimeForProjectReplacement(); useProjectStore.getState().newProject(); localStorage.clear(); });
+  afterEach(() => { cleanup(); useAudioStore.getState().reset(); useSceneStore.getState().reset(); resetUpscalerRuntimeForProjectReplacement(); });
+
+  it("preserva il pool se Nuovo viene annullato e lo termina dopo la sostituzione confermata", () => {
+    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
+    const revoke = vi.fn(); Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revoke });
+    const controller = new AbortController(); const abort = vi.spyOn(controller, "abort");
+    const sourceFile = new File(["single"], "single.jpg"); registerUpscalerSourceFile("blob:single-source", sourceFile);
+    useProjectStore.getState().updateUpscaler({ sourceUrl: "blob:single-source", sourceName: sourceFile.name, sourceKind: "image" });
+    useUpscalerBatchStore.setState({ items: [{ id: "photo", file: new File(["x"], "photo.jpg"), url: "blob:photo", thumbnailUrl: "blob:photo-thumb", name: "photo.jpg", sourceWidth: 10, sourceHeight: 5, target: { width: 20, height: 10 }, outputName: "photo.png", selected: true, status: "processing", progress: .5, error: null }], previewItemId: "photo", running: true, controller });
+    useProjectStore.getState().renameProject("Da conservare");
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Nuovo" }));
+    expect(useUpscalerBatchStore.getState().items).toHaveLength(1); expect(abort).not.toHaveBeenCalled(); expect(revoke).not.toHaveBeenCalled(); expect(getUpscalerSourceFile("blob:single-source")).toBe(sourceFile);
+    fireEvent.click(screen.getByRole("button", { name: "Nuovo" }));
+    expect(confirm).toHaveBeenCalledTimes(2); expect(abort).toHaveBeenCalledOnce();
+    expect(revoke.mock.calls.map(([url]) => url)).toEqual(["blob:single-source", "blob:photo", "blob:photo-thumb"]);
+    expect(getUpscalerSourceFile("blob:single-source")).toBeNull();
+    expect(useUpscalerBatchStore.getState()).toMatchObject({ items: [], previewItemId: null, running: false });
+  });
+
+  it("preserva il pool se Apri viene annullato o fallisce e lo elimina solo dopo un caricamento valido", async () => {
+    const revoke = vi.fn(); Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revoke });
+    const sourceFile = new File(["single"], "single.jpg"); registerUpscalerSourceFile("blob:single-source", sourceFile);
+    useProjectStore.getState().updateUpscaler({ sourceUrl: "blob:single-source", sourceName: sourceFile.name, sourceKind: "image" });
+    useUpscalerBatchStore.setState({ items: [{ id: "photo", file: new File(["x"], "photo.jpg"), url: "blob:photo", thumbnailUrl: "blob:photo-thumb", name: "photo.jpg", sourceWidth: 10, sourceHeight: 5, target: { width: 20, height: 10 }, outputName: "photo.png", selected: true, status: "queued", progress: 0, error: null }], previewItemId: "photo" });
+    projectRepositoryMock.chooseForLoad.mockResolvedValueOnce(false).mockResolvedValueOnce(true).mockResolvedValueOnce(true);
+    projectRepositoryMock.load.mockRejectedValueOnce(new Error("file non valido")).mockResolvedValueOnce(JSON.stringify(createProject()));
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Apri" }));
+    await waitFor(() => expect(projectRepositoryMock.chooseForLoad).toHaveBeenCalledTimes(1));
+    expect(useUpscalerBatchStore.getState().items).toHaveLength(1); expect(revoke).not.toHaveBeenCalled(); expect(getUpscalerSourceFile("blob:single-source")).toBe(sourceFile);
+    projectRepositoryMock.filePath = "progetto.rbs.json";
+    fireEvent.click(screen.getByRole("button", { name: "Apri" }));
+    await waitFor(() => expect(useProjectStore.getState().status).toBe("file non valido"));
+    expect(useUpscalerBatchStore.getState().items).toHaveLength(1); expect(revoke).not.toHaveBeenCalled(); expect(getUpscalerSourceFile("blob:single-source")).toBe(sourceFile);
+    fireEvent.click(screen.getByRole("button", { name: "Apri" }));
+    await waitFor(() => expect(useUpscalerBatchStore.getState().items).toHaveLength(0));
+    expect(revoke.mock.calls.map(([url]) => url)).toEqual(["blob:single-source", "blob:photo", "blob:photo-thumb"]);
+    expect(getUpscalerSourceFile("blob:single-source")).toBeNull();
+  });
+  it("applica solo l’ultima apertura progetto quando due letture terminano fuori ordine", async () => { projectRepositoryMock.filePath = "project.rbs.json"; projectRepositoryMock.chooseForLoad.mockResolvedValue(true); let resolveFirst!: (value: string) => void; const firstLoad = new Promise<string>((resolve) => { resolveFirst = resolve; }); const first = createProject(); first.project.name = "Progetto A"; const second = createProject(); second.project.name = "Progetto B"; projectRepositoryMock.load.mockReturnValueOnce(firstLoad).mockResolvedValueOnce(JSON.stringify(second)); render(<App />); fireEvent.click(screen.getByRole("button", { name: "Apri" })); await waitFor(() => expect(projectRepositoryMock.load).toHaveBeenCalledTimes(1)); fireEvent.click(screen.getByRole("button", { name: "Apri" })); await waitFor(() => expect(useProjectStore.getState().project.project.name).toBe("Progetto B")); resolveFirst(JSON.stringify(first)); await act(async () => { await Promise.resolve(); }); expect(useProjectStore.getState().project.project.name).toBe("Progetto B"); });
+  it("in Song Player riproduce lo spezzone della clip e non la canzone completa", () => {
+    const getContext = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+    useProjectStore.getState().setAnimationMode("songPlayer", []);
+    useAudioStore.setState({
+      imported: { metadata: { path: "/clip.wav", fileName: "clip.wav", hash: "a".repeat(64), durationSeconds: 8, sampleRate: 44_100, channels: 2, codec: "wav", fileSize: 10 }, waveform: [0], url: "data:audio/wav;base64,Y2xpcA==" },
+      fullTrack: { metadata: { path: "/song.wav", fileName: "song.wav", hash: "b".repeat(64), durationSeconds: 180, sampleRate: 44_100, channels: 2, codec: "wav", fileSize: 100 }, waveform: [0], url: "data:audio/wav;base64,c29uZw==" }
+    });
+    render(<App />);
+    const player = document.querySelector("audio");
+    expect(player).toHaveAttribute("src", "data:audio/wav;base64,Y2xpcA==");
+    expect(player).not.toHaveAttribute("src", "data:audio/wav;base64,c29uZw==");
+    getContext.mockRestore();
+  });
   it("mostra il layout editor e permette di rinominare il progetto", () => {
     render(<App />);
     expect(screen.getByLabelText("MLSM Studio — My Lonely Soul Music Studio")).toBeInTheDocument();

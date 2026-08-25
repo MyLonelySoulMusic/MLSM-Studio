@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { createProject, type RhythmBallProject } from "@rbs/project-schema";
+import { createProject, type CassetteDeskSettings, type RhythmBallProject, type SongPlayerAsset, type SongPlayerMatch, type SongPlayerSettings } from "@rbs/project-schema";
 import type { AudioMetadata } from "../services/audio-import";
 import type { AudioAnalysisResult } from "@rbs/audio-analysis";
 import {
@@ -34,6 +34,7 @@ import { defaultVideoEditorImageShadow } from "../services/video-editor-image-sh
 import { videoEditorClampEffect, videoEditorMoveEffect, videoEditorPlaceEffect, videoEditorTrimEffect } from "../services/video-editor-effects";
 import { upsertVideoEditorKeyframe, removeVideoEditorKeyframe, type VideoEditorAutomationTarget, type VideoEditorKeyframe } from "../services/video-editor-automation";
 import type { VideoEditorToolArtifact } from "../services/video-editor-tools";
+import { songPlayerPersistedOffsetMs } from "../services/song-player-playback";
 
 interface AttachAudioOptions {
   preserveSubtitleTrack?: boolean;
@@ -55,7 +56,18 @@ interface ProjectState {
   renameProject: (name: string) => void;
   attachAudio: (metadata: AudioMetadata, waveform: number[], options?: AttachAudioOptions) => void;
   applyAnalysis: (result: AudioAnalysisResult) => void;
-  setAspectRatio: (ratio: "9:16" | "16:9") => void;
+  setAspectRatio: (ratio: RhythmBallProject["canvas"]["aspectRatio"]) => void;
+  setCanvasFormat: (format: { aspectRatio: RhythmBallProject["canvas"]["aspectRatio"]; width?: number; height?: number }) => void;
+  registerSongPlayerFullTrack: (asset: SongPlayerAsset) => void;
+  removeSongPlayerAsset: (assetId: string) => void;
+  updateSongPlayer: (patch: Partial<SongPlayerSettings>) => void;
+  updateCassetteDesk: (patch: Partial<CassetteDeskSettings>) => void;
+  applyCassetteDeskExtractedPalette: (colors: readonly string[]) => void;
+  setSongPlayerPalette: (colors: readonly string[]) => void;
+  applySongPlayerExtractedPalette: (colors: readonly string[]) => void;
+  setSongPlayerMatch: (match: SongPlayerMatch) => void;
+  cancelSongPlayerMatch: (owner: { projectId: string; fragmentHash?: string; fullTrackHash?: string }) => void;
+  setSongPlayerManualOffset: (offsetMs: number) => void;
   setAnimationMode: (modeId: string, baseObjectTypes: RhythmBallProject["animation"]["baseObjectTypes"]) => void;
   setBaseObjectEnabled: (type: RhythmBallProject["animation"]["baseObjectTypes"][number], enabled: boolean) => void;
   setNewYorkMarbleCount: (count: number) => void;
@@ -92,6 +104,7 @@ interface ProjectState {
   updateBackgroundAutoEffect: (id: string, patch: Partial<RhythmBallProject["animation"]["backgroundAuto"]["effects"][number]>) => void;
   updateStaticWatermark: (patch: Partial<RhythmBallProject["animation"]["staticWatermark"]>) => void;
   updateUpscaler: (patch: Partial<RhythmBallProject["animation"]["upscaler"]>) => void;
+  updateFrameBooster: (patch: Partial<RhythmBallProject["animation"]["frameBooster"]>) => void;
   updateVideoEditor: (patch: Partial<Omit<RhythmBallProject["animation"]["videoEditor"], "assets" | "tracks" | "clips" | "selectedClipIds" | "effectClips" | "selectedEffectClipIds">>) => void;
   addVideoEditorAssets: (assets: readonly VideoEditorAsset[]) => void;
   removeVideoEditorAsset: (assetId: string) => void;
@@ -298,6 +311,7 @@ function normalizeVideoEditorForProject(videoEditor: VideoEditorSettings): Rhyth
     })),
     clips: videoEditor.clips.map((clip) => ({
       ...clip,
+      reversed: clip.reversed ?? false,
       speed: clip.speed ?? { mode: "constant" as const, constant: 1, points: [], preservePitch: false },
       imageShadow: { ...defaultVideoEditorImageShadow, ...(clip.imageShadow ?? {}) }
     }))
@@ -328,6 +342,7 @@ function defaultVideoEditorClip(id: string, asset: VideoEditorAsset, placement: 
   return {
     id, assetId: asset.id, trackId: placement.trackId,
     startSeconds: placement.startSeconds, durationSeconds: placement.durationSeconds, sourceInSeconds: 0,
+    reversed: false,
     fadeInSeconds: 0, fadeOutSeconds: 0, fadeCurve: "smooth",
     audioFadeInSeconds: 0, audioFadeOutSeconds: 0,
     blendMode: "normal", blendIntensity: 1,
@@ -391,6 +406,10 @@ function moveTargetEffects(settings: VideoEditorSettings, clips: readonly VideoE
   return reconcileVideoEditorEffects({ ...settings, clips: [...clips] }, shifted);
 }
 
+function clampSongPlayerOffset(offsetMs: number, fullTrackDurationSeconds: number | null, fragmentDurationSeconds: number): number {
+  return songPlayerPersistedOffsetMs(offsetMs, fragmentDurationSeconds, fullTrackDurationSeconds);
+}
+
 export const useProjectStore = create<ProjectState>((set) => ({
   project: createProject(), filePath: null, dirty: false, status: "Pronto", eventHistory: [], eventFuture: [], videoEditorHistory: [], videoEditorFuture: [], selectedEventId: null, selectedEventIds: [],
   newProject: () => set({ project: createProject(), filePath: null, dirty: false, status: "Nuovo progetto creato", eventHistory: [], eventFuture: [], videoEditorHistory: [], videoEditorFuture: [], selectedEventId: null, selectedEventIds: [] }),
@@ -398,6 +417,13 @@ export const useProjectStore = create<ProjectState>((set) => ({
   renameProject: (name) => set((state) => ({ project: { ...state.project, project: { ...state.project.project, name } }, dirty: true })),
   attachAudio: (metadata, waveform, options = {}) => set((state) => {
     const preserveSubtitleTrack = options.preserveSubtitleTrack === true;
+    const songPlayer = state.project.animation.songPlayer;
+    const selectedFullTrack = songPlayer.fullTrackAssetId ? songPlayer.assets.find((asset) => asset.id === songPlayer.fullTrackAssetId) : undefined;
+    const selectedOffsetMs = clampSongPlayerOffset(songPlayer.match.selectedOffsetMs, selectedFullTrack?.durationSeconds ?? null, metadata.durationSeconds);
+    const fragmentChanged = Boolean(songPlayer.match.fragmentHash) && songPlayer.match.fragmentHash !== metadata.hash;
+    const songPlayerMatch = fragmentChanged
+      ? { ...songPlayer.match, selectedOffsetMs, state: "idle" as const, resolution: "auto" as const, fragmentHash: "", fullTrackHash: "", confidence: 0, candidates: [], error: "Il frammento audio è cambiato." }
+      : { ...songPlayer.match, selectedOffsetMs };
     return {
       project: {
         ...state.project,
@@ -405,6 +431,7 @@ export const useProjectStore = create<ProjectState>((set) => ({
         analysis: { ...state.project.analysis, waveform },
         animation: {
           ...state.project.animation,
+          songPlayer: { ...songPlayer, match: songPlayerMatch },
           teddySing: { ...state.project.animation.teddySing, phonemesGenerated: false, phonemeCues: [] },
           proSubtitles: preserveSubtitleTrack
             ? state.project.animation.proSubtitles
@@ -422,7 +449,26 @@ export const useProjectStore = create<ProjectState>((set) => ({
     project: { ...state.project, analysis: { ...state.project.analysis, analyzerVersion: result.analyzerVersion, cacheKey: `${state.project.audio.hash}:${result.analyzerVersion}`, globalBpm: result.globalBpm, localTempo: result.localTempo, segments: result.lowEnergySegments }, events },
     dirty: true, status: analysisSummary(result, events), eventHistory: [...state.eventHistory, state.project.events], eventFuture: []
   }; }),
-  setAspectRatio: (aspectRatio) => set((state) => ({ project: { ...state.project, canvas: { ...state.project.canvas, aspectRatio, previewWidth: aspectRatio === "9:16" ? 540 : 960, previewHeight: aspectRatio === "9:16" ? 960 : 540, exportWidth: aspectRatio === "9:16" ? 1080 : 1920, exportHeight: aspectRatio === "9:16" ? 1920 : 1080 } }, dirty: true })),
+  setAspectRatio: (aspectRatio) => set((state) => { const presets: Record<string,[number,number,number,number]>={"9:16":[540,960,1080,1920],"16:9":[960,540,1920,1080],"1:1":[720,720,1080,1080],"4:5":[648,810,1080,1350]};const preset=presets[aspectRatio]??[state.project.canvas.previewWidth,state.project.canvas.previewHeight,state.project.canvas.exportWidth,state.project.canvas.exportHeight];return { project: { ...state.project, canvas: { ...state.project.canvas, aspectRatio, previewWidth:preset[0],previewHeight:preset[1],exportWidth:preset[2],exportHeight:preset[3] } }, dirty: true };}),
+  setCanvasFormat: ({ aspectRatio, width, height }) => set((state) => {
+    const presets: Record<string, [number, number, number, number]> = { "9:16": [540, 960, 1080, 1920], "16:9": [960, 540, 1920, 1080], "1:1": [720, 720, 1080, 1080], "4:5": [648, 810, 1080, 1350] };
+    const preset = presets[aspectRatio]; const previewWidth = width ?? preset?.[0] ?? state.project.canvas.previewWidth; const previewHeight = height ?? preset?.[1] ?? state.project.canvas.previewHeight; const exportWidth = preset?.[2] ?? Math.max(64, width ?? state.project.canvas.exportWidth); const exportHeight = preset?.[3] ?? Math.max(64, height ?? state.project.canvas.exportHeight);
+    return { project: { ...state.project, canvas: { ...state.project.canvas, aspectRatio, previewWidth, previewHeight, exportWidth, exportHeight } }, dirty: true };
+  }),
+  registerSongPlayerFullTrack: (asset) => set((state) => ({ project: { ...state.project, animation: { ...state.project.animation, songPlayer: { ...state.project.animation.songPlayer, assets: [...state.project.animation.songPlayer.assets.filter((item) => item.id !== asset.id), asset].slice(-8), fullTrackAssetId: asset.id, match: { ...state.project.animation.songPlayer.match, selectedOffsetMs: clampSongPlayerOffset(state.project.animation.songPlayer.match.selectedOffsetMs, asset.durationSeconds, state.project.audio.durationSeconds), state: "idle", resolution: "auto", fragmentHash: "", fullTrackHash: "", confidence: 0, candidates: [], error: null } } } }, dirty: true, status: `${asset.fileName} registrata come traccia completa` })),
+  removeSongPlayerAsset: (assetId) => set((state) => { const settings = state.project.animation.songPlayer; const assets = settings.assets.filter((asset) => asset.id !== assetId); const selected = settings.fullTrackAssetId === assetId; return { project: { ...state.project, animation: { ...state.project.animation, songPlayer: { ...settings, assets, fullTrackAssetId: selected ? null : settings.fullTrackAssetId, match: selected ? { ...settings.match, selectedOffsetMs: 0, state: "idle", resolution: "auto", fragmentHash: "", fullTrackHash: "", confidence: 0, candidates: [], error: null } : settings.match } } }, dirty: true }; }),
+  updateSongPlayer: (patch) => set((state) => ({ project: { ...state.project, animation: { ...state.project.animation, songPlayer: { ...state.project.animation.songPlayer, ...patch } } }, dirty: true })),
+  updateCassetteDesk: (patch) => set((state) => ({ project: { ...state.project, animation: { ...state.project.animation, cassetteDesk: { ...state.project.animation.cassetteDesk, ...patch } } }, dirty: true })),
+  applyCassetteDeskExtractedPalette: (colors) => set((state) => { const settings = state.project.animation.cassetteDesk; if (!settings.autoPalette) return state; const palette = [colors[0] ?? settings.palette[0], colors[1] ?? settings.palette[1], colors[2] ?? settings.palette[2]] as [string, string, string]; return { project: { ...state.project, animation: { ...state.project.animation, cassetteDesk: { ...settings, palette } } }, dirty: true }; }),
+  setSongPlayerPalette: (colors) => set((state) => { const settings = state.project.animation.songPlayer; const palette = [colors[0] ?? settings.palette[0], colors[1] ?? settings.palette[1], colors[2] ?? settings.palette[2]] as [string, string, string]; return { project: { ...state.project, animation: { ...state.project.animation, songPlayer: { ...settings, palette, autoPalette: false } } }, dirty: true }; }),
+  applySongPlayerExtractedPalette: (colors) => set((state) => { const settings = state.project.animation.songPlayer; if (!settings.autoPalette) return state; const palette = [colors[0] ?? settings.palette[0], colors[1] ?? settings.palette[1], colors[2] ?? settings.palette[2]] as [string, string, string]; return { project: { ...state.project, animation: { ...state.project.animation, songPlayer: { ...settings, palette } } }, dirty: true }; }),
+  setSongPlayerMatch: (match) => set((state) => { const settings = state.project.animation.songPlayer; const asset = settings.fullTrackAssetId ? settings.assets.find((item) => item.id === settings.fullTrackAssetId) : undefined; if ((match.fragmentHash && match.fragmentHash !== state.project.audio.hash) || (match.fullTrackHash && match.fullTrackHash !== asset?.hash)) return { status: "Matching ignorato: hash non coerenti" }; const selectedOffsetMs = clampSongPlayerOffset(match.selectedOffsetMs, asset?.durationSeconds ?? null, state.project.audio.durationSeconds); return { project: { ...state.project, animation: { ...state.project.animation, songPlayer: { ...settings, match: { ...match, selectedOffsetMs } } } }, dirty: true }; }),
+  cancelSongPlayerMatch: (owner) => set((state) => {
+    const settings = state.project.animation.songPlayer; const asset = settings.fullTrackAssetId ? settings.assets.find((item) => item.id === settings.fullTrackAssetId) : undefined;
+    if (state.project.project.id !== owner.projectId || owner.fragmentHash !== state.project.audio.hash || owner.fullTrackHash !== asset?.hash || settings.match.state !== "running") return state;
+    return { project: { ...state.project, animation: { ...state.project.animation, songPlayer: { ...settings, match: { ...settings.match, state: "idle", resolution: "auto", confidence: 0, candidates: [], error: null } } } }, dirty: true, status: "Matching Song Player annullato" };
+  }),
+  setSongPlayerManualOffset: (offsetMs) => set((state) => { const settings = state.project.animation.songPlayer; const selected = settings.fullTrackAssetId ? settings.assets.find((asset) => asset.id === settings.fullTrackAssetId) : null; const clamped = clampSongPlayerOffset(offsetMs, selected?.durationSeconds ?? null, state.project.audio.durationSeconds); return { project: { ...state.project, animation: { ...state.project.animation, songPlayer: { ...settings, match: { ...settings.match, state: "manual", resolution: "manual", selectedOffsetMs: clamped, confidence: 0, candidates: [], error: null, fragmentHash: state.project.audio.hash, fullTrackHash: selected?.hash ?? "" } } } }, dirty: true, status: `Offset manuale ${clamped} ms` }; }),
   setAnimationMode: (modeId, baseObjectTypes) => set((state) => ({ project: { ...state.project, animation: { ...state.project.animation, modeId, baseObjectTypes: [...baseObjectTypes] } }, dirty: true, status: `Modalità ${modeId} configurata · rigenera la base` })),
   setBaseObjectEnabled: (type, enabled) => set((state) => { const current = state.project.animation.baseObjectTypes; const next = enabled ? current.includes(type) ? current : [...current, type] : current.length > 1 ? current.filter((item) => item !== type) : current; return { project: { ...state.project, animation: { ...state.project.animation, baseObjectTypes: next } }, dirty: true, status: "Elementi base aggiornati · rigenera la scena per applicarli" }; }),
   setNewYorkMarbleCount: (secondaryMarbleCount) => set((state) => ({ project: { ...state.project, animation: { ...state.project.animation, newYorkStreets: { ...state.project.animation.newYorkStreets, secondaryMarbleCount: Math.max(1, Math.min(13, Math.round(secondaryMarbleCount))) } } }, dirty: true })),
@@ -625,6 +671,16 @@ export const useProjectStore = create<ProjectState>((set) => ({
     project: { ...state.project, animation: { ...state.project.animation, upscaler: { ...state.project.animation.upscaler, ...patch } } },
     dirty: true
   })),
+  updateFrameBooster: (patch) => set((state) => {
+    const current = state.project.animation.frameBooster;
+    const sourceChanged = patch.sourceUrl !== undefined && patch.sourceUrl !== current.sourceUrl;
+    const next = {
+      ...current,
+      ...patch,
+      ...(sourceChanged ? { sourceFps: null, sourceFrameCount: null, lastOutput: null } : {})
+    };
+    return { project: { ...state.project, animation: { ...state.project.animation, frameBooster: next } }, dirty: true };
+  }),
   updateVideoEditor: (patch) => set((state) => videoEditorState(state, { ...state.project.animation.videoEditor, ...patch })),
   addVideoEditorAssets: (assets) => set((state) => {
     const settings = state.project.animation.videoEditor;
@@ -703,6 +759,13 @@ export const useProjectStore = create<ProjectState>((set) => ({
     if (patch.speed && patch.durationSeconds === undefined && patch.sourceInSeconds === undefined && !videoEditorAssetIsStill(asset)) {
       const sourceDuration = videoEditorClipSourceDuration(clip, settings.timebase);
       candidate = { ...candidate, durationSeconds: videoEditorClipTimelineDurationForSource(sourceDuration, patch.speed, settings.timebase) };
+    }
+    if (clip.reversed && patch.durationSeconds !== undefined && patch.sourceInSeconds === undefined && !videoEditorAssetIsStill(asset)) {
+      const sourceEnd = Math.min(asset!.durationSeconds, clip.sourceInSeconds + videoEditorClipSourceDuration(clip, settings.timebase));
+      const requestedSource = videoEditorClipSourceDuration(candidate, settings.timebase);
+      candidate = requestedSource > sourceEnd
+        ? { ...candidate, sourceInSeconds: 0, durationSeconds: videoEditorClipTimelineDurationForSource(sourceEnd, candidate.speed, settings.timebase) }
+        : { ...candidate, sourceInSeconds: Math.max(0, sourceEnd - requestedSource) };
     }
     const next = clampVideoEditorClip(candidate, asset, settings.timebase);
     const clips = settings.clips.map((item) => item.id === clipId ? next : item);

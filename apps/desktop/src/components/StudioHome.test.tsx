@@ -14,11 +14,14 @@ describe("StudioHome", () => {
     expect(screen.getByRole("button", { name: /Photo & Video Studio/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Video Editor/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Music/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /LongCat Video/ })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Photo & Video Studio/ }));
     expect(onEnterArea).toHaveBeenCalledWith("photoVideoStudio");
     expect(useProjectStore.getState().project.animation.modeId).toBe("staticWatermark");
     fireEvent.click(screen.getByRole("button", { name: /Music/ }));
     expect(onEnterArea).toHaveBeenLastCalledWith("music");
     expect(useProjectStore.getState().project.animation.modeId).toBe("aiQuantizer");
+    fireEvent.click(screen.getByRole("button", { name: /LongCat Video/ }));
+    expect(onEnterArea).toHaveBeenLastCalledWith("longCatVideo");
   });
 });

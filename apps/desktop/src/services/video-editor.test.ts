@@ -241,6 +241,19 @@ describe("Video Editor · estensione trascinando i bordi", () => {
     expect(trimmed?.sourceInSeconds).toBe(1);
   });
 
+  it("rifila entrambi i bordi inversi preservando il fotogramma sul bordo opposto", () => {
+    const reversed = clip({ id: "reverse-trim", assetId: "v", trackId: mainTrack, startSeconds: 2, durationSeconds: 3, sourceInSeconds: 1, reversed: true });
+    const reverseState = settings(state.assets, [reversed], { snapEnabled: false });
+    const trimmedStart = videoEditorTrimClip(reverseState, reversed.id, "start", 2.5)!;
+    const trimmedEnd = videoEditorTrimClip(reverseState, reversed.id, "end", 4.5)!;
+
+    expect(trimmedStart.sourceInSeconds).toBe(1);
+    expect(videoEditorSourceTime(trimmedStart, trimmedStart.startSeconds)).toBeCloseTo(videoEditorSourceTime(reversed, 2.5), 10);
+    expect(trimmedEnd.sourceInSeconds).toBeCloseTo(1.5, 10);
+    expect(videoEditorSourceTime(trimmedEnd, trimmedEnd.startSeconds)).toBeCloseTo(videoEditorSourceTime(reversed, reversed.startSeconds), 10);
+    expect(videoEditorSourceTime(trimmedEnd, videoEditorClipEnd(trimmedEnd))).toBeCloseTo(1.5, 10);
+  });
+
   it("estende un fermo immagine ben oltre la durata di ingresso, in entrambe le direzioni", () => {
     expect(videoEditorTrimClip(state, "image", "end", 120)?.durationSeconds).toBeCloseTo(100, 10);
     const extended = videoEditorTrimClip(state, "image", "start", 5);
@@ -308,6 +321,18 @@ describe("Video Editor · taglio", () => {
     expect(right.fadeOutSeconds).toBe(.75);
     expect(right.audioFadeInSeconds).toBe(0);
     expect(left.durationSeconds + right.durationSeconds).toBe(source.durationSeconds);
+  });
+
+  it("divide una clip inversa senza saltare o duplicare il materiale", () => {
+    const source = clip({ id: "reverse", assetId: "a", trackId: mainTrack, startSeconds: 2, durationSeconds: 6, sourceInSeconds: 1, reversed: true });
+    const [left, right] = videoEditorSplitClip(source, 5, "reverse-right")!;
+
+    expect(videoEditorSourceTime(left, left.startSeconds)).toBeCloseTo(7, 10);
+    expect(videoEditorSourceTime(left, videoEditorClipEnd(left))).toBeCloseTo(4, 10);
+    expect(videoEditorSourceTime(right, right.startSeconds)).toBeCloseTo(4, 10);
+    expect(videoEditorSourceTime(right, videoEditorClipEnd(right))).toBeCloseTo(1, 10);
+    expect(left.sourceInSeconds).toBe(4);
+    expect(right.sourceInSeconds).toBe(1);
   });
 
   it("accorcia una dissolvenza che non entra nella metà che la eredita", () => {
@@ -478,6 +503,14 @@ describe("Video Editor · composizione dei livelli", () => {
     // Fuori dalla clip il tempo resta dentro i bordi del materiale usato.
     expect(videoEditorSourceTime(trimmed, 0)).toBe(7);
     expect(videoEditorSourceTime(trimmed, 99)).toBe(9);
+  });
+
+  it("riporta il tempo sorgente in ordine decrescente per una clip inversa", () => {
+    const reversed = clip({ id: "reverse", assetId: "a", trackId: mainTrack, startSeconds: 3, durationSeconds: 2, sourceInSeconds: 7, reversed: true });
+    expect(videoEditorSourceTime(reversed, 3)).toBe(9);
+    expect(videoEditorSourceTime(reversed, 4)).toBe(8);
+    expect(videoEditorSourceTime(reversed, 5)).toBe(7);
+    expect(videoEditorVisibleLayers(settings([asset({ id: "a" })], [reversed]), 3.5)[0]?.sourceTimeSeconds).toBeCloseTo(8.5, 10);
   });
 
   it("applica alla preview gli stessi blocchi Fade In/Out dell’export", () => {

@@ -26,6 +26,10 @@ describe("ExportDialog", () => {
     expect(onStart).toHaveBeenLastCalledWith(expect.objectContaining({ width: 1080, height: 1920 }));
   });
 
+  it.each([["1:1", "1080x1080"], ["4:5", "1080x1350"]] as const)("preserva il rapporto %s nei preset", (aspectRatio, expected) => { render(<ExportDialog duration={10} running={false} progress={0} currentFrame={0} totalFrames={0} error={null} aspectRatio={aspectRatio} onClose={vi.fn()} onCancel={vi.fn()} onStart={vi.fn()} />); expect(screen.getByLabelText("Risoluzione")).toHaveValue(expected); expect(screen.getByLabelText("Risoluzione")).toHaveTextContent(aspectRatio); });
+
+  it("usa le dimensioni esatte del canvas custom", () => { const onStart = vi.fn(); render(<ExportDialog duration={10} running={false} progress={0} currentFrame={0} totalFrames={0} error={null} aspectRatio="custom" customDimensions={{ width: 1234, height: 778 }} onClose={vi.fn()} onCancel={vi.fn()} onStart={onStart} />); expect(screen.getByLabelText("Risoluzione")).toHaveValue("1234x778"); fireEvent.click(screen.getByRole("button", { name: "Scegli destinazione e crea video" })); expect(onStart).toHaveBeenCalledWith(expect.objectContaining({ width: 1234, height: 778 })); });
+
   it("usa la qualità massima come impostazione predefinita", () => {
     const onStart = vi.fn(); render(<ExportDialog duration={10} running={false} progress={0} currentFrame={0} totalFrames={0} error={null} onClose={vi.fn()} onCancel={vi.fn()} onStart={onStart} />);
     expect(screen.getByLabelText("Qualità codifica")).toHaveValue("maximum"); fireEvent.click(screen.getByText("Scegli destinazione e crea video")); expect(onStart).toHaveBeenCalledWith(expect.objectContaining({ quality: "maximum" }));
@@ -36,6 +40,8 @@ describe("ExportDialog", () => {
     expect(screen.getByText("MP4 · H.264/AAC offline verificato")).toBeInTheDocument();
     expect(screen.getByText(/calcola ogni frame offline/i)).toBeInTheDocument();
   });
+
+  it("fa scegliere se Cassette Desk incorpora il brano ma mantiene sempre gli effetti",()=>{const onStart=vi.fn();render(<ExportDialog duration={20} running={false} progress={0} currentFrame={0} totalFrames={0} error={null} cassetteDesk onClose={vi.fn()} onCancel={vi.fn()} onStart={onStart}/>);const audio=screen.getByLabelText("Audio export Cassette Desk");expect(audio).toHaveValue("songAndEffects");fireEvent.change(audio,{target:{value:"effectsOnly"}});expect(screen.getByText(/Inserimento, sportello e pressione PLAY restano/)).toBeInTheDocument();fireEvent.click(screen.getByRole("button",{name:"Scegli destinazione e crea video"}));expect(onStart).toHaveBeenCalledWith(expect.objectContaining({cassetteDesk:{audioMode:"effectsOnly"}}));});
 
   it("offre i preset 16:9 fino a 8K e 120 fps per From 9:16 to 16:9", () => {
     const onStart = vi.fn();

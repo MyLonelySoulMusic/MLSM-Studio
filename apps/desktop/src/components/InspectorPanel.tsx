@@ -3,9 +3,11 @@ import type { RhythmBallProject } from "@rbs/project-schema";
 import { backgroundPresets, defaultSceneLight, sceneObjectTypeOptions, useSceneStore, type EditableSceneObject, type RailType, type SceneObjectType, type SceneLightAppearance } from "../store/scene-store";
 import { useProjectStore } from "../store/project-store";
 import { extractPaletteFromImage, extractPaletteFromVideo } from "../services/image-palette";
+import { SongPlayerInspector } from "./SongPlayerInspector";
+import { CassetteDeskInspector } from "./CassetteDeskInspector";
 
 type MusicEvent = RhythmBallProject["events"][number];
-interface InspectorProps { name: string; aspectRatio: string; event: MusicEvent | undefined; events: MusicEvent[]; duration: number; availableObjectTypes: readonly SceneObjectType[]; onRename: (value: string) => void; onAspectRatio: (ratio: "9:16" | "16:9") => void; onSelectObject: (id: string) => void; onChangeObjectType: (id: string, type: SceneObjectType) => void; onUpdateEvent: (id: string, patch: Partial<MusicEvent>) => void; onDeleteEvent: (id: string) => void; }
+interface InspectorProps { name: string; aspectRatio: RhythmBallProject["canvas"]["aspectRatio"]; event: MusicEvent | undefined; events: MusicEvent[]; duration: number; availableObjectTypes: readonly SceneObjectType[]; onRename: (value: string) => void; onAspectRatio: (ratio: RhythmBallProject["canvas"]["aspectRatio"]) => void; onSelectObject: (id: string) => void; onChangeObjectType: (id: string, type: SceneObjectType) => void; onUpdateEvent: (id: string, patch: Partial<MusicEvent>) => void; onDeleteEvent: (id: string) => void; }
 
 export function InspectorPanel({ name, aspectRatio, event, events, duration, availableObjectTypes, onRename, onAspectRatio, onSelectObject, onChangeObjectType, onUpdateEvent, onDeleteEvent }: InspectorProps) {
   const [tab, setTab] = useState<"scene" | "selection">("scene"); const [paletteStatus, setPaletteStatus] = useState("");
@@ -15,6 +17,9 @@ export function InspectorPanel({ name, aspectRatio, event, events, duration, ava
   const animationModeId = useProjectStore((state) => state.project.animation.modeId); const proSubtitles = useProjectStore((state) => state.project.animation.proSubtitles); const updateProSubtitles = useProjectStore((state) => state.updateProSubtitles); const setNewYorkGroupColor = useProjectStore((state) => state.setNewYorkGroupColor); const setCoverSpherePalette = useProjectStore((state) => state.setCoverSpherePalette); const updateWalkingCube = useProjectStore((state) => state.updateWalkingCube); const setStereoUnfoldPalette = useProjectStore((state) => state.setStereoUnfoldPalette); const setTeddyWalkPalette = useProjectStore((state) => state.setTeddyWalkPalette); const setTeddySingPalette = useProjectStore((state) => state.setTeddySingPalette);
   const selectionKey = event?.id ?? selected?.id;
   useEffect(() => { if (selectionKey) setTab("selection"); }, [selectionKey]);
+
+  if (animationModeId === "songPlayer") return <SongPlayerInspector aspectRatio={aspectRatio} onAspectRatio={onAspectRatio} />;
+  if (animationModeId === "cassetteDesk") return <CassetteDeskInspector aspectRatio={aspectRatio} onAspectRatio={onAspectRatio} />;
 
   if (animationModeId === "proSubtitles") return <aside className="panel inspector subtitle-video-inspector pro-subtitles-inspector" aria-label="Inspector">
     <div className="panel-heading"><strong>Layer professionale</strong><span className="type-badge">Pro Subtitles</span></div>

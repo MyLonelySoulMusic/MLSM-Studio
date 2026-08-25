@@ -11,6 +11,7 @@ Questa documentazione separa l’uso quotidiano dai dettagli tecnici.
 | [Photo & Video Studio](photo-video-studio.md) | Watermark Remover e Upscaler. |
 | [Video Editor](video-editor.md) | Pool media, livelli, effetti, montaggio ed export. |
 | [Music](music.md) | AI Quantizer e runtime locale. |
+| [LongCat Video](longcat-video.md) | Generazione video locale con la pipeline ufficiale Meituan. |
 | [Memory](memory.md) | Catalogazione, ricerca semantica, anteprima e copia. |
 | [Export](export.md) | Codec, formati, qualità e verifica anti-drop. |
 

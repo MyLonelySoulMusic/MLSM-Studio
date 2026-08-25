@@ -9,6 +9,10 @@
 - Rust/Cargo per i pacchetti Tauri
 - Rubber Band per le funzioni audio che lo richiedono
 
+LongCat Video ha requisiti separati e più elevati: Linux/WSL2, Python 3.10,
+driver NVIDIA compatibili con CUDA 12.4 e spazio sufficiente per il checkpoint
+da 13,6 miliardi di parametri. Non viene installato dal setup generale.
+
 Gli script di installazione rilevano il sistema operativo e installano o verificano questi componenti.
 
 ## Comandi principali
@@ -21,6 +25,7 @@ npm run typecheck        # TypeScript
 npm run lint             # ESLint
 npm test                 # suite Vitest
 npm run install:verify   # diagnosi macchina/runtime
+npm run rife:verify      # verifica artifact, runtime e self-test reale RIFE
 ```
 
 Il server si avvia soltanto con `npm run dev` o con i launcher. Test, verifica e build non lo avviano.
@@ -32,9 +37,25 @@ npm run upscaler:setup
 npm run upscaler:server
 npm run ai-quantizer:setup
 npm run ai-quantizer:server
+npm run longcat-video:setup          # repository, runtime CUDA e checkpoint
+npm run longcat-video:setup:runtime  # senza scaricare il checkpoint
+npm run longcat-video:check          # capability check reale
+npm run longcat-video:server         # bridge locale per client browser
 ```
 
 Gli ambienti `.venv-upscaler` e `.venv-ai-quantizer` sono separati e ignorati da Git. I checkpoint vengono scaricati al primo uso del modello, non durante ogni avvio.
+
+Il setup LongCat usa `.venv-longcat-video` e `.longcat-video`, entrambi ignorati
+da Git. Il repository ufficiale è fissato alla revisione
+`6b3f4b8582a8bc3f20f795735f5383716c4ba794`; i pesi vengono scaricati da
+`meituan-longcat/LongCat-Video`. È possibile indicare installazioni esterne con
+`MLSM_LONGCAT_PYTHON`, `MLSM_LONGCAT_TORCHRUN`,
+`MLSM_LONGCAT_REPOSITORY` e `MLSM_LONGCAT_CHECKPOINT`.
+
+Il runtime RIFE viene preparato solo quando richiesto da Frame Booster o
+interpolazione del Video Editor. `npm run rife:verify` non scarica o simula un
+risultato: restituisce esito positivo soltanto quando il runtime verificato è
+presente e la mini inferenza reale passa sul dispositivo selezionato.
 
 ## Installer e launcher
 

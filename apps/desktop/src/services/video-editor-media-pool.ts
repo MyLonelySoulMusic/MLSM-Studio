@@ -527,7 +527,10 @@ export class VideoEditorMediaPool {
         : audioPlaybackEnabled(clip, track);
       const inside = timelineInside && playbackNeeded;
       const armed = timelineArmed && playbackNeeded;
-      const gainValue = playbackNeeded ? timelineGain : 0;
+      // HTMLMediaElement non supporta playbackRate negativo in modo portabile.
+      // Le clip inverse vengono quindi campionate con seek progressivi; l'audio
+      // corretto viene ricostruito al contrario nel mixdown offline.
+      const gainValue = playbackNeeded && !clip.reversed ? timelineGain : 0;
       if (entry.routed && entry.gain && this.context) entry.gain.gain.setTargetAtTime(gainValue, this.context.currentTime, .012);
       else {
         // Senza grafo audio si ricade sul volume nativo dell’elemento, che si ferma a 100%.
@@ -535,13 +538,20 @@ export class VideoEditorMediaPool {
         element.volume = Math.max(0, Math.min(1, gainValue));
       }
       const localSeconds = Math.max(0, presentationTime - clip.startSeconds);
-      const target = videoEditorSourceTime(clip, presentationTime, settings.timebase);
+      const sourceTarget = videoEditorSourceTime(clip, presentationTime, settings.timebase);
+      const target = clip.reversed ? Math.max(clip.sourceInSeconds, sourceTarget - 1e-6) : sourceTarget;
       const playbackRate = videoEditorClipPlaybackRateAtLocalSeconds(clip, localSeconds, settings.timebase);
       if (Math.abs(element.playbackRate - playbackRate) > 1e-6) element.playbackRate = playbackRate;
       // Offline Web Audio rate automation changes pitch. Force the same honest
       // behavior in preview whenever speed is non-unity or ramped.
       const pitchPreservationAvailable = clip.speed?.mode !== "ramp" && Math.abs(playbackRate - 1) <= 1e-6;
       if ("preservesPitch" in element) (element as HTMLMediaElement & { preservesPitch: boolean }).preservesPitch = pitchPreservationAvailable && (clip.speed?.preservePitch ?? false);
+      if (clip.reversed) {
+        entry.wantedPlaying = false;
+        if (!element.paused && !entry.primePromise) element.pause();
+        if (element.readyState >= 1 && !element.seeking && Math.abs(element.currentTime - target) > seekToleranceSeconds.paused) element.currentTime = target;
+        continue;
+      }
       const decision = videoEditorPlaybackSyncDecision({
         armed,
         inside,
@@ -583,6 +593,11 @@ export class VideoEditorMediaPool {
       if (entry.kind === "video" && (track?.kind !== "video" || track.hidden)) continue;
       if (entry.kind === "audio" && !audioPlaybackEnabled(clip, track)) continue;
       const element = entry.element as HTMLMediaElement;
+      if (clip.reversed) {
+        entry.wantedPlaying = false;
+        if (!element.paused) element.pause();
+        continue;
+      }
       if (timeSeconds >= clip.startSeconds && timeSeconds < videoEditorClipEnd(clip)) {
         entry.wantedPlaying = true;
         active.push({ entry, element, kind: entry.kind });

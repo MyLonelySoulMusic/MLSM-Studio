@@ -1,7 +1,7 @@
 import type { ExportProgress } from "@rbs/export-engine";
 import type { RhythmBallProject } from "@rbs/project-schema";
 import type { ExportQuality } from "./offline-video-exporter";
-import { generatePythonUpscaledVideo } from "./upscaler-python-client";
+import { generatePythonUpscaledVideo, type RemoteVideoCheckpointPolicy } from "./upscaler-python-client";
 import { resolvedUpscalerDimensions } from "./upscaler-renderer";
 
 type UpscalerSettings = RhythmBallProject["animation"]["upscaler"];
@@ -15,6 +15,7 @@ export interface UpscalerVideoExportSettings {
   suppressDownload?: boolean;
   sourceStartSeconds?: number;
   sourceDurationSeconds?: number;
+  remoteCheckpointPolicy?: RemoteVideoCheckpointPolicy;
 }
 
 export interface UpscalerVideoExportResult {
@@ -26,6 +27,7 @@ export interface UpscalerVideoExportResult {
   audioPacketCount: number;
   tempDirectory: string;
   originalFramesDirectory: string;
+  resultPath?: string;
   blob?: Blob;
 }
 
@@ -35,6 +37,8 @@ export interface UpscalerVideoExportProgress extends ExportProgress {
   originalFramesDirectory?: string;
   width?: number;
   height?: number;
+  activeEndpoints?: string[];
+  endpointActivity?: Array<{ url: string; state: "idle" | "busy" | "error"; activeFrame: string | null; completed: number; failures: number }>;
 }
 
 function safeName(value: string): string {
@@ -78,6 +82,7 @@ export async function exportUpscaledVideo(
       ...(settings.sourceDurationSeconds !== undefined ? { sourceDurationSeconds: settings.sourceDurationSeconds } : {})
     },
     quality: settings.quality,
+    ...(settings.remoteCheckpointPolicy ? { checkpointPolicy: settings.remoteCheckpointPolicy } : {}),
     signal,
     onStatus: (status) => onProgress({
       currentFrame: status.currentFrame,
@@ -90,12 +95,17 @@ export async function exportUpscaledVideo(
       tempDirectory: status.tempDirectory,
       originalFramesDirectory: status.originalFramesDirectory,
       ...(status.effectiveWidth ? { width: status.effectiveWidth } : {}),
-      ...(status.effectiveHeight ? { height: status.effectiveHeight } : {})
+      ...(status.effectiveHeight ? { height: status.effectiveHeight } : {}),
+      ...(status.activeEndpoints ? { activeEndpoints: status.activeEndpoints } : {}),
+      ...(status.endpointActivity ? { endpointActivity: status.endpointActivity } : {})
     })
   });
   if (signal.aborted) throw new DOMException("Esportazione annullata", "AbortError");
   if (result.status.totalFrames <= 0 || result.status.currentFrame !== result.status.totalFrames) {
     throw new Error(`Controllo anti-drop fallito: elaborati ${result.status.currentFrame}/${result.status.totalFrames} frame.`);
+  }
+  if (result.status.encodedFrameCount !== result.status.totalFrames) {
+    throw new Error(`Controllo MP4 fallito: ricomposti ${result.status.encodedFrameCount ?? 0}/${result.status.totalFrames} frame.`);
   }
   const effectiveWidth = result.status.effectiveWidth ?? width;
   const effectiveHeight = result.status.effectiveHeight ?? height;
@@ -106,10 +116,11 @@ export async function exportUpscaledVideo(
     width: effectiveWidth,
     height: effectiveHeight,
     sourceFrameCount: result.status.totalFrames,
-    encodedFrameCount: result.status.currentFrame,
-    audioPacketCount: 0,
+    encodedFrameCount: result.status.encodedFrameCount,
+    audioPacketCount: result.status.audioPacketCount ?? 0,
     tempDirectory: result.status.tempDirectory,
-    originalFramesDirectory: result.status.originalFramesDirectory
+    originalFramesDirectory: result.status.originalFramesDirectory,
+    ...(result.status.resultPath ? { resultPath: result.status.resultPath } : {})
     , blob: result.blob
   };
 }

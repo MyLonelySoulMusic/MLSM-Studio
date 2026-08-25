@@ -31,6 +31,7 @@ export interface ExportDialogStartSettings {
   fps: number;
   durationSeconds: number;
   quality: ExportQuality;
+  cassetteDesk?: { audioMode:"songAndEffects"|"effectsOnly" };
   proSubtitles?: {
     outputMode: "subtitleLayer" | "completeVideo";
     backgroundMode: "transparent" | "solid";
@@ -58,13 +59,18 @@ const landscapeResolutions = [
   { value: "1920x1080", label: "1920 × 1080 (16:9 · Full HD)" },
   { value: "3840x2160", label: "3840 × 2160 (16:9 · 4K orizzontale)" }
 ] as const;
+const squareResolutions = [{ value: "720x720", label: "720 × 720 (1:1 · preview)" }, { value: "1080x1080", label: "1080 × 1080 (1:1 · Full HD)" }, { value: "2160x2160", label: "2160 × 2160 (1:1 · 4K)" }] as const;
+const fourFiveResolutions = [{ value: "648x810", label: "648 × 810 (4:5 · preview)" }, { value: "1080x1350", label: "1080 × 1350 (4:5 · Full HD)" }, { value: "2160x2700", label: "2160 × 2700 (4:5 · 4K)" }] as const;
+type ProjectAspectRatio = "9:16" | "16:9" | "1:1" | "4:5" | "custom";
 
-function projectResolutionOptions(aspectRatio: "9:16" | "16:9") {
-  return aspectRatio === "9:16" ? portraitResolutions : landscapeResolutions;
+function projectResolutionOptions(aspectRatio: ProjectAspectRatio, customDimensions?: { width: number; height: number }) {
+  if (aspectRatio === "9:16") return [...portraitResolutions]; if (aspectRatio === "16:9") return [...landscapeResolutions]; if (aspectRatio === "1:1") return [...squareResolutions]; if (aspectRatio === "4:5") return [...fourFiveResolutions];
+  const width = evenDimension(customDimensions?.width ?? 1080); const height = evenDimension(customDimensions?.height ?? 1920); return [{ value: `${width}x${height}`, label: `${width} × ${height} (custom)` }];
 }
 
-function defaultProjectResolution(aspectRatio: "9:16" | "16:9"): string {
-  return aspectRatio === "9:16" ? "1080x1920" : "1920x1080";
+function defaultProjectResolution(aspectRatio: ProjectAspectRatio, customDimensions?: { width: number; height: number }): string {
+  if (aspectRatio === "9:16") return "1080x1920"; if (aspectRatio === "16:9") return "1920x1080"; if (aspectRatio === "1:1") return "1080x1080"; if (aspectRatio === "4:5") return "1080x1350";
+  return `${evenDimension(customDimensions?.width ?? 1080)}x${evenDimension(customDimensions?.height ?? 1920)}`;
 }
 
 function evenDimension(value: number): number {
@@ -98,18 +104,20 @@ interface ExportDialogProps {
   elapsedMs?: number;
   estimatedRemainingMs?: number;
   error: string | null;
-  aspectRatio?: "9:16" | "16:9";
+  aspectRatio?: ProjectAspectRatio;
+  customDimensions?: { width: number; height: number };
   proSubtitles?: ProSubtitleDialogSettings;
   videoEditor?: VideoEditorDialogSettings | undefined;
   backgroundAuto?: BackgroundAutoDialogSettings | undefined;
   sourceVideoExport?: { label: string } | undefined;
   offlineExportProfile?: { title: string; defaultResolution: string; defaultFps: number; recommendation: string } | undefined;
+  cassetteDesk?: boolean;
   onClose: () => void;
   onCancel: () => void;
   onStart: (settings: ExportDialogStartSettings) => void;
 }
 
-export function ExportDialog({ duration, running, progress, currentFrame, totalFrames, phase = "rendering", stageProgress = progress, stageCurrentFrame = currentFrame, stageTotalFrames = totalFrames, processedBytes = 0, totalBytes = 0, indeterminate = false, estimatedRemainingMs = 0, error, aspectRatio = "9:16", proSubtitles, videoEditor, backgroundAuto, sourceVideoExport, offlineExportProfile, onClose, onCancel, onStart }: ExportDialogProps) {
+export function ExportDialog({ duration, running, progress, currentFrame, totalFrames, phase = "rendering", stageProgress = progress, stageCurrentFrame = currentFrame, stageTotalFrames = totalFrames, processedBytes = 0, totalBytes = 0, indeterminate = false, estimatedRemainingMs = 0, error, aspectRatio = "9:16", customDimensions, proSubtitles, videoEditor, backgroundAuto, sourceVideoExport, offlineExportProfile,cassetteDesk=false, onClose, onCancel, onStart }: ExportDialogProps) {
   const videoEditorResolutions = videoEditor ? videoEditorResolutionOptions(videoEditor.compositionWidth, videoEditor.compositionHeight) : [];
   const backgroundAutoSourceWidth = backgroundAuto?.sourceWidth ?? 0; const backgroundAutoSourceHeight = backgroundAuto?.sourceHeight ?? 0;
   const backgroundAutoResolutions = useMemo(() => backgroundAuto ? backgroundAutoResolutionOptions(backgroundAutoSourceWidth, backgroundAutoSourceHeight) : [], [backgroundAuto, backgroundAutoSourceHeight, backgroundAutoSourceWidth]);
@@ -119,14 +127,15 @@ export function ExportDialog({ duration, running, progress, currentFrame, totalF
       const dimensions = backgroundAutoOutputDimensions(backgroundAutoSourceWidth, backgroundAutoSourceHeight, backgroundAutoSourceWidth, backgroundAutoSourceHeight);
       native = `${dimensions.width}x${dimensions.height}`;
     } catch { /* Invalid/incompatible source dimensions fall back to an available preset. */ }
-    return backgroundAutoResolutions.find((option) => option.value === native)?.value ?? backgroundAutoResolutions.at(-1)?.value ?? defaultProjectResolution(aspectRatio);
-  }, [aspectRatio, backgroundAutoResolutions, backgroundAutoSourceHeight, backgroundAutoSourceWidth]);
-  const [resolution, setResolution] = useState(videoEditor ? `${evenDimension(videoEditor.compositionWidth)}x${evenDimension(videoEditor.compositionHeight)}` : backgroundAuto ? backgroundAutoDefaultResolution : offlineExportProfile?.defaultResolution ?? defaultProjectResolution(aspectRatio));
+    return backgroundAutoResolutions.find((option) => option.value === native)?.value ?? backgroundAutoResolutions.at(-1)?.value ?? defaultProjectResolution(aspectRatio, customDimensions);
+  }, [aspectRatio, backgroundAutoResolutions, backgroundAutoSourceHeight, backgroundAutoSourceWidth, customDimensions]);
+  const [resolution, setResolution] = useState(videoEditor ? `${evenDimension(videoEditor.compositionWidth)}x${evenDimension(videoEditor.compositionHeight)}` : backgroundAuto ? backgroundAutoDefaultResolution : offlineExportProfile?.defaultResolution ?? defaultProjectResolution(aspectRatio, customDimensions));
   const [fps, setFps] = useState(offlineExportProfile?.defaultFps ?? 30);
   const [interpolationEnabled, setInterpolationEnabled] = useState(false);
   const [interpolationTargetFps, setInterpolationTargetFps] = useState(60);
   const [interpolationMethod, setInterpolationMethod] = useState<VideoEditorInterpolationMethod>("motion");
   const [quality, setQuality] = useState<ExportQuality>("maximum");
+  const [cassetteAudioMode,setCassetteAudioMode]=useState<"songAndEffects"|"effectsOnly">("songAndEffects");
   const [proSubtitleOutputMode, setProSubtitleOutputMode] = useState<
     "subtitleLayer" | "completeVideo"
   >("subtitleLayer");
@@ -162,9 +171,9 @@ export function ExportDialog({ duration, running, progress, currentFrame, totalF
   // sopravvivere una risoluzione appartenente al rapporto precedente.
   useEffect(() => {
     if (videoEditor || offlineExportProfile || sourceVideoExport || backgroundAuto) return;
-    const allowed = projectResolutionOptions(aspectRatio).some((option) => option.value === resolution);
-    if (!allowed) setResolution(defaultProjectResolution(aspectRatio));
-  }, [aspectRatio, backgroundAuto, offlineExportProfile, resolution, sourceVideoExport, videoEditor]);
+    const allowed = projectResolutionOptions(aspectRatio, customDimensions).some((option) => option.value === resolution);
+    if (!allowed) setResolution(defaultProjectResolution(aspectRatio, customDimensions));
+  }, [aspectRatio, backgroundAuto, customDimensions, offlineExportProfile, resolution, sourceVideoExport, videoEditor]);
 
   useEffect(() => {
     if (!backgroundAuto) return;
@@ -181,6 +190,7 @@ export function ExportDialog({ duration, running, progress, currentFrame, totalF
     fps,
     durationSeconds: duration,
     quality,
+    ...(cassetteDesk?{cassetteDesk:{audioMode:cassetteAudioMode}}:{}),
     ...(proSubtitles ? {
       proSubtitles: {
         outputMode: proSubtitleOutputMode,
@@ -211,8 +221,9 @@ export function ExportDialog({ duration, running, progress, currentFrame, totalF
         </>}
       {proResUnavailable ? <p className="export-warning">ProRes 4444 richiede la build desktop con FFmpeg. La versione web non produrrà un MOV finto o privo di alpha: scegli WebM VP9 con alpha.</p> : null}
     </> : <label>{backgroundAuto ? "Format" : "Formato"}<select disabled><option>{sourceVideoExport ? "MP4 · H.264 + audio originale · proprietà sorgente" : backgroundAuto ? `MP4 · verified offline H.264/AAC · ${backgroundAutoRatioLabel(backgroundAuto.sourceWidth, backgroundAuto.sourceHeight)} source` : "MP4 · H.264/AAC offline verificato"}</option></select></label>}
+    {cassetteDesk?<label>Audio Cassette Desk<select aria-label="Audio export Cassette Desk" value={cassetteAudioMode} onChange={event=>setCassetteAudioMode(event.target.value as typeof cassetteAudioMode)} disabled={running}><option value="songAndEffects">Brano caricato + effetti meccanici</option><option value="effectsOnly">Solo effetti meccanici · per suono ufficiale TikTok</option></select><small>{cassetteAudioMode==="effectsOnly"?"Il brano non viene incorporato. Inserimento, sportello e pressione PLAY restano nel video.":"Il brano parte dopo l’intro; tutti gli effetti meccanici vengono mantenuti."}</small></label>:null}
     {!preservesSourceVideo ? <>
-      <label>{backgroundAuto ? "Resolution · format" : "Risoluzione · formato"} {videoEditor ? "composizione" : backgroundAuto ? `${backgroundAutoRatioLabel(backgroundAuto.sourceWidth, backgroundAuto.sourceHeight)} source` : offlineExportProfile ? "16:9" : aspectRatio}<select aria-label={backgroundAuto ? "Resolution" : "Risoluzione"} value={resolution} onChange={(event) => setResolution(event.target.value)} disabled={running}>{videoEditor ? videoEditorResolutions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>) : backgroundAuto ? backgroundAutoResolutions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>) : offlineExportProfile ? <><option value="1920x1080">1920 × 1080 (16:9 · Full HD)</option><option value="2560x1440">2560 × 1440 (16:9 · QHD / 2K)</option><option value="3840x2160">3840 × 2160 (16:9 · 4K consigliato)</option><option value="5120x2880">5120 × 2880 (16:9 · 5K)</option><option value="7680x4320">7680 × 4320 (16:9 · 8K)</option></> : projectResolutionOptions(aspectRatio).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+      <label>{backgroundAuto ? "Resolution · format" : "Risoluzione · formato"} {videoEditor ? "composizione" : backgroundAuto ? `${backgroundAutoRatioLabel(backgroundAuto.sourceWidth, backgroundAuto.sourceHeight)} source` : offlineExportProfile ? "16:9" : aspectRatio}<select aria-label={backgroundAuto ? "Resolution" : "Risoluzione"} value={resolution} onChange={(event) => setResolution(event.target.value)} disabled={running}>{videoEditor ? videoEditorResolutions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>) : backgroundAuto ? backgroundAutoResolutions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>) : offlineExportProfile ? <><option value="1920x1080">1920 × 1080 (16:9 · Full HD)</option><option value="2560x1440">2560 × 1440 (16:9 · QHD / 2K)</option><option value="3840x2160">3840 × 2160 (16:9 · 4K consigliato)</option><option value="5120x2880">5120 × 2880 (16:9 · 5K)</option><option value="7680x4320">7680 × 4320 (16:9 · 8K)</option></> : projectResolutionOptions(aspectRatio, customDimensions).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
     <label>{backgroundAuto ? "Frame rate" : "Frame rate"}<select aria-label="Frame rate" value={fps} onChange={(event) => setFps(Number(event.target.value))} disabled={running}>{[24, 25, 30, 50, 60, 120].map((value) => <option key={value}>{value}</option>)}</select></label>
     </> : null}
     {videoEditor ? <VideoEditorFrameInterpolationSection language={language} baseFps={fps} disabled={running} value={{ enabled: interpolationEnabled, targetFps: interpolationTargetFps, method: interpolationMethod }} onChange={(next) => { setInterpolationEnabled(next.enabled); setInterpolationTargetFps(next.targetFps); setInterpolationMethod(next.method); }} /> : null}

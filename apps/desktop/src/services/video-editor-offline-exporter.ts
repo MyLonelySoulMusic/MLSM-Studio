@@ -31,7 +31,7 @@ import {
 import { createVideoEditorFrameRenderer, videoEditorSettingsAtAutomationFrame, type VideoEditorFrameSource } from "./video-editor-renderer";
 import { videoEditorSessionFile } from "./video-editor-import";
 import { videoEditorInterpolateJob, videoEditorInterpolationCommand, videoEditorInterpolationHealth, type VideoEditorInterpolationJobStatus, type VideoEditorInterpolationMethod } from "./video-editor-interpolation-client";
-import { videoEditorClipPlaybackRateAtLocalSeconds } from "./video-editor-speed";
+import { videoEditorClipPlaybackRateAtLocalSeconds, videoEditorClipSourceDuration } from "./video-editor-speed";
 
 export interface VideoEditorOfflineExportSettings {
   width: number;
@@ -109,6 +109,24 @@ export function videoEditorAudioConsumedSourceSeconds(points: readonly VideoEdit
     const nextBoundary = points[index + 1]?.timeSeconds ?? clipEnd;
     return total + point.rate * Math.max(0, nextBoundary - point.timeSeconds);
   }, 0);
+}
+
+/** Offset nel buffer usato dal mixdown. Un buffer invertito rappresenta il tempo
+ * originale `duration - t`, quindi l'attacco è il bordo alto dell'intervallo. */
+export function videoEditorAudioSourceOffset(clip: VideoEditorClip, settings: VideoEditorSettings, bufferDuration: number): number {
+  if (!clip.reversed) return Math.max(0, Math.min(bufferDuration, clip.sourceInSeconds));
+  const sourceEnd = Math.min(bufferDuration, clip.sourceInSeconds + videoEditorClipSourceDuration(clip, settings.timebase));
+  return Math.max(0, bufferDuration - sourceEnd);
+}
+
+function reversedAudioBuffer(context: OfflineAudioContext, source: AudioBuffer): AudioBuffer {
+  const output = context.createBuffer(source.numberOfChannels, source.length, source.sampleRate);
+  for (let channel = 0; channel < source.numberOfChannels; channel += 1) {
+    const input = source.getChannelData(channel);
+    const target = output.getChannelData(channel);
+    for (let index = 0; index < input.length; index += 1) target[index] = input[input.length - 1 - index] ?? 0;
+  }
+  return output;
 }
 
 function safeName(value: string): string {
@@ -333,6 +351,7 @@ export async function renderVideoEditorAudioMix(settings: VideoEditorSettings, d
   if (!audible.length) return null;
   const context = new OfflineAudioContext({ numberOfChannels: MIX_CHANNELS, length: Math.max(1, Math.ceil(durationSeconds * MIX_SAMPLE_RATE)), sampleRate: MIX_SAMPLE_RATE });
   const decoded = new Map<string, AudioBuffer | null>();
+  const reversed = new Map<string, AudioBuffer>();
   let scheduled = 0;
   for (const clip of audible) {
     throwIfAborted(signal);
@@ -350,13 +369,16 @@ export async function renderVideoEditorAudioMix(settings: VideoEditorSettings, d
     }
     const buffer = decoded.get(asset.id);
     if (!buffer) continue;
-    const offset = Math.max(0, clip.sourceInSeconds);
+    const playbackBuffer = clip.reversed
+      ? reversed.get(asset.id) ?? (() => { const value = reversedAudioBuffer(context, buffer); reversed.set(asset.id, value); return value; })()
+      : buffer;
+    const offset = videoEditorAudioSourceOffset(clip, settings, buffer.duration);
     const clipEnd = Math.min(durationSeconds, videoEditorClipEnd(clip));
     const playDuration = Math.max(0, Math.min(clip.durationSeconds, durationSeconds - clip.startSeconds));
     if (playDuration <= 0 || offset >= buffer.duration) continue;
     const track = settings.tracks.find((item) => item.id === clip.trackId) ?? null;
     const source = context.createBufferSource();
-    source.buffer = buffer;
+    source.buffer = playbackBuffer;
     const rateAutomation = videoEditorAudioRateAutomation(clip, settings, clipEnd);
     for (const point of rateAutomation) source.playbackRate.setValueAtTime(point.rate, point.timeSeconds);
     const gain = context.createGain();

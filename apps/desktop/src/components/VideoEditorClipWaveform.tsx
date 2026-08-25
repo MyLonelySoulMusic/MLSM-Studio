@@ -8,7 +8,7 @@ const drawHeight = 48;
  * Forma d’onda della porzione di sorgente effettivamente usata dalla clip: trimmando
  * un bordo l’onda scorre di conseguenza, così il montaggio resta leggibile a occhio.
  */
-export function VideoEditorClipWaveform({ waveform, sourceInSeconds, durationSeconds, assetDurationSeconds, color }: { waveform: readonly number[]; sourceInSeconds: number; durationSeconds: number; assetDurationSeconds: number; color: string }) {
+export function VideoEditorClipWaveform({ waveform, sourceInSeconds, durationSeconds, assetDurationSeconds, color, reversed = false }: { waveform: readonly number[]; sourceInSeconds: number; durationSeconds: number; assetDurationSeconds: number; color: string; reversed?: boolean }) {
   const canvas = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -26,14 +26,15 @@ export function VideoEditorClipWaveform({ waveform, sourceInSeconds, durationSec
     const middle = drawHeight / 2;
     context.fillStyle = color;
     for (let x = 0; x < drawWidth; x += 1) {
-      const index = from + Math.floor(x / drawWidth * span);
+      const offset = Math.min(span - 1, Math.floor(x / drawWidth * span));
+      const index = reversed ? to - 1 - offset : from + offset;
       const minimum = waveform[index * 2] ?? 0;
       const maximum = waveform[index * 2 + 1] ?? 0;
       const top = middle - Math.max(0, maximum) * middle;
       const bottom = middle - Math.min(0, minimum) * middle;
       context.fillRect(x, top, 1, Math.max(1, bottom - top));
     }
-  }, [assetDurationSeconds, color, durationSeconds, sourceInSeconds, waveform]);
+  }, [assetDurationSeconds, color, durationSeconds, reversed, sourceInSeconds, waveform]);
 
   return <canvas ref={canvas} className="video-editor-clip-waveform" width={drawWidth} height={drawHeight} aria-hidden="true" />;
 }

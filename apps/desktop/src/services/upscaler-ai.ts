@@ -3,6 +3,8 @@ import type { RhythmBallProject } from "@rbs/project-schema";
 import ortWasmJsepUrl from "../../../../node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.jsep.wasm?url";
 import { upscalerModels } from "./upscaler-runtime";
 import { generatePythonUpscale, pythonUpscalerHealth, shouldUsePythonUpscaler } from "./upscaler-python-client";
+import { canvasImageSourceSize } from "./canvas-image-source";
+import { generateRemoteUpscale, usesRemoteUpscaler } from "./remote-upscaler-client";
 
 type Settings = RhythmBallProject["animation"]["upscaler"];
 export interface ModelLoadProgress { phase: "cache" | "download" | "initializing" | "inference" | "ready"; progress: number; loadedBytes?: number; totalBytes?: number }
@@ -43,19 +45,13 @@ async function sessionFor(settings: Settings, onProgress: (status: ModelLoadProg
   try { return await pending; } catch (error) { sessions.delete(key); throw error; }
 }
 
-function sourceDimensions(source: CanvasImageSource): { width: number; height: number } {
-  if (source instanceof HTMLImageElement) return { width: source.naturalWidth, height: source.naturalHeight };
-  if (source instanceof HTMLVideoElement) return { width: source.videoWidth, height: source.videoHeight };
-  if (source instanceof HTMLCanvasElement || source instanceof OffscreenCanvas) return { width: source.width, height: source.height };
-  return { width: 1, height: 1 };
-}
-
 export async function generateAiUpscalerPreview(source: CanvasImageSource, settings: Settings, onProgress: (status: ModelLoadProgress) => void, signal?: AbortSignal): Promise<HTMLCanvasElement> {
+  if (usesRemoteUpscaler(settings)) return generateRemoteUpscale(source, settings, onProgress, signal);
   const model = definition(settings.model); if (!model || model.id === "canvas") throw new Error("Canvas Enhanced non richiede un modello AI.");
   const python = await pythonUpscalerHealth(); const preferPython = shouldUsePythonUpscaler(model.webExecutable, settings.backend, python);
   if (preferPython) return generatePythonUpscale(source, settings, onProgress, signal);
   const session = await sessionFor(settings, onProgress, signal); if (signal?.aborted) throw new DOMException("Operazione annullata", "AbortError");
-  const dimensions = sourceDimensions(source); const tileSize = Math.max(64, Math.min(1024, settings.tileSize)); const tilePad = 10; const columns = Math.ceil(dimensions.width / tileSize); const rows = Math.ceil(dimensions.height / tileSize); const totalPasses = columns * rows * (settings.tta ? 2 : 1); let completedPasses = 0;
+  const dimensions = canvasImageSourceSize(source); const tileSize = Math.max(64, Math.min(1024, settings.tileSize)); const tilePad = 10; const columns = Math.ceil(dimensions.width / tileSize); const rows = Math.ceil(dimensions.height / tileSize); const totalPasses = columns * rows * (settings.tta ? 2 : 1); let completedPasses = 0;
   const result = document.createElement("canvas"); result.width = settings.finalWidth; result.height = settings.finalHeight; const resultContext = result.getContext("2d", { alpha: false }); if (!resultContext) throw new Error("Canvas risultato non disponibile."); resultContext.imageSmoothingEnabled = true; resultContext.imageSmoothingQuality = "high";
   const inputName = session.inputNames[0]; const outputName = session.outputNames[0]; if (!inputName || !outputName) throw new Error("Input/output ONNX non riconosciuti.");
   const inferTile = async (tile: HTMLCanvasElement, flip: boolean): Promise<HTMLCanvasElement> => {

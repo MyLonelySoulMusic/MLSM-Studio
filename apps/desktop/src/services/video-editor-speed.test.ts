@@ -3,6 +3,28 @@ import { videoEditorClipSourceDuration, videoEditorClipSourceTimeAtFrame, videoE
 import type { VideoEditorClip } from "./video-editor";
 
 describe("Video Editor speed mapping", () => {
+  it("mappa una clip inversa dal bordo alto al bordo basso anche con una rampa", () => {
+    const timebase = { fpsNumerator: 60, fpsDenominator: 1, dropFrame: false };
+    const clip = {
+      id: "reverse-ramp", startSeconds: 2, sourceInSeconds: 3, durationSeconds: 1,
+      reversed: true,
+      speed: { mode: "ramp", constant: 1, preservePitch: false, points: [
+        { id: "a", frame: 0, speed: 1, curve: "linear" },
+        { id: "b", frame: 60, speed: 2, curve: "linear" }
+      ] }
+    } as VideoEditorClip;
+    const consumed = videoEditorClipSourceDuration(clip, timebase);
+    const start = videoEditorClipSourceTimeAtLocalSeconds(clip, 0, timebase);
+    const middle = videoEditorClipSourceTimeAtLocalSeconds(clip, .5, timebase);
+    const end = videoEditorClipSourceTimeAtLocalSeconds(clip, 1, timebase);
+
+    expect(start).toBeCloseTo(3 + consumed, 12);
+    expect(middle).toBeLessThan(start);
+    expect(end).toBeCloseTo(3, 12);
+    expect(videoEditorClipTimelineTimeForSourceTime(clip, start, timebase)).toBeCloseTo(2, 12);
+    expect(videoEditorClipTimelineTimeForSourceTime(clip, end, timebase)).toBeCloseTo(3, 12);
+  });
+
   it("treats an authored curve change as a clean replacement of subdivision metadata", () => {
     const derived = {
       id: "derived", frame: 30, speed: 2, curve: "exponential" as const,

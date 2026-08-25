@@ -385,6 +385,29 @@ describe("Video Editor · stack DOM aderente alla timeline", () => {
     pool.dispose();
   });
 
+  it("campiona una clip inversa con seek decrescenti senza avviare il decoder in avanti", async () => {
+    const fakes = installFakeVideos();
+    const source = videoAsset("reverse-playback");
+    const reversed = { ...videoClip("reverse-playback-clip", source.id, "video-editor-track-main", 0, 4), sourceInSeconds: 2, reversed: true };
+    const settings: VideoEditorSettings = {
+      ...createProject("Playback inverso").animation.videoEditor,
+      assets: [source], clips: [reversed]
+    };
+    const pool = new VideoEditorMediaPool(vi.fn());
+    pool.sync(settings);
+
+    await expect(pool.start(settings, 0)).resolves.toEqual({ startedMedia: 0, startedVideos: 0, startedAudio: 0 });
+    expect(fakes[0]!.play).not.toHaveBeenCalled();
+    expect(fakes[0]!.state.currentTime).toBeCloseTo(6 - 1e-6, 8);
+    pool.update(settings, 1, true);
+    const firstSeek = fakes[0]!.state.currentTime;
+    pool.update(settings, 2, true);
+    expect(firstSeek).toBeCloseTo(5 - 1e-6, 8);
+    expect(fakes[0]!.state.currentTime).toBeCloseTo(4 - 1e-6, 8);
+    expect(fakes[0]!.video.muted).toBe(true);
+    pool.dispose();
+  });
+
   it("mantiene un'immagine sopra il video quando la sua traccia e superiore", () => {
     const fakes = installFakeVideos();
     const video = videoAsset("background-video");

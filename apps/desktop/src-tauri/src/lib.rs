@@ -4,6 +4,8 @@ use sha2::{Digest, Sha256};
 use std::{fs, io::{Read, Write}, path::{Path, PathBuf}, process::Command};
 
 mod memory;
+mod song_player;
+mod longcat_video;
 
 #[derive(Debug, thiserror::Error)]
 enum ProjectIoError {
@@ -17,6 +19,18 @@ enum ProjectIoError {
     MissingAudioTool,
     #[error("Impossibile analizzare l'audio: {0}")]
     AudioProbe(String),
+    #[error("La cartella di destinazione batch non è valida")]
+    InvalidUpscalerBatchDirectory,
+    #[error("Il nome file batch deve essere un basename PNG valido")]
+    InvalidUpscalerBatchFilename,
+    #[error("Il payload PNG batch è vuoto")]
+    EmptyUpscalerBatchPayload,
+    #[error("Il payload batch non contiene una firma PNG valida")]
+    InvalidUpscalerBatchPayload,
+    #[error("Il payload PNG batch supera il limite di 512 MB")]
+    UpscalerBatchPayloadTooLarge,
+    #[error("Il percorso del video Upscaler non è valido")]
+    InvalidUpscalerVideoPath,
 }
 
 #[derive(Debug, Serialize)]
@@ -164,6 +178,95 @@ fn read_audio_data(path: String) -> Result<tauri::ipc::Response, ProjectIoError>
     Ok(tauri::ipc::Response::new(fs::read(path)?))
 }
 
+fn validate_upscaler_batch_directory(path: &Path) -> Result<PathBuf, ProjectIoError> {
+    if !path.is_absolute() || !path.is_dir() { return Err(ProjectIoError::InvalidUpscalerBatchDirectory); }
+    let canonical = fs::canonicalize(path).map_err(|_| ProjectIoError::InvalidUpscalerBatchDirectory)?;
+    if canonical.is_dir() { Ok(canonical) } else { Err(ProjectIoError::InvalidUpscalerBatchDirectory) }
+}
+
+fn validate_upscaler_batch_filename(filename: &str) -> Result<(), ProjectIoError> {
+    let path = Path::new(filename);
+    let is_basename = !filename.is_empty() && !filename.contains('/') && !filename.contains('\\') && path.file_name().and_then(|value| value.to_str()) == Some(filename);
+    let is_png = path.extension().and_then(|value| value.to_str()).is_some_and(|value| value.eq_ignore_ascii_case("png"));
+    if is_basename && is_png { Ok(()) } else { Err(ProjectIoError::InvalidUpscalerBatchFilename) }
+}
+
+const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+const MAX_UPSCALER_BATCH_PAYLOAD_BYTES: usize = 512 * 1024 * 1024;
+
+fn validate_upscaler_batch_payload_size(payload_len: usize) -> Result<(), ProjectIoError> {
+    if payload_len > MAX_UPSCALER_BATCH_PAYLOAD_BYTES { Err(ProjectIoError::UpscalerBatchPayloadTooLarge) } else { Ok(()) }
+}
+
+fn validate_upscaler_batch_payload(payload: &[u8]) -> Result<(), ProjectIoError> {
+    if payload.is_empty() { return Err(ProjectIoError::EmptyUpscalerBatchPayload); }
+    validate_upscaler_batch_payload_size(payload.len())?;
+    if !payload.starts_with(&PNG_SIGNATURE) { return Err(ProjectIoError::InvalidUpscalerBatchPayload); }
+    Ok(())
+}
+
+#[tauri::command]
+fn write_upscaler_batch_image(directory_path: String, filename: String, payload: Vec<u8>) -> Result<String, ProjectIoError> {
+    let directory = validate_upscaler_batch_directory(Path::new(&directory_path))?;
+    validate_upscaler_batch_filename(&filename)?;
+    validate_upscaler_batch_payload(&payload)?;
+    let path = Path::new(&filename);
+    let stem = path.file_stem().and_then(|value| value.to_str()).ok_or(ProjectIoError::InvalidUpscalerBatchFilename)?;
+    let extension = path.extension().and_then(|value| value.to_str()).unwrap_or("png");
+    for suffix in 0_u32..100_000 {
+        let candidate_name = if suffix == 0 { filename.clone() } else { format!("{stem}-{suffix}.{extension}") };
+        let candidate = directory.join(candidate_name);
+        let mut file = match fs::OpenOptions::new().write(true).create_new(true).open(&candidate) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(ProjectIoError::Io(error)),
+        };
+        let result = (|| -> Result<(), std::io::Error> { file.write_all(&payload)?; file.sync_all() })();
+        if let Err(error) = result { let _ = fs::remove_file(&candidate); return Err(ProjectIoError::Io(error)); }
+        return Ok(candidate.to_string_lossy().into_owned());
+    }
+    Err(ProjectIoError::Io(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "troppi file con lo stesso nome")))
+}
+
+fn validate_upscaler_video_path(path: &Path, must_exist: bool) -> Result<PathBuf, ProjectIoError> {
+    if !path.is_absolute() || path.extension().and_then(|value| value.to_str()).is_none_or(|value| !value.eq_ignore_ascii_case("mp4")) {
+        return Err(ProjectIoError::InvalidUpscalerVideoPath);
+    }
+    if must_exist {
+        let canonical = fs::canonicalize(path).map_err(|_| ProjectIoError::InvalidUpscalerVideoPath)?;
+        if !canonical.is_file() || canonical.file_name().and_then(|value| value.to_str()) != Some("upscaled-video.mp4") {
+            return Err(ProjectIoError::InvalidUpscalerVideoPath);
+        }
+        Ok(canonical)
+    } else if path.file_name().is_some() {
+        Ok(path.to_path_buf())
+    } else {
+        Err(ProjectIoError::InvalidUpscalerVideoPath)
+    }
+}
+
+#[tauri::command]
+fn copy_upscaler_video_result(source_path: String, destination_path: String) -> Result<u64, ProjectIoError> {
+    let source = validate_upscaler_video_path(Path::new(&source_path), true)?;
+    let destination = validate_upscaler_video_path(Path::new(&destination_path), false)?;
+    let expected_bytes = fs::metadata(&source)?.len();
+    if expected_bytes == 0 { return Err(ProjectIoError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, "il video Upscaler sorgente è vuoto"))); }
+    let mut input = fs::File::open(source)?;
+    let destination_for_audit = destination.clone();
+    let copied_bytes = AtomicFile::new(destination, AllowOverwrite).write(|output| {
+        let copied = std::io::copy(&mut input, output)?;
+        output.sync_all()?;
+        Ok(copied)
+    }).map_err(|error| match error {
+        atomicwrites::Error::Internal(error) | atomicwrites::Error::User(error) => ProjectIoError::Io(error),
+    })?;
+    let saved_bytes = fs::metadata(destination_for_audit)?.len();
+    if copied_bytes != expected_bytes || saved_bytes != expected_bytes {
+        return Err(ProjectIoError::Io(std::io::Error::new(std::io::ErrorKind::WriteZero, "copia MP4 incompleta")));
+    }
+    Ok(saved_bytes)
+}
+
 impl serde::Serialize for ProjectIoError {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: serde::Serializer { serializer.serialize_str(&self.to_string()) }
 }
@@ -196,7 +299,7 @@ fn write_project(path: String, content: String) -> Result<(), ProjectIoError> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default().plugin(tauri_plugin_dialog::init()).invoke_handler(tauri::generate_handler![
+    tauri::Builder::default().manage(song_player::SongPlayerState::default()).manage(longcat_video::LongCatVideoState::default()).plugin(tauri_plugin_dialog::init()).invoke_handler(tauri::generate_handler![
         read_project,
         write_project,
         detect_audio_tools,
@@ -204,10 +307,22 @@ pub fn run() {
         probe_audio,
         generate_waveform,
         read_audio_data,
+        write_upscaler_batch_image,
+        copy_upscaler_video_result,
         memory::memory_scan_paths,
         memory::memory_read_preview,
         memory::memory_read_text_preview,
-        memory::memory_copy_entries
+        memory::memory_copy_entries,
+        song_player::song_player_capabilities,
+        song_player::song_player_ensure_runtime,
+        song_player::song_player_get_runtime_setup,
+        song_player::song_player_start_job,
+        song_player::song_player_get_job,
+        song_player::song_player_cancel_job,
+        longcat_video::longcat_video_capabilities,
+        longcat_video::longcat_video_start_job,
+        longcat_video::longcat_video_get_job,
+        longcat_video::longcat_video_cancel_job
     ]).run(tauri::generate_context!()).expect("errore durante l'avvio di MLSM Studio");
 }
 
@@ -230,12 +345,43 @@ mod tests {
     }
 
     #[test]
+    fn writes_batch_png_with_collision_suffix_and_validates_inputs() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let first_payload = [PNG_SIGNATURE.as_slice(), &[1, 2, 3]].concat();
+        let second_payload = [PNG_SIGNATURE.as_slice(), &[4, 5]].concat();
+        let path = write_upscaler_batch_image(directory.path().to_string_lossy().into_owned(), "photo.png".into(), first_payload.clone()).expect("first batch image");
+        let second = write_upscaler_batch_image(directory.path().to_string_lossy().into_owned(), "photo.png".into(), second_payload.clone()).expect("collision batch image");
+        assert_eq!(fs::read(path).expect("first payload"), first_payload);
+        assert_eq!(fs::read(second).expect("second payload"), second_payload);
+        assert!(validate_upscaler_batch_filename("../photo.png").is_err());
+        assert!(write_upscaler_batch_image(directory.path().to_string_lossy().into_owned(), "empty.png".into(), vec![]).is_err());
+        assert!(matches!(validate_upscaler_batch_payload(b"not a png"), Err(ProjectIoError::InvalidUpscalerBatchPayload)));
+        assert!(MAX_UPSCALER_BATCH_PAYLOAD_BYTES > 7680 * 7680 * 4);
+        assert!(matches!(validate_upscaler_batch_payload_size(MAX_UPSCALER_BATCH_PAYLOAD_BYTES + 1), Err(ProjectIoError::UpscalerBatchPayloadTooLarge)));
+    }
+
+    #[test]
     fn atomically_overwrites_a_project() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("project.rbs.json");
         write_project(path.to_string_lossy().into_owned(), "{\"version\":1}".into()).expect("first save");
         write_project(path.to_string_lossy().into_owned(), "{\"version\":2}".into()).expect("overwrite");
         assert_eq!(fs::read_to_string(path).expect("saved file"), "{\"version\":2}");
+    }
+
+    #[test]
+    fn copies_a_completed_upscaler_video_to_the_chosen_mp4() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let workspace = directory.path().join("job"); fs::create_dir(&workspace).expect("workspace");
+        let source = workspace.join("upscaled-video.mp4"); let destination = directory.path().join("export.mp4");
+        fs::write(&source, b"verified mp4 fixture").expect("source video");
+        let copied = copy_upscaler_video_result(source.to_string_lossy().into_owned(), destination.to_string_lossy().into_owned()).expect("copy result");
+        assert_eq!(copied, b"verified mp4 fixture".len() as u64);
+        assert_eq!(fs::read(destination).expect("exported video"), b"verified mp4 fixture");
+        assert!(copy_upscaler_video_result(workspace.join("other.mp4").to_string_lossy().into_owned(), directory.path().join("bad.mp4").to_string_lossy().into_owned()).is_err());
+        fs::write(&source, b"").expect("empty source fixture");
+        assert!(copy_upscaler_video_result(source.to_string_lossy().into_owned(), directory.path().join("empty.mp4").to_string_lossy().into_owned()).is_err());
+        assert!(validate_upscaler_video_path(Path::new("relative.mp4"), false).is_err());
     }
 
     fn write_test_wav(path: &Path) {

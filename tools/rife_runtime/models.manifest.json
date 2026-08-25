@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "models": {
+    "rife-v4.26": {
+      "runtime": "practical-rife",
+      "upstream": "hzwer/Practical-RIFE",
+      "revision": "19b0c859634efaf9dc63d56e7118c8c7bdfa5960",
+      "url": "https://huggingface.co/hzwer/RIFE/resolve/19b0c859634efaf9dc63d56e7118c8c7bdfa5960/RIFEv4.26_0921.zip",
+      "sha256": "1fa9b9cda3d9b8c3e301359e2595960902f97bf926c08598b0e9957a3f3f760e",
+      "size": 22869906,
+      "artifact": "RIFEv4.26_0921.zip",
+      "license": "MIT"
+    }
+  }
+}

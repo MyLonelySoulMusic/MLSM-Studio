@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import os
 import json
+import hashlib
 import contextlib
 import io
 import math
+import queue
 import re
 import shutil
 import subprocess
@@ -20,7 +22,7 @@ import time
 import types
 import urllib.request
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 import cv2
@@ -38,18 +40,30 @@ if "torchvision.transforms.functional_tensor" not in sys.modules:
     sys.modules["torchvision.transforms.functional_tensor"] = functional_tensor
 
 from basicsr.archs.rrdbnet_arch import RRDBNet
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from realesrgan import RealESRGANer
 from realesrgan.archs.srvgg_arch import SRVGGNetCompact
 from starlette.background import BackgroundTask
+try:
+    from remote_upscaler import RemoteUpscalerError, aggregate_catalog, distribute_frames, normalize_endpoint, upscale_image as remote_upscale_image
+except ModuleNotFoundError:
+    from tools.remote_upscaler import RemoteUpscalerError, aggregate_catalog, distribute_frames, normalize_endpoint, upscale_image as remote_upscale_image
+try:
+    from rife_runtime.adapter import get_rife_capabilities, prepare_rife, validate_rife_request
+    from rife_runtime.engine import interpolate_file as practical_rife_interpolate_file
+except ModuleNotFoundError:  # imported as ``tools.upscaler_server`` in tests
+    from tools.rife_runtime.adapter import get_rife_capabilities, prepare_rife, validate_rife_request
+    from tools.rife_runtime.engine import interpolate_file as practical_rife_interpolate_file
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = Path(os.environ.get("DSAS_UPSCALER_CACHE", ROOT / ".upscaler-cache" / "pytorch"))
 CACHE.mkdir(parents=True, exist_ok=True)
 VIDEO_TEMP_ROOT = Path(os.environ.get("MLSM_UPSCALER_TEMP", ROOT / "temp" / "upscaler"))
 VIDEO_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
+REMOTE_VIDEO_ROOT = Path(os.environ.get("MLSM_REMOTE_UPSCALER_JOBS", ROOT / ".upscaler-cache" / "remote-video-jobs"))
+REMOTE_VIDEO_ROOT.mkdir(parents=True, exist_ok=True)
 MODELS = {
     "RealESRGAN_x4plus": (4, 23, "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth"),
     "RealESRGAN_x2plus": (2, 23, "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth"),
@@ -69,13 +83,15 @@ interpolation_jobs: dict[str, dict[str, object]] = {}
 interpolation_processes: dict[str, subprocess.Popen[object]] = {}
 cancelled_interpolation_clients: dict[str, float] = {}
 event_log_lock = threading.Lock()
+remote_manifest_lock = threading.Lock()
+remote_manifest_last_write: dict[str, float] = {}
+remote_manifest_written_revision: dict[str, int] = {}
 EVENT_LOG = VIDEO_TEMP_ROOT / "upscaler-events.jsonl"
 READY_JOB_RETENTION_SECONDS = int(os.environ.get("MLSM_UPSCALER_READY_TTL", 30 * 60))
 FAILED_JOB_RETENTION_SECONDS = int(os.environ.get("MLSM_UPSCALER_FAILED_TTL", 5 * 60))
 INTERPOLATION_READY_RETENTION_SECONDS = int(os.environ.get("MLSM_INTERPOLATION_READY_TTL", 30 * 60))
 INTERPOLATION_FAILED_RETENTION_SECONDS = int(os.environ.get("MLSM_INTERPOLATION_FAILED_TTL", 5 * 60))
 
-RIFE_WEIGHTS = Path(os.environ.get("DSAS_RIFE_WEIGHTS", CACHE.parent / "rife"))
 INTERPOLATION_METHODS = ("blend", "motion", "rife")
 # Un montaggio esportato può essere lungo: il limite protegge dal riempire /tmp per errore,
 # non è una restrizione editoriale.
@@ -85,6 +101,8 @@ INTERPOLATION_PROCESS_GRACE_SECONDS = float(os.environ.get("DSAS_INTERPOLATION_P
 INTERPOLATION_FRAME_TOLERANCE = 1
 INTERPOLATION_FPS_RELATIVE_TOLERANCE = .01
 INTERPOLATION_DURATION_TOLERANCE_SECONDS = .05
+REMOTE_VIDEO_TERMINAL_PHASES = frozenset(("ready", "error", "cancelled"))
+REMOTE_CHECKPOINT_POLICIES = frozenset(("restart", "resume"))
 
 app = FastAPI(title="MLSM Studio Upscaler", docs_url=None, redoc_url=None)
 app.add_middleware(CORSMiddleware, allow_origin_regex=r"^(https?://(localhost|127\.0\.0\.1)(:\d+)?|tauri://localhost|https://tauri\.localhost)$", allow_methods=["GET", "POST", "DELETE"], allow_headers=["*"])
@@ -108,13 +126,73 @@ def cleanup_video_job(job_id: str, reason: str = "cleanup") -> None:
     workspace_value = str(item.get("tempDirectory", ""))
     if not workspace_value:
         return
-    root = VIDEO_TEMP_ROOT.resolve()
+    root = (REMOTE_VIDEO_ROOT if item.get("remote") else VIDEO_TEMP_ROOT).resolve()
     workspace = Path(workspace_value).resolve()
     if workspace.parent != root:
         log_upscaler_event("backend", "job-cleanup-refused", jobId=job_id, workspace=workspace, reason=reason)
         return
     shutil.rmtree(workspace, ignore_errors=True)
     log_upscaler_event("backend", "job-cleaned", jobId=job_id, workspace=workspace, reason=reason)
+
+
+def _cache_entry_size(path: Path) -> int:
+    """Return an entry's size without following links outside the cache root."""
+    try:
+        if path.is_symlink() or path.is_file():
+            return path.lstat().st_size
+    except OSError:
+        return 0
+    total = 0
+    try:
+        for current, directories, files in os.walk(path, followlinks=False):
+            current_path = Path(current)
+            directories[:] = [name for name in directories if not (current_path / name).is_symlink()]
+            for name in files:
+                try:
+                    total += (current_path / name).lstat().st_size
+                except OSError:
+                    continue
+    except OSError:
+        return total
+    return total
+
+
+def _validated_remote_cache_workspace(item: dict[str, object], root: Path) -> Path:
+    """Resolve one job workspace and require the canonical root/job-id layout."""
+    job_id = str(item.get("id", "")).strip()
+    workspace_value = str(item.get("tempDirectory", "")).strip()
+    if not job_id or not workspace_value:
+        raise ValueError("identificatore o directory mancanti")
+    workspace = Path(workspace_value).resolve()
+    if workspace.parent != root or workspace.name != job_id:
+        raise ValueError("la directory non è un workspace diretto della cache remota")
+    return workspace
+
+
+def _discard_remote_video_upload_locked(
+    job_id: str, placeholder: dict[str, object], workspace: Path
+) -> bool:
+    """Remove one exact upload placeholder and its workspace while holding the job lock."""
+    if video_jobs.get(job_id) is not placeholder:
+        return False
+    shutil.rmtree(workspace, ignore_errors=True)
+    if workspace.exists():
+        placeholder.update({
+            "phase": "error",
+            "phaseLabel": "Pulizia upload remoto non riuscita",
+            "error": f"Impossibile rimuovere il workspace incompleto: {workspace}",
+        })
+        return False
+    video_jobs.pop(job_id, None)
+    return True
+
+
+def discard_remote_video_upload(
+    job_id: str, placeholder: dict[str, object], workspace: Path
+) -> bool:
+    """Atomically discard an unfinished remote upload without exposing a cache gap."""
+    with video_job_lock:
+        return _discard_remote_video_upload_locked(job_id, placeholder, workspace)
 
 
 def cleanup_interpolation_job(job_id: str, reason: str = "cleanup") -> None:
@@ -411,25 +489,105 @@ def probe_video_geometry(path: Path) -> dict[str, object]:
 
 
 def rife_available() -> bool:
-    return RIFE_WEIGHTS.is_dir() and any(RIFE_WEIGHTS.glob("*.pkl"))
+    try:
+        return bool(get_rife_capabilities().get("ready") and get_rife_capabilities().get("verified"))
+    except Exception:
+        return False
 
 
 def interpolation_capabilities() -> dict[str, object]:
     binary = ffmpeg_binary()
-    return {"ffmpeg": bool(binary), "ffmpegPath": binary or "", "rife": rife_available(), "jobs": True, "jobApi": True, "device": str(device_from("auto"))}
+    rife = get_rife_capabilities()
+    return {
+        "ffmpeg": bool(binary),
+        "ffmpegPath": binary or "",
+        "rife": rife,
+        "jobs": True,
+        "jobApi": True,
+        "device": str(device_from("auto")),
+        "automaticDevice": rife.get("automaticDevice"),
+    }
 
 
 @app.get("/health")
 def health():
     return {
-        "ok": True, "apiVersion": 3, "capabilities": {"imageUpscale": True, "videoJobs": True, "interpolationJobs": True},
-        **hardware(), "interpolation": interpolation_capabilities(), "videoTempDirectory": str(VIDEO_TEMP_ROOT)
+        "ok": True, "apiVersion": 5, "capabilities": {
+            "imageUpscale": True, "videoJobs": True, "remoteUpscale": True,
+            "remoteVideoCheckpointPolicy": True, "remoteVideoCache": True,
+            "interpolationJobs": True,
+        },
+        **hardware(), "interpolation": interpolation_capabilities(), "videoTempDirectory": str(VIDEO_TEMP_ROOT),
+        "remoteVideoDirectory": str(REMOTE_VIDEO_ROOT),
     }
+
+
+@app.post("/upscale/remote/catalog")
+def remote_upscale_catalog(payload: dict[str, object] = Body(...)):
+    endpoints = payload.get("endpoints")
+    if not isinstance(endpoints, list) or not all(isinstance(item, str) for item in endpoints):
+        raise HTTPException(400, "Elenco endpoint remoto non valido")
+    try:
+        return aggregate_catalog(endpoints)
+    except RemoteUpscalerError as error:
+        raise HTTPException(502, str(error)) from error
+
+
+@app.post("/upscale/remote/image")
+async def remote_upscale_single_image(
+    file: UploadFile = File(...), endpoints: str = Form(...), model: str = Form(...),
+    width: int = Form(...), height: int = Form(...),
+):
+    if width < 64 or height < 64 or width > 16384 or height > 16384:
+        raise HTTPException(400, "Risoluzione finale fuori dai limiti")
+    try:
+        values = json.loads(endpoints)
+        if not isinstance(values, list) or not values or len(values) > 16 or not model.strip() or len(model) > 200:
+            raise ValueError
+        normalized = [normalize_endpoint(str(item)) for item in values]
+    except (ValueError, TypeError, json.JSONDecodeError, RemoteUpscalerError) as error:
+        raise HTTPException(400, "Endpoint remoti non validi") from error
+    source = await file.read()
+    await file.close()
+    errors: list[str] = []
+    for endpoint in normalized:
+        try:
+            output = remote_upscale_image(endpoint, source, model)
+            decoded = cv2.imdecode(np.frombuffer(output, dtype=np.uint8), cv2.IMREAD_COLOR)
+            if decoded is None:
+                raise RemoteUpscalerError("Output remoto non decodificabile")
+            if decoded.shape[1] != width or decoded.shape[0] != height:
+                decoded = cv2.resize(decoded, (width, height), interpolation=cv2.INTER_LANCZOS4)
+            ok, encoded = cv2.imencode(".png", decoded, [cv2.IMWRITE_PNG_COMPRESSION, 2])
+            if not ok:
+                raise RemoteUpscalerError("Codifica output remoto fallita")
+            return Response(encoded.tobytes(), media_type="image/png", headers={"X-Upscaler-Remote": endpoint})
+        except Exception as error:
+            errors.append(f"{endpoint}: {error}")
+    raise HTTPException(502, "Tutti gli endpoint remoti hanno fallito. " + " | ".join(errors[-3:]))
 
 
 @app.get("/interpolation/health")
 def interpolation_health():
     return {"ok": True, "interpolation": interpolation_capabilities()}
+
+@app.get("/interpolation/rife/status")
+def interpolation_rife_status():
+    return {"ok": True, "rife": get_rife_capabilities()}
+
+@app.post("/interpolation/rife/prepare")
+def interpolation_rife_prepare(model: str = Form("rife-v4.26")):
+    if model != "rife-v4.26":
+        raise HTTPException(400, "Modello RIFE non supportato")
+    try:
+        offline_artifact = os.environ.get("MLSM_RIFE_ARTIFACT")
+        prepare_rife(model, Path(offline_artifact) if offline_artifact else None)
+        capability = get_rife_capabilities(run_self_test=True)
+    except Exception as error:
+        raise HTTPException(503, f"Preparazione RIFE fallita: {error}") from error
+    if not capability.get("ready") or not capability.get("selfTest"):
+        raise HTTPException(503, str(capability.get("reason", "Self-test RIFE fallito")))
+    return {"phase": "ready", **capability}
 
 
 @app.get("/models/{model}/status")
@@ -503,10 +661,83 @@ async def upscale(file: UploadFile = File(...), model: str = Form(...), backend:
 
 
 def update_video_job(job_id: str, **patch: object) -> None:
+    snapshot: dict[str, object] | None = None
+    force_manifest = "phase" in patch or "resultPath" in patch
     with video_job_lock:
         current = video_jobs.get(job_id)
         if current is not None:
             current.update(patch)
+            if current.get("remote"):
+                current["manifestRevision"] = int(current.get("manifestRevision", 0)) + 1
+                snapshot = dict(current)
+    if snapshot is not None:
+        persist_remote_video_job(snapshot, force=force_manifest)
+
+
+def persist_remote_video_job(item: dict[str, object], *, force: bool = True) -> None:
+    job_id = str(item.get("id", "")).strip()
+    workspace = Path(str(item.get("tempDirectory", "")))
+    try:
+        root = REMOTE_VIDEO_ROOT.resolve()
+        workspace = workspace.resolve()
+        # Lock order is always job registry -> manifest. Cache DELETE owns the
+        # same registry lock while deleting and unregistering workspaces, so a
+        # stale snapshot can neither recreate a cleared directory nor publish
+        # job.json after its job has disappeared.
+        with video_job_lock:
+            current = video_jobs.get(job_id)
+            if (
+                not job_id
+                or current is None
+                or not current.get("remote")
+                or workspace.parent != root
+                or workspace.name != job_id
+                or Path(str(current.get("tempDirectory", ""))).resolve() != workspace
+                or current != item
+            ):
+                return
+            revision = int(item.get("manifestRevision", 0) or 0)
+            current_revision = int(current.get("manifestRevision", 0) or 0)
+            if revision != current_revision:
+                return
+            with remote_manifest_lock:
+                written_revision = remote_manifest_written_revision.get(job_id, -1)
+                now = time.monotonic()
+                if revision < written_revision or (not force and (revision == written_revision or now - remote_manifest_last_write.get(job_id, 0) < .75)):
+                    return
+                workspace.mkdir(parents=True, exist_ok=True)
+                temporary = workspace / ".job.json.partial"
+                temporary.write_text(json.dumps(item, ensure_ascii=False, indent=2), encoding="utf-8")
+                temporary.replace(workspace / "job.json")
+                remote_manifest_written_revision[job_id] = revision
+                remote_manifest_last_write[job_id] = now
+    except (OSError, ValueError, TypeError) as error:
+        log_upscaler_event("backend", "remote-manifest-error", jobId=item.get("id"), error=str(error))
+
+
+def restore_remote_video_jobs() -> None:
+    restored = 0
+    for manifest in REMOTE_VIDEO_ROOT.glob("*/job.json"):
+        try:
+            item = json.loads(manifest.read_text(encoding="utf-8"))
+            workspace = Path(str(item.get("tempDirectory", ""))).resolve()
+            if not isinstance(item, dict) or not item.get("remote") or workspace.parent != REMOTE_VIDEO_ROOT.resolve():
+                continue
+            if item.get("phase") not in ("ready", "error", "cancelled"):
+                item.update({"phase": "error", "phaseLabel": "Servizio riavviato · job pronto per la ripresa", "error": "Il servizio locale è stato riavviato; i frame completati sono conservati.", "resumable": True})
+            with video_job_lock:
+                video_jobs[str(item["id"])] = item
+            persist_remote_video_job(item)
+            restored += 1
+        except (OSError, ValueError, TypeError, json.JSONDecodeError, KeyError):
+            continue
+    if restored:
+        log_upscaler_event("backend", "remote-jobs-restored", count=restored)
+
+
+@app.on_event("startup")
+def restore_remote_jobs_on_startup() -> None:
+    restore_remote_video_jobs()
 
 
 def video_job_cancelled(job_id: str) -> bool:
@@ -528,6 +759,55 @@ def canvas_enhance(frame: np.ndarray, width: int, height: int) -> np.ndarray:
     resized = cv2.resize(frame, (width, height), interpolation=cv2.INTER_LANCZOS4)
     blurred = cv2.GaussianBlur(resized, (0, 0), 1.05)
     return cv2.addWeighted(resized, 1.16, blurred, -0.16, 0)
+
+
+UPSCALER_ADJUSTMENT_DEFAULTS: dict[str, float] = {
+    "exposure": 0.0, "contrast": 0.0, "highlights": 0.0, "shadows": 0.0,
+    "whites": 0.0, "blacks": 0.0, "saturation": 0.0, "vibrance": 0.0,
+    "temperature": 0.0, "tint": 0.0, "sharpness": 12.0, "denoise": 0.0,
+}
+
+
+def parse_upscaler_adjustments(raw: str) -> dict[str, float]:
+    try:
+        value = json.loads(raw or "{}")
+    except json.JSONDecodeError as error:
+        raise ValueError("Regolazioni immagine non valide") from error
+    if not isinstance(value, dict) or any(key not in UPSCALER_ADJUSTMENT_DEFAULTS for key in value):
+        raise ValueError("Regolazioni immagine non valide")
+    parsed = dict(UPSCALER_ADJUSTMENT_DEFAULTS)
+    for key, default in parsed.items():
+        candidate = value.get(key, default)
+        if isinstance(candidate, bool) or not isinstance(candidate, (int, float)) or not math.isfinite(float(candidate)):
+            raise ValueError(f"Regolazione {key} non valida")
+        minimum, maximum = ((-2.0, 2.0) if key == "exposure" else (0.0, 100.0) if key in ("sharpness", "denoise") else (-100.0, 100.0))
+        parsed[key] = max(minimum, min(maximum, float(candidate)))
+    return parsed
+
+
+def apply_upscaler_adjustments(frame: np.ndarray, adjustments: dict[str, float]) -> np.ndarray:
+    """Replica sul video completo la correzione mostrata dal renderer Canvas."""
+    item = adjustments
+    brightness = 2 ** item["exposure"] * (1 + (item["whites"] + item["highlights"] * .35 + item["shadows"] * .15 + item["blacks"] * .1) / 500)
+    contrast = 1 + item["contrast"] / 100 + (item["whites"] - item["blacks"]) / 600
+    saturation = max(0.0, 1 + (item["saturation"] + item["vibrance"] * .65) / 100)
+    output = frame.astype(np.float32) / 255.0
+    output = (output * max(.05, brightness) - .5) * max(.05, contrast) + .5
+    gray = cv2.cvtColor(np.clip(output, 0, 1), cv2.COLOR_BGR2GRAY)[..., None]
+    output = gray + (output - gray) * saturation
+    output[..., 2] += item["temperature"] / 100 * .12
+    output[..., 0] -= item["temperature"] / 100 * .12
+    output[..., 1] += item["tint"] / 100 * .10
+    output[..., (0, 2)] -= item["tint"] / 100 * .035
+    output = np.clip(output * 255.0, 0, 255).astype(np.uint8)
+    if item["denoise"] > 0:
+        sigma = min(1.2, item["denoise"] / 90)
+        output = cv2.GaussianBlur(output, (0, 0), max(.05, sigma))
+    if item["sharpness"] > 0:
+        amount = min(.42, item["sharpness"] / 240)
+        blurred = cv2.GaussianBlur(output, (0, 0), 1.0)
+        output = cv2.addWeighted(output, 1 + amount, blurred, -amount, 0)
+    return output
 
 
 def quiet_enhance(runner: RealESRGANer, frame: np.ndarray, outscale: int):
@@ -573,6 +853,41 @@ def encoded_video_frame_count(path: Path) -> int:
     return int((result.stdout or b"0").decode("utf-8", "replace").strip() or 0)
 
 
+def encoded_video_duration(path: Path) -> float:
+    probe = ffprobe_binary()
+    if not probe:
+        raise RuntimeError("ffprobe non disponibile: impossibile verificare la durata del video finale")
+    result = subprocess.run([
+        probe, "-v", "error", "-show_entries", "format=duration",
+        "-of", "default=nokey=1:noprint_wrappers=1", str(path),
+    ], capture_output=True, check=False)
+    if result.returncode != 0:
+        raise RuntimeError("ffprobe non riesce a verificare la durata del video ricomposto")
+    try:
+        duration = float((result.stdout or b"0").decode("utf-8", "replace").strip() or 0)
+    except ValueError as error:
+        raise RuntimeError("ffprobe ha restituito una durata non valida") from error
+    if not np.isfinite(duration) or duration <= 0:
+        raise RuntimeError("Il video ricomposto non contiene una timeline valida")
+    return duration
+
+
+def audio_packet_count(path: Path) -> int:
+    probe = ffprobe_binary()
+    if not probe:
+        return 0
+    result = subprocess.run([
+        probe, "-v", "error", "-select_streams", "a:0", "-count_packets",
+        "-show_entries", "stream=nb_read_packets", "-of", "default=nokey=1:noprint_wrappers=1", str(path),
+    ], capture_output=True, check=False)
+    if result.returncode != 0:
+        return 0
+    try:
+        return max(0, int((result.stdout or b"0").decode("utf-8", "replace").strip() or 0))
+    except ValueError:
+        return 0
+
+
 def process_video_upscale_job(job_id: str) -> None:
     with video_job_lock:
         job = dict(video_jobs[job_id])
@@ -580,6 +895,7 @@ def process_video_upscale_job(job_id: str) -> None:
     source = Path(str(job["sourcePath"]))
     originals = workspace / "original-frames"
     enhanced = workspace / "upscaled-frames"
+    rendered = workspace / "rendered-frames"
     result_path = workspace / "upscaled-video.mp4"
     originals.mkdir(parents=True, exist_ok=True)
     enhanced.mkdir(parents=True, exist_ok=True)
@@ -589,11 +905,13 @@ def process_video_upscale_job(job_id: str) -> None:
         binary = ffmpeg_binary()
         if not binary:
             raise RuntimeError("ffmpeg non trovato nel PATH. Installalo con `brew install ffmpeg` e riavvia il servizio.")
-        update_video_job(job_id, phase="extracting", phaseLabel="Estrazione di tutti i frame originali", progress=0.01)
-        run_checked([
-            binary, "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", str(source),
-            "-vf", _frame_extraction_filter(), "-vsync", "0", str(originals / "frame-%08d.png")
-        ])
+        existing_originals = sorted(originals.glob("frame-*.png")) if job.get("remote") else []
+        update_video_job(job_id, phase="extracting", phaseLabel="Verifica checkpoint frame locali" if existing_originals else "Estrazione di tutti i frame originali", progress=0.01)
+        if not existing_originals:
+            run_checked([
+                binary, "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", str(source),
+                "-vf", _frame_extraction_filter(), "-vsync", "0", str(originals / "frame-%08d.png")
+            ])
         original_frames = sorted(originals.glob("frame-*.png"))
         if not original_frames:
             raise RuntimeError("Il decoder non ha estratto alcun fotogramma dal video.")
@@ -611,81 +929,148 @@ def process_video_upscale_job(job_id: str) -> None:
         width = int(job["width"])
         height = int(job["height"])
         tta = bool(job["tta"])
-        runner = None if model_name == "canvas" else upsampler(model_name, backend, max(0, min(1024, tile)))
-        update_video_job(job_id, phase="upscaling", phaseLabel="Upscaling frame per frame", totalFrames=total, currentFrame=0, fps=fps, progress=0.04)
-        for index, frame_path in enumerate(original_frames, start=1):
-            if video_job_cancelled(job_id):
-                update_video_job(job_id, phase="cancelled", phaseLabel="Job annullato", cancelled=True)
-                cleanup_video_job(job_id, "cancelled")
-                return
-            frame = cv2.imread(str(frame_path), cv2.IMREAD_COLOR)
-            if frame is None:
-                raise RuntimeError(f"Fotogramma originale illeggibile: {frame_path.name}")
-            completed = index - 1
-            elapsed_before = time.monotonic() - started
-            estimated_before = (elapsed_before / completed * (total - completed)) if completed else None
-            passes = 2 if tta and runner is not None else 1
+        if job.get("remote"):
+            remote_endpoints = [str(item) for item in job.get("remoteEndpoints", [])]
+            already_done = sum(1 for frame in original_frames if (enhanced / frame.name).exists() and (enhanced / frame.name).stat().st_size > 0)
+            endpoint_activity_lock = threading.Lock()
+            endpoint_activity: dict[str, dict[str, object]] = {
+                endpoint: {"url": endpoint, "state": "idle", "activeFrame": None, "completed": 0, "failures": 0}
+                for endpoint in remote_endpoints
+            }
             update_video_job(
-                job_id,
-                phaseLabel=f"Frame {index}/{total} · passaggio 1/{passes}",
-                currentFrame=completed,
-                progress=.04 + .9 * completed / total,
-                elapsedSeconds=elapsed_before,
-                estimatedRemainingSeconds=estimated_before,
-                activeFrame=index,
-                inferencePass=1,
-                inferencePasses=passes,
+                job_id, phase="upscaling", phaseLabel=f"Upscaling remoto · {len(remote_endpoints)} endpoint attivi",
+                totalFrames=total, currentFrame=already_done, fps=fps, progress=.04 + .9 * already_done / total,
+                resumable=True, completedFrames=already_done, endpointActivity=list(endpoint_activity.values()), activeEndpoints=[],
             )
-            if runner is None:
-                output = canvas_enhance(frame, width, height)
-            else:
-                output, _ = quiet_enhance(runner, frame, MODELS[model_name][0])
-                if tta:
-                    update_video_job(job_id, phaseLabel=f"Frame {index}/{total} · passaggio TTA 2/2", activeFrame=index, inferencePass=2, inferencePasses=2)
-                    mirrored, _ = quiet_enhance(runner, cv2.flip(frame, 1), MODELS[model_name][0])
-                    output = cv2.addWeighted(output, .5, cv2.flip(mirrored, 1), .5, 0)
-                if output.shape[1] != width or output.shape[0] != height:
-                    output = cv2.resize(output, (width, height), interpolation=cv2.INTER_LANCZOS4)
-            destination = enhanced / frame_path.name
-            if not cv2.imwrite(str(destination), output, [cv2.IMWRITE_PNG_COMPRESSION, 2]):
-                raise RuntimeError(f"Impossibile salvare {destination.name}")
-            elapsed = time.monotonic() - started
-            update_video_job(
-                job_id,
-                currentFrame=index,
-                totalFrames=total,
-                progress=.04 + .9 * index / total,
-                elapsedSeconds=elapsed,
-                estimatedRemainingSeconds=(elapsed / index * (total - index)) if index else None,
-                currentOriginalFrame=str(frame_path),
-                currentUpscaledFrame=str(destination),
+
+            def remote_endpoint_state(endpoint: str, state: str, frame: Path) -> None:
+                with endpoint_activity_lock:
+                    item = endpoint_activity[endpoint]
+                    item["state"] = state
+                    item["activeFrame"] = frame.name if state == "busy" else None
+                    if state == "error":
+                        item["failures"] = int(item["failures"]) + 1
+                    snapshot = [dict(endpoint_activity[url]) for url in remote_endpoints]
+                    busy = [str(value["url"]) for value in snapshot if value["state"] == "busy"]
+                update_video_job(
+                    job_id, endpointActivity=snapshot, activeEndpoints=busy,
+                    phaseLabel=f"Upscaling remoto · {len(busy)}/{len(remote_endpoints)} endpoint al lavoro",
+                )
+
+            def remote_progress(completed: int, frame_total: int, endpoint: str, destination: Path) -> None:
+                elapsed = time.monotonic() - started
+                with endpoint_activity_lock:
+                    endpoint_activity[endpoint]["completed"] = int(endpoint_activity[endpoint]["completed"]) + 1
+                    snapshot = [dict(endpoint_activity[url]) for url in remote_endpoints]
+                    busy = [str(value["url"]) for value in snapshot if value["state"] == "busy"]
+                update_video_job(
+                    job_id, phaseLabel=f"Upscaling remoto · {len(busy)}/{len(remote_endpoints)} endpoint al lavoro",
+                    currentFrame=completed, completedFrames=completed, totalFrames=frame_total,
+                    progress=.04 + .9 * completed / frame_total, elapsedSeconds=elapsed,
+                    estimatedRemainingSeconds=(elapsed / completed * (frame_total - completed)) if completed else None,
+                    currentUpscaledFrame=str(destination), activeEndpoint=endpoint,
+                    endpointActivity=snapshot, activeEndpoints=busy,
+                )
+
+            completed, failures = distribute_frames(
+                original_frames, remote_endpoints, model_name, enhanced,
+                retries=int(job.get("remoteRetries", 2)), cancelled=lambda: video_job_cancelled(job_id),
+                on_progress=remote_progress, on_endpoint=remote_endpoint_state,
             )
-            log_step = max(1, total // 20)
-            if index == 1 or index == total or index % log_step == 0:
-                log_upscaler_event("backend", "frame-progress", jobId=job_id, currentFrame=index, totalFrames=total, progress=.04 + .9 * index / total)
+            update_video_job(job_id, currentFrame=completed, completedFrames=completed, endpointFailures=failures[-100:])
+        else:
+            runner = None if model_name == "canvas" else upsampler(model_name, backend, max(0, min(1024, tile)))
+            update_video_job(job_id, phase="upscaling", phaseLabel="Upscaling frame per frame", totalFrames=total, currentFrame=0, fps=fps, progress=0.04)
+            for index, frame_path in enumerate(original_frames, start=1):
+                if video_job_cancelled(job_id):
+                    update_video_job(job_id, phase="cancelled", phaseLabel="Job annullato", cancelled=True)
+                    cleanup_video_job(job_id, "cancelled")
+                    return
+                frame = cv2.imread(str(frame_path), cv2.IMREAD_COLOR)
+                if frame is None:
+                    raise RuntimeError(f"Fotogramma originale illeggibile: {frame_path.name}")
+                completed = index - 1
+                elapsed_before = time.monotonic() - started
+                estimated_before = (elapsed_before / completed * (total - completed)) if completed else None
+                passes = 2 if tta and runner is not None else 1
+                update_video_job(job_id, phaseLabel=f"Frame {index}/{total} · passaggio 1/{passes}", currentFrame=completed, progress=.04 + .9 * completed / total, elapsedSeconds=elapsed_before, estimatedRemainingSeconds=estimated_before, activeFrame=index, inferencePass=1, inferencePasses=passes)
+                if runner is None:
+                    output = canvas_enhance(frame, width, height)
+                else:
+                    output, _ = quiet_enhance(runner, frame, MODELS[model_name][0])
+                    if tta:
+                        update_video_job(job_id, phaseLabel=f"Frame {index}/{total} · passaggio TTA 2/2", activeFrame=index, inferencePass=2, inferencePasses=2)
+                        mirrored, _ = quiet_enhance(runner, cv2.flip(frame, 1), MODELS[model_name][0])
+                        output = cv2.addWeighted(output, .5, cv2.flip(mirrored, 1), .5, 0)
+                    if output.shape[1] != width or output.shape[0] != height:
+                        output = cv2.resize(output, (width, height), interpolation=cv2.INTER_LANCZOS4)
+                destination = enhanced / frame_path.name
+                if not cv2.imwrite(str(destination), output, [cv2.IMWRITE_PNG_COMPRESSION, 2]):
+                    raise RuntimeError(f"Impossibile salvare {destination.name}")
+                elapsed = time.monotonic() - started
+                update_video_job(job_id, currentFrame=index, totalFrames=total, progress=.04 + .9 * index / total, elapsedSeconds=elapsed, estimatedRemainingSeconds=(elapsed / index * (total - index)) if index else None, currentOriginalFrame=str(frame_path), currentUpscaledFrame=str(destination))
+                log_step = max(1, total // 20)
+                if index == 1 or index == total or index % log_step == 0:
+                    log_upscaler_event("backend", "frame-progress", jobId=job_id, currentFrame=index, totalFrames=total, progress=.04 + .9 * index / total)
         if video_job_cancelled(job_id):
             update_video_job(job_id, phase="cancelled", phaseLabel="Job annullato", cancelled=True)
-            cleanup_video_job(job_id, "cancelled")
+            if not job.get("remote"):
+                cleanup_video_job(job_id, "cancelled")
             return
+        # I checkpoint remoti restano immutati e riprendibili. Risoluzione e
+        # preset completo vengono materializzati separatamente, evitando che un
+        # retry applichi due volte le stesse correzioni.
+        shutil.rmtree(rendered, ignore_errors=True)
+        rendered.mkdir(parents=True, exist_ok=True)
+        adjustments_value = parse_upscaler_adjustments(json.dumps(job.get("adjustments", {})))
+        enhanced_frames = sorted(enhanced.glob("frame-*.png"))
+        if len(enhanced_frames) != total:
+            raise RuntimeError(f"Controllo anti-drop fallito prima delle regolazioni: {len(enhanced_frames)}/{total} frame")
+        update_video_job(job_id, phase="upscaling", phaseLabel="Applicazione regolazioni a tutti i frame", progress=.94)
+        for index, checkpoint in enumerate(enhanced_frames, start=1):
+            if video_job_cancelled(job_id):
+                raise InterruptedError("Job annullato durante le regolazioni")
+            output = cv2.imread(str(checkpoint), cv2.IMREAD_COLOR)
+            if output is None:
+                raise RuntimeError(f"Checkpoint illeggibile: {checkpoint.name}")
+            if output.shape[1] != width or output.shape[0] != height:
+                output = cv2.resize(output, (width, height), interpolation=cv2.INTER_LANCZOS4)
+            output = apply_upscaler_adjustments(output, adjustments_value)
+            destination = rendered / checkpoint.name
+            if not cv2.imwrite(str(destination), output, [cv2.IMWRITE_PNG_COMPRESSION, 2]):
+                raise RuntimeError(f"Impossibile applicare le regolazioni a {checkpoint.name}")
+            if index == total or index % max(1, total // 20) == 0:
+                update_video_job(job_id, phaseLabel=f"Regolazioni frame {index}/{total}", progress=.94 + .01 * index / total)
         update_video_job(job_id, phase="encoding", phaseLabel="Ricomposizione video e audio originale", progress=.95)
         log_upscaler_event("backend", "encoding-start", jobId=job_id, totalFrames=total)
         quality = str(job.get("quality", "maximum"))
         crf = "14" if quality == "maximum" else "17"
+        expected_duration = float(sum(durations))
+        if not np.isfinite(expected_duration) or expected_duration <= 0:
+            raise RuntimeError("La timeline del video sorgente non contiene durate valide")
+        # Il demuxer concat assegna alle immagini statiche una base temporale
+        # implicita di 25 fps. Senza un rate di input esplicito, una sorgente a
+        # 30 fps viene ricomposta a 25 fps e `-shortest` elimina circa un sesto
+        # dei frame quando l'audio termina. Usiamo il rate medio reale della
+        # timeline estratta e lasciamo che l'audio termini naturalmente.
+        recomposition_fps = total / expected_duration
         manifest = workspace / "upscaled-frames.ffconcat"
         manifest_lines = ["ffconcat version 1.0"]
-        for frame_path, duration in zip(sorted(enhanced.glob("frame-*.png")), durations, strict=True):
+        for frame_path, duration in zip(sorted(rendered.glob("frame-*.png")), durations, strict=True):
             manifest_lines.extend((f"file '{frame_path.as_posix()}'", f"duration {duration:.9f}"))
         manifest.write_text("\n".join(manifest_lines) + "\n", encoding="utf-8")
         run_checked([
             binary, "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
-            "-safe", "0", "-f", "concat", "-i", str(manifest),
+            "-r", f"{recomposition_fps:.12g}", "-safe", "0", "-f", "concat", "-i", str(manifest),
             "-i", str(source), "-map", "0:v:0", "-map", "1:a?", "-map_metadata", "-1",
             "-vf", "setsar=1", "-metadata:s:v:0", "rotate=0", "-c:v", "libx264", "-preset", "slow", "-crf", crf, "-pix_fmt", "yuv420p",
-            "-fps_mode", "vfr", "-c:a", "aac", "-b:a", "320k", "-shortest", "-movflags", "+faststart", str(result_path)
+            "-fps_mode", "passthrough", "-c:a", "aac", "-b:a", "320k",
+            "-t", f"{expected_duration:.9f}", "-movflags", "+faststart", str(result_path)
         ])
         if video_job_cancelled(job_id):
             update_video_job(job_id, phase="cancelled", phaseLabel="Job annullato", cancelled=True)
-            cleanup_video_job(job_id, "cancelled-after-encoding")
+            if not job.get("remote"):
+                cleanup_video_job(job_id, "cancelled-after-encoding")
             return
         if not result_path.exists() or result_path.stat().st_size <= 0:
             raise RuntimeError("La ricomposizione non ha prodotto un video valido.")
@@ -693,7 +1078,19 @@ def process_video_upscale_job(job_id: str) -> None:
         if encoded_frames != total:
             result_path.unlink(missing_ok=True)
             raise RuntimeError(f"Controllo anti-drop fallito: il risultato contiene {encoded_frames}/{total} frame")
+        encoded_duration = encoded_video_duration(result_path)
+        duration_tolerance = max(.05, 1.5 / recomposition_fps)
+        if abs(encoded_duration - expected_duration) > duration_tolerance:
+            result_path.unlink(missing_ok=True)
+            raise RuntimeError(
+                f"Controllo durata fallito: ottenuti {encoded_duration:.3f}/{expected_duration:.3f} secondi"
+            )
         encoded_geometry = probe_video_geometry(result_path)
+        source_audio_packets = audio_packet_count(source)
+        output_audio_packets = audio_packet_count(result_path)
+        if source_audio_packets > 0 and output_audio_packets <= 0:
+            result_path.unlink(missing_ok=True)
+            raise RuntimeError("Controllo audio fallito: la sorgente contiene audio ma il video ricomposto no")
         encoded_width = int(encoded_geometry["width"])
         encoded_height = int(encoded_geometry["height"])
         encoded_sar = float(encoded_geometry["sample_aspect_ratio_value"])
@@ -707,89 +1104,507 @@ def process_video_upscale_job(job_id: str) -> None:
             job_id,
             phase="ready",
             phaseLabel="Upscaling video completato",
+            error=None,
             progress=1,
             currentFrame=total,
             totalFrames=total,
             resultPath=str(result_path),
             resultBytes=result_path.stat().st_size,
+            encodedFrameCount=encoded_frames,
+            durationSeconds=encoded_duration,
             effectiveWidth=encoded_width,
             effectiveHeight=encoded_height,
             sampleAspectRatio=encoded_geometry["sample_aspect_ratio"],
             rotation=encoded_geometry["rotation"],
             elapsedSeconds=time.monotonic() - started,
+            sourceAudioPackets=source_audio_packets,
+            audioPacketCount=output_audio_packets,
+            audioRestored=source_audio_packets == 0 or output_audio_packets > 0,
         )
         log_upscaler_event("backend", "job-ready", jobId=job_id, totalFrames=total, resultBytes=result_path.stat().st_size, elapsedSeconds=time.monotonic() - started)
-        schedule_video_job_cleanup(job_id, READY_JOB_RETENTION_SECONDS, "ready-expired")
+        if not job.get("remote"):
+            schedule_video_job_cleanup(job_id, READY_JOB_RETENTION_SECONDS, "ready-expired")
+    except InterruptedError as error:
+        update_video_job(job_id, phase="cancelled", phaseLabel="Job remoto annullato · frame conservati", error=str(error), cancelled=True, resumable=True)
+        log_upscaler_event("backend", "remote-job-cancelled", jobId=job_id, error=str(error))
     except Exception as error:
-        update_video_job(job_id, phase="error", phaseLabel="Upscaling interrotto", error=str(error))
+        update_video_job(
+            job_id, phase="error",
+            phaseLabel="Upscaling remoto interrotto · frame conservati" if job.get("remote") else "Upscaling interrotto",
+            error=str(error), resumable=bool(job.get("remote")),
+        )
         log_upscaler_event("backend", "job-error", jobId=job_id, error=str(error))
-        schedule_video_job_cleanup(job_id, FAILED_JOB_RETENTION_SECONDS, "failed-expired")
+        if not job.get("remote"):
+            schedule_video_job_cleanup(job_id, FAILED_JOB_RETENTION_SECONDS, "failed-expired")
+
+
+def remote_video_job_reuse_rank(item: dict[str, object]) -> tuple[int, int, int]:
+    result_path = Path(str(item.get("resultPath", "")))
+    ready_artifact = item.get("phase") == "ready" and result_path.is_file() and result_path.stat().st_size > 0
+    return (
+        1 if ready_artifact else 0,
+        int(item.get("completedFrames", item.get("currentFrame", 0)) or 0),
+        int(item.get("manifestRevision", 0) or 0),
+    )
+
+
+def remote_video_job_checkpoint_matches(
+    item: dict[str, object], *, source_hash: str, model: str
+) -> bool:
+    """Return whether remote AI checkpoints can be reused for this source/model."""
+    return bool(
+        item.get("remote")
+        and item.get("sourceHash") == source_hash
+        and item.get("model") == model
+        and item.get("phase") in ("ready", "error", "cancelled")
+    )
+
+
+def normalize_remote_checkpoint_policy(value: str) -> str:
+    policy = value.strip().lower()
+    if policy not in REMOTE_CHECKPOINT_POLICIES:
+        raise ValueError("La scelta checkpoint deve essere 'resume' oppure 'restart'")
+    return policy
+
+
+def remote_video_job_candidate_rank(
+    item: dict[str, object], render_settings: dict[str, object]
+) -> tuple[int, int, int, int]:
+    """Prefer the largest checkpoint set, then an exact verified render."""
+    ready_artifact, completed_frames, revision = remote_video_job_reuse_rank(item)
+    render_matches = all(item.get(key) == value for key, value in render_settings.items())
+    return (
+        completed_frames,
+        1 if render_matches and ready_artifact else 0,
+        ready_artifact,
+        revision,
+    )
+
+
+def select_remote_video_job_candidate(
+    items: Iterable[dict[str, object]],
+    *,
+    source_hash: str,
+    model: str,
+    render_settings: dict[str, object],
+    checkpoint_policy: str,
+) -> dict[str, object] | None:
+    """Select reusable checkpoints only after an explicit resume decision."""
+    if normalize_remote_checkpoint_policy(checkpoint_policy) != "resume":
+        return None
+    candidates = [
+        item for item in items
+        if remote_video_job_checkpoint_matches(
+            item, source_hash=source_hash, model=model
+        )
+    ]
+    return max(
+        candidates,
+        key=lambda item: remote_video_job_candidate_rank(item, render_settings),
+        default=None,
+    )
+
+
+def prepare_remote_video_job_reuse(
+    item: dict[str, object],
+    *,
+    render_settings: dict[str, object],
+    endpoints: list[str],
+    retries: int,
+    client_id: str,
+) -> bool:
+    """Apply a new render request to reusable remote checkpoints.
+
+    Returns True when local processing must resume. Remote endpoint output is
+    stored before resizing and colour adjustments, so changing only the final
+    render settings must not discard already completed AI frames.
+    """
+    render_matches = all(item.get(key) == value for key, value in render_settings.items())
+    result_path = Path(str(item.get("resultPath", "")))
+    ready_artifact = (
+        render_matches
+        and item.get("phase") == "ready"
+        and result_path.is_file()
+        and result_path.stat().st_size > 0
+    )
+    item.update({
+        "remoteEndpoints": endpoints,
+        "remoteRetries": retries,
+        "clientId": client_id,
+    })
+    if ready_artifact:
+        return False
+    item.update(render_settings)
+    item.update({
+        "phase": "queued",
+        "phaseLabel": "Ripresa dai frame AI salvati",
+        "cancelRequested": False,
+        "cancelled": False,
+        "error": None,
+        "resultPath": None,
+        "resultBytes": None,
+    })
+    return True
 
 
 @app.post("/upscale/video/jobs")
 async def create_video_upscale_job(
     file: UploadFile = File(...), model: str = Form(...), backend: str = Form("auto"),
     tile: int = Form(256), width: int = Form(...), height: int = Form(...),
-    tta: bool = Form(False), quality: str = Form("maximum"), client_id: str = Form(""), preserve_aspect_ratio: bool = Form(True)
+    tta: bool = Form(False), quality: str = Form("maximum"), client_id: str = Form(""), preserve_aspect_ratio: bool = Form(True),
+    remote_config: str = Form(""), adjustments: str = Form("{}"),
+    checkpoint_policy: str = Form("restart"),
 ):
-    log_upscaler_event("backend", "upload-received", fileName=file.filename, model=model, backend=backend, target=f"{width}x{height}", quality=quality, preserveAspectRatio=preserve_aspect_ratio)
-    if model != "canvas" and model not in MODELS:
+    try:
+        checkpoint_policy = normalize_remote_checkpoint_policy(checkpoint_policy)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+    try:
+        parsed_adjustments = parse_upscaler_adjustments(adjustments)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+    adjustments_key = json.dumps(parsed_adjustments, sort_keys=True, separators=(",", ":"))
+    remote: dict[str, object] | None = None
+    if remote_config:
+        try:
+            value = json.loads(remote_config)
+            endpoints = value.get("endpoints") if isinstance(value, dict) else None
+            remote_model = value.get("model") if isinstance(value, dict) else None
+            if not isinstance(endpoints, list) or not endpoints or not all(isinstance(item, str) for item in endpoints) or not isinstance(remote_model, str) or not remote_model.strip():
+                raise ValueError
+            remote = {
+                "endpoints": list(dict.fromkeys(normalize_endpoint(item) for item in endpoints)),
+                "model": remote_model.strip(),
+                "retries": max(0, min(6, int(value.get("retries", 2)))),
+            }
+        except (ValueError, TypeError, json.JSONDecodeError, RemoteUpscalerError) as error:
+            raise HTTPException(400, "Configurazione Upscaler remoto non valida") from error
+    log_upscaler_event("backend", "upload-received", fileName=file.filename, model=model, backend=backend, target=f"{width}x{height}", quality=quality, preserveAspectRatio=preserve_aspect_ratio, checkpointPolicy=checkpoint_policy)
+    if remote is None and model != "canvas" and model not in MODELS:
         raise HTTPException(400, "Modello video sconosciuto")
-    if model != "canvas" and not target(model).exists():
+    if remote is None and model != "canvas" and not target(model).exists():
         raise HTTPException(409, "Modello non ancora scaricato")
     if not ffmpeg_binary():
         raise HTTPException(503, "ffmpeg non disponibile nel servizio locale")
     if width < 64 or height < 64 or width > 16384 or height > 16384:
         raise HTTPException(400, "Risoluzione finale fuori dai limiti")
     job_id = uuid.uuid4().hex
-    workspace = VIDEO_TEMP_ROOT / job_id
-    workspace.mkdir(parents=True, exist_ok=False)
+    workspace = (REMOTE_VIDEO_ROOT if remote else VIDEO_TEMP_ROOT) / job_id
+    upload_placeholder: dict[str, object] | None = None
+    if remote:
+        upload_placeholder = {
+            "id": job_id,
+            "phase": "uploading",
+            "phaseLabel": "Ricezione video sorgente",
+            "progress": 0,
+            "currentFrame": 0,
+            "totalFrames": 0,
+            "tempDirectory": str(workspace),
+            "sourceName": file.filename or "source.mp4",
+            "clientId": client_id,
+            "cancelRequested": False,
+            "cancelled": False,
+            "remote": True,
+            "resumable": False,
+            "checkpointPolicy": checkpoint_policy,
+        }
+        # Workspace creation and registration share the same lock used by the
+        # bulk cache DELETE. The cache can therefore never observe an upload
+        # directory without also observing its active placeholder.
+        with video_job_lock:
+            workspace.mkdir(parents=True, exist_ok=False)
+            video_jobs[job_id] = upload_placeholder
+    else:
+        workspace.mkdir(parents=True, exist_ok=False)
     suffix = Path(file.filename or "source.mp4").suffix.lower()
     if suffix not in (".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi"):
         suffix = ".mp4"
     source = workspace / f"source{suffix}"
+    source_hash = hashlib.sha256()
     try:
         with source.open("wb") as output:
             while chunk := await file.read(1024 * 1024):
                 output.write(chunk)
+                source_hash.update(chunk)
         if source.stat().st_size <= 0:
             raise HTTPException(400, "Video sorgente vuoto")
     except BaseException:
-        shutil.rmtree(workspace, ignore_errors=True)
+        if upload_placeholder is not None:
+            discard_remote_video_upload(job_id, upload_placeholder, workspace)
+        else:
+            shutil.rmtree(workspace, ignore_errors=True)
         raise
     finally:
-        await file.close()
+        try:
+            await file.close()
+        except BaseException:
+            if upload_placeholder is not None:
+                discard_remote_video_upload(job_id, upload_placeholder, workspace)
+            else:
+                shutil.rmtree(workspace, ignore_errors=True)
+            raise
     try:
         source_geometry = probe_video_geometry(source)
         effective_width, effective_height = resolve_video_dimensions(width, height, source_geometry, preserve_aspect_ratio)
     except Exception as error:
-        shutil.rmtree(workspace, ignore_errors=True)
+        if upload_placeholder is not None:
+            discard_remote_video_upload(job_id, upload_placeholder, workspace)
+        else:
+            shutil.rmtree(workspace, ignore_errors=True)
         raise HTTPException(400, f"Impossibile determinare la geometria del video: {error}") from error
     with video_job_lock:
         cutoff = time.time() - 3600
         for stale_client in [key for key, cancelled_at in cancelled_video_clients.items() if cancelled_at < cutoff]:
             cancelled_video_clients.pop(stale_client, None)
-        client_was_cancelled = bool(client_id and client_id in cancelled_video_clients)
+        client_was_cancelled = bool(
+            (client_id and client_id in cancelled_video_clients)
+            or (upload_placeholder is not None and upload_placeholder.get("cancelRequested"))
+        )
     if client_was_cancelled:
-        shutil.rmtree(workspace, ignore_errors=True)
+        if upload_placeholder is not None:
+            discard_remote_video_upload(job_id, upload_placeholder, workspace)
+        else:
+            shutil.rmtree(workspace, ignore_errors=True)
         raise HTTPException(409, "La pagina che ha creato il job non è più attiva")
+    digest = source_hash.hexdigest()
+    log_upscaler_event(
+        "backend", "upload-verified", fileName=file.filename,
+        sourceBytes=source.stat().st_size, sourceHash=digest,
+        checkpointPolicy=checkpoint_policy,
+    )
+    if remote:
+        render_settings: dict[str, object] = {
+            "requestedWidth": width,
+            "requestedHeight": height,
+            "width": effective_width,
+            "height": effective_height,
+            "preserveAspectRatio": preserve_aspect_ratio,
+            "quality": quality,
+            "adjustments": parsed_adjustments,
+            "adjustmentsKey": adjustments_key,
+            "backend": backend,
+            "tile": tile,
+            "tta": tta,
+        }
+        with video_job_lock:
+            if (
+                upload_placeholder is None
+                or video_jobs.get(job_id) is not upload_placeholder
+                or upload_placeholder.get("cancelRequested")
+                or (client_id and client_id in cancelled_video_clients)
+            ):
+                if upload_placeholder is not None:
+                    _discard_remote_video_upload_locked(job_id, upload_placeholder, workspace)
+                raise HTTPException(409, "La pagina che ha creato il job non è più attiva")
+            candidate = select_remote_video_job_candidate(
+                video_jobs.values(),
+                source_hash=digest,
+                model=str(remote["model"]),
+                render_settings=render_settings,
+                checkpoint_policy=checkpoint_policy,
+            )
+            if candidate is not None:
+                if upload_placeholder is None or not _discard_remote_video_upload_locked(
+                    job_id, upload_placeholder, workspace
+                ):
+                    raise HTTPException(500, "Impossibile chiudere l'upload temporaneo prima della ripresa")
+                resume_existing = prepare_remote_video_job_reuse(
+                    candidate,
+                    render_settings=render_settings,
+                    endpoints=list(remote["endpoints"]),
+                    retries=int(remote["retries"]),
+                    client_id=client_id,
+                )
+                snapshot = dict(candidate)
+                snapshot["checkpointPolicy"] = checkpoint_policy
+                candidate["checkpointPolicy"] = checkpoint_policy
+            else:
+                snapshot = {}
+                resume_existing = False
+        if snapshot:
+            persist_remote_video_job(snapshot)
+            if resume_existing:
+                threading.Thread(target=process_video_upscale_job, args=(str(snapshot["id"]),), daemon=True).start()
+            log_upscaler_event("backend", "remote-job-reused", jobId=snapshot["id"], sourceHash=digest, completedFrames=snapshot.get("currentFrame", 0))
+            return snapshot
     record: dict[str, object] = {
         "id": job_id, "phase": "queued", "phaseLabel": "Job in coda", "progress": 0,
         "currentFrame": 0, "totalFrames": 0, "tempDirectory": str(workspace),
         "originalFramesDirectory": str(workspace / "original-frames"),
         "upscaledFramesDirectory": str(workspace / "upscaled-frames"),
-        "sourcePath": str(source), "model": model, "backend": backend, "tile": tile,
+        "sourcePath": str(source), "model": str(remote["model"]) if remote else model, "backend": backend, "tile": tile,
+        "sourceName": file.filename or "source.mp4", "sourceBytes": source.stat().st_size, "sourceHash": digest,
         "requestedWidth": width, "requestedHeight": height,
         "width": effective_width, "height": effective_height, "preserveAspectRatio": preserve_aspect_ratio,
         "sourceGeometry": source_geometry, "tta": tta, "quality": quality,
+        "adjustments": parsed_adjustments, "adjustmentsKey": adjustments_key,
         "clientId": client_id,
         "cancelRequested": False, "cancelled": False,
+        "remote": bool(remote), "resumable": bool(remote),
+        "checkpointPolicy": checkpoint_policy,
+        "remoteEndpoints": remote["endpoints"] if remote else [], "remoteRetries": remote["retries"] if remote else 0,
     }
     with video_job_lock:
-        video_jobs[job_id] = record
-    log_upscaler_event("backend", "job-created", jobId=job_id, sourceBytes=source.stat().st_size, tempDirectory=workspace)
+        if upload_placeholder is not None:
+            if (
+                video_jobs.get(job_id) is not upload_placeholder
+                or upload_placeholder.get("cancelRequested")
+                or (client_id and client_id in cancelled_video_clients)
+            ):
+                _discard_remote_video_upload_locked(job_id, upload_placeholder, workspace)
+                raise HTTPException(409, "La pagina che ha creato il job non è più attiva")
+            video_jobs[job_id] = record
+        else:
+            video_jobs[job_id] = record
+    if remote:
+        persist_remote_video_job(record)
+    log_upscaler_event("backend", "job-created", jobId=job_id, sourceBytes=source.stat().st_size, sourceHash=digest, checkpointPolicy=checkpoint_policy, tempDirectory=workspace)
     threading.Thread(target=process_video_upscale_job, args=(job_id,), daemon=True).start()
     return record
+
+
+@app.post("/upscale/video/jobs/{job_id}/resume")
+def resume_video_upscale_job(job_id: str, payload: dict[str, object] = Body(default={})):
+    with video_job_lock:
+        item = video_jobs.get(job_id)
+        if item is None or not item.get("remote"):
+            raise HTTPException(404, "Job remoto riprendibile non trovato")
+        if item.get("phase") not in ("error", "cancelled"):
+            raise HTTPException(409, "Il job non è in uno stato riprendibile")
+        endpoints = payload.get("endpoints")
+        if endpoints is not None:
+            if not isinstance(endpoints, list) or not endpoints or not all(isinstance(value, str) for value in endpoints):
+                raise HTTPException(400, "Endpoint di ripresa non validi")
+            try:
+                item["remoteEndpoints"] = list(dict.fromkeys(normalize_endpoint(value) for value in endpoints))
+            except RemoteUpscalerError as error:
+                raise HTTPException(400, str(error)) from error
+        item.update({"phase": "queued", "phaseLabel": "Ripresa dai frame salvati", "cancelRequested": False, "cancelled": False, "error": None})
+        snapshot = dict(item)
+    persist_remote_video_job(snapshot)
+    threading.Thread(target=process_video_upscale_job, args=(job_id,), daemon=True).start()
+    return snapshot
+
+
+@app.get("/upscale/remote/video/jobs")
+def recoverable_remote_video_jobs():
+    with video_job_lock:
+        return {"jobs": [dict(item) for item in video_jobs.values() if item.get("remote") and item.get("phase") in ("error", "cancelled", "ready")]}
+
+
+@app.get("/upscale/remote/video/cache")
+def remote_video_cache_status():
+    root = REMOTE_VIDEO_ROOT.resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    with video_job_lock:
+        jobs = [dict(item) for item in video_jobs.values() if item.get("remote")]
+    active = [str(item.get("id", "")) for item in jobs if item.get("phase") not in REMOTE_VIDEO_TERMINAL_PHASES]
+    terminal = [str(item.get("id", "")) for item in jobs if item.get("phase") in REMOTE_VIDEO_TERMINAL_PHASES]
+    entries = list(root.iterdir())
+    return {
+        "directory": str(root),
+        "jobs": len(jobs),
+        "terminalJobs": len(terminal),
+        "activeJobs": len(active),
+        "activeJobIds": active,
+        "entries": len(entries),
+        "bytes": sum(_cache_entry_size(entry) for entry in entries),
+    }
+
+
+@app.delete("/upscale/remote/video/cache")
+def clear_remote_video_cache():
+    """Delete remote checkpoints without racing a worker or escaping the cache root."""
+    root = REMOTE_VIDEO_ROOT.resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    deleted_paths: set[Path] = set()
+    deleted_bytes = 0
+    failures: list[dict[str, str]] = []
+    deleted_job_ids: list[str] = []
+
+    with video_job_lock:
+        remote_items = {
+            str(item.get("id", "")): item
+            for item in video_jobs.values()
+            if item.get("remote")
+        }
+        active = sorted(
+            job_id for job_id, item in remote_items.items()
+            if item.get("phase") not in REMOTE_VIDEO_TERMINAL_PHASES
+        )
+        if active:
+            raise HTTPException(409, detail={
+                "message": "La cache remota non può essere svuotata mentre esistono job attivi.",
+                "activeJobs": active,
+            })
+
+        validated_workspaces: dict[str, Path] = {}
+        invalid_jobs: list[dict[str, str]] = []
+        for job_id, item in remote_items.items():
+            try:
+                validated_workspaces[job_id] = _validated_remote_cache_workspace(item, root)
+            except ValueError as error:
+                invalid_jobs.append({"jobId": job_id, "error": str(error)})
+        if invalid_jobs:
+            raise HTTPException(409, detail={
+                "message": "Cancellazione rifiutata: uno o più workspace non appartengono alla cache remota.",
+                "invalidJobs": invalid_jobs,
+            })
+
+        targets: list[Path] = []
+        unsafe_entries: list[str] = []
+        for entry in root.iterdir():
+            resolved = entry.resolve()
+            if entry.is_symlink() or resolved.parent != root:
+                unsafe_entries.append(str(entry))
+            else:
+                targets.append(resolved)
+        if unsafe_entries:
+            raise HTTPException(409, detail={
+                "message": "Cancellazione rifiutata: la cache contiene collegamenti o percorsi non sicuri.",
+                "unsafeEntries": unsafe_entries,
+            })
+
+        target_sizes = {target: _cache_entry_size(target) for target in targets}
+        for target in targets:
+            try:
+                if target.is_dir():
+                    shutil.rmtree(target)
+                else:
+                    target.unlink()
+                deleted_paths.add(target)
+                deleted_bytes += target_sizes[target]
+            except OSError as error:
+                failures.append({"path": str(target), "error": str(error)})
+
+        for job_id, workspace in validated_workspaces.items():
+            if not workspace.exists() or workspace in deleted_paths:
+                current = video_jobs.get(job_id)
+                if current is remote_items[job_id]:
+                    video_jobs.pop(job_id, None)
+                    deleted_job_ids.append(job_id)
+
+    tracking_ids = set(deleted_job_ids)
+    tracking_ids.update(path.name for path in deleted_paths)
+    with remote_manifest_lock:
+        for job_id in tracking_ids:
+            remote_manifest_last_write.pop(job_id, None)
+            remote_manifest_written_revision.pop(job_id, None)
+
+    root.mkdir(parents=True, exist_ok=True)
+    result: dict[str, object] = {
+        "directory": str(root),
+        "removedJobs": len(deleted_job_ids),
+        "deletedEntries": len(deleted_paths),
+        "removedBytes": deleted_bytes,
+        "remainingEntries": len(list(root.iterdir())),
+    }
+    if failures:
+        result["failures"] = failures
+        log_upscaler_event("backend", "remote-cache-clear-partial", **result)
+        raise HTTPException(500, detail=result)
+    log_upscaler_event("backend", "remote-cache-cleared", **result)
+    return result
 
 
 @app.delete("/upscale/video/clients/{client_id}")
@@ -822,7 +1637,9 @@ def cancel_video_upscale_job(job_id: str):
             raise HTTPException(404, "Job video non trovato")
         item["cancelRequested"] = True
         snapshot = dict(item)
-    if snapshot.get("phase") in ("ready", "error", "cancelled"):
+    if snapshot.get("remote"):
+        persist_remote_video_job(snapshot)
+    if snapshot.get("phase") in ("ready", "error", "cancelled") and not snapshot.get("remote"):
         cleanup_video_job(job_id, "client-release")
     return snapshot
 
@@ -838,12 +1655,10 @@ def video_upscale_job_result(job_id: str):
     path = Path(str(item.get("resultPath", "")))
     if not path.exists():
         raise HTTPException(410, "Il risultato del job non è più disponibile")
-    return FileResponse(
-        path,
-        media_type="video/mp4",
-        filename="mlsm-upscaled-video.mp4",
-        background=BackgroundTask(cleanup_video_job, job_id, "download-complete"),
-    )
+    # The frontend adopts this artifact for preview and desktop save. Deleting
+    # the workspace at response completion races the native atomic copy, so the
+    # READY_JOB_RETENTION_SECONDS timer scheduled at finalization owns cleanup.
+    return FileResponse(path, media_type="video/mp4", filename="mlsm-upscaled-video.mp4")
 
 
 def minterpolate_filter(target_fps: float, method: str) -> str:
@@ -878,6 +1693,9 @@ def expected_minterpolate_frame_count(source_frames: int, source_fps: float, tar
 def validate_interpolation_audit(
     *, source_frames: int, source_fps: float, source_duration: float,
     output_frames: int, output_fps: float, output_duration: float, target_fps: float,
+    source_width: int | None = None, source_height: int | None = None, output_width: int | None = None, output_height: int | None = None,
+    source_sar: str | None = None, output_sar: str | None = None, source_dar: float | None = None, output_dar: float | None = None,
+    source_has_audio: bool | None = None, output_has_audio: bool | None = None,
 ) -> None:
     """Reject duplicated-rate or truncated outputs before they can be delivered."""
     expected_frames = expected_minterpolate_frame_count(source_frames, source_fps, target_fps)
@@ -896,6 +1714,14 @@ def validate_interpolation_audit(
     minimum_from_source = max(0.0, source_duration - 2 / source_fps)
     if output_duration + duration_tolerance < minimum_from_source:
         raise RuntimeError(f"Durata interpolata troncata rispetto alla sorgente: ottenuti {output_duration:g} s, sorgente {source_duration:g} s")
+    if source_width is not None and output_width is not None and (source_width != output_width or source_height != output_height):
+        raise RuntimeError("Geometria del risultato interpolato diversa dalla sorgente")
+    if source_sar and output_sar and source_sar != output_sar:
+        raise RuntimeError("Sample aspect ratio del risultato interpolato diverso dalla sorgente")
+    if source_dar and output_dar and abs(source_dar - output_dar) > .01:
+        raise RuntimeError("Display aspect ratio del risultato interpolato diverso dalla sorgente")
+    if source_has_audio and output_has_audio is False:
+        raise RuntimeError("L'audio della sorgente è stato perso")
 
 
 def _terminate_subprocess(process: subprocess.Popen[object], grace_seconds: float = INTERPOLATION_PROCESS_GRACE_SECONDS) -> bool:
@@ -919,6 +1745,132 @@ def _terminate_subprocess(process: subprocess.Popen[object], grace_seconds: floa
         except (OSError, ProcessLookupError, subprocess.TimeoutExpired):
             pass
     return process.poll() is not None
+
+
+def _register_interpolation_process(job_id: str | None, process: subprocess.Popen[object]) -> None:
+    """Register one child process while it belongs to an interpolation job.
+
+    All job-aware subprocesses go through the same registry.  DELETE can then
+    terminate ffprobe, ffmpeg and remux children just as it terminates RIFE's
+    isolated worker; the registry is intentionally not used by legacy
+    synchronous endpoints.
+    """
+    if not job_id:
+        return
+    with interpolation_job_lock:
+        item = interpolation_jobs.get(job_id)
+        if item is None:
+            return
+        interpolation_processes[job_id] = process
+        item["processId"] = getattr(process, "pid", None)
+
+
+def _unregister_interpolation_process(job_id: str | None, process: subprocess.Popen[object]) -> None:
+    if not job_id:
+        return
+    with interpolation_job_lock:
+        if interpolation_processes.get(job_id) is process:
+            interpolation_processes.pop(job_id, None)
+        item = interpolation_jobs.get(job_id)
+        if item is not None and item.get("processId") == getattr(process, "pid", None):
+            item.pop("processId", None)
+
+
+def _run_interpolation_subprocess(
+    job_id: str,
+    command: list[str],
+    *,
+    timeout_seconds: float = INTERPOLATION_TIMEOUT_SECONDS,
+    on_stdout_line: Callable[[str], None] | None = None,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run a job child with cancellation, timeout and bounded process cleanup.
+
+    Two reader threads continuously drain stdout/stderr so a verbose ffmpeg
+    process cannot block on a full pipe.  The caller remains responsive to a
+    DELETE request while the process is running and receives an ordinary
+    ``CompletedProcess`` once it exits.  Every exit path unregisters the child
+    only after it has stopped.
+    """
+    if _interpolation_job_cancelled(job_id):
+        raise InterruptedError("Interpolazione annullata")
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    _register_interpolation_process(job_id, process)
+    output_queue: queue.Queue[tuple[str, bytes]] = queue.Queue()
+    stdout_chunks: list[bytes] = []
+    stderr_chunks: list[bytes] = []
+
+    def drain(stream: object, label: str) -> None:
+        if stream is None or not hasattr(stream, "readline"):
+            return
+        try:
+            while True:
+                line = stream.readline()  # type: ignore[attr-defined]
+                if line in (b"", "", None):
+                    break
+                if isinstance(line, str):
+                    line = line.encode("utf-8", "replace")
+                output_queue.put((label, bytes(line)))
+        except (OSError, ValueError):
+            # The stream can be closed by terminate/kill while the reader is
+            # draining.  The process result still determines the job outcome.
+            return
+
+    readers: list[threading.Thread] = []
+    for stream, label in ((getattr(process, "stdout", None), "stdout"), (getattr(process, "stderr", None), "stderr")):
+        if stream is not None and hasattr(stream, "readline"):
+            reader = threading.Thread(target=drain, args=(stream, label), daemon=True)
+            reader.start()
+            readers.append(reader)
+
+    started = time.monotonic()
+
+    def consume(label: str, chunk: bytes) -> None:
+        if label == "stdout":
+            stdout_chunks.append(chunk)
+            if on_stdout_line is not None:
+                on_stdout_line(chunk.decode("utf-8", "replace").strip())
+        else:
+            stderr_chunks.append(chunk)
+
+    try:
+        while process.poll() is None:
+            if _interpolation_job_cancelled(job_id):
+                _terminate_subprocess(process)
+                raise InterruptedError("Interpolazione annullata")
+            if time.monotonic() - started >= max(0.0, timeout_seconds):
+                _terminate_subprocess(process)
+                raise TimeoutError("L'interpolazione non è terminata entro il tempo massimo.")
+            while True:
+                try:
+                    label, chunk = output_queue.get_nowait()
+                except queue.Empty:
+                    break
+                consume(label, chunk)
+            try:
+                process.wait(timeout=.05)
+            except subprocess.TimeoutExpired:
+                continue
+        returncode = process.poll()
+        # DELETE can race with the final wait/poll transition.  Honour a
+        # cancellation observed after the child exited as well, before
+        # publishing a successful CompletedProcess to the caller.
+        if _interpolation_job_cancelled(job_id):
+            raise InterruptedError("Interpolazione annullata")
+        # Give readers a bounded opportunity to consume the EOF and remaining
+        # bytes after process exit.  They are daemon threads as a final guard.
+        for reader in readers:
+            reader.join(timeout=1)
+        while True:
+            try:
+                label, chunk = output_queue.get_nowait()
+            except queue.Empty:
+                break
+            consume(label, chunk)
+        return subprocess.CompletedProcess(command, int(returncode or 0), b"".join(stdout_chunks), b"".join(stderr_chunks))
+    finally:
+        if process.poll() is None:
+            _terminate_subprocess(process)
+        _unregister_interpolation_process(job_id, process)
 
 
 def _wait_for_interpolation_process(
@@ -979,15 +1931,19 @@ def _interpolation_job_cancelled(job_id: str) -> bool:
         return bool(item and item.get("cancelRequested"))
 
 
-def _interpolation_probe(path: Path) -> tuple[int, float, float]:
+def _interpolation_probe(path: Path, job_id: str | None = None) -> tuple[int, float, float]:
     """Return encoded frames, average frame rate and video duration."""
     probe = ffprobe_binary()
     if not probe:
         raise RuntimeError("ffprobe non disponibile: impossibile verificare l'interpolazione")
-    result = subprocess.run([
+    command = [
         probe, "-v", "error", "-select_streams", "v:0", "-count_frames",
         "-show_entries", "stream=nb_read_frames,avg_frame_rate,duration:format=duration", "-of", "json", str(path)
-    ], capture_output=True, check=False)
+    ]
+    if job_id:
+        result = _run_interpolation_subprocess(job_id, command)
+    else:
+        result = subprocess.run(command, capture_output=True, check=False)
     if result.returncode != 0:
         raise RuntimeError("ffprobe non riesce a verificare il risultato interpolato")
     try:
@@ -1003,6 +1959,58 @@ def _interpolation_probe(path: Path) -> tuple[int, float, float]:
     return frames, fps, duration
 
 
+def _interpolation_media_audit(path: Path, job_id: str | None = None) -> dict[str, object]:
+    """Read the complete source/output contract used by standalone Frame Booster."""
+    probe = ffprobe_binary()
+    if not probe:
+        raise RuntimeError("ffprobe non disponibile: impossibile verificare il file")
+    command = [probe, "-v", "error", "-count_frames", "-show_streams", "-show_format", "-of", "json", str(path)]
+    if job_id:
+        result = _run_interpolation_subprocess(job_id, command)
+    else:
+        result = subprocess.run(command, capture_output=True, check=False)
+    if result.returncode != 0: raise RuntimeError("ffprobe non riesce a leggere l'audit multimediale")
+    payload = json.loads(result.stdout or b"{}")
+    streams = payload.get("streams", [])
+    video = next((item for item in streams if item.get("codec_type") == "video"), None)
+    if not isinstance(video, dict): raise RuntimeError("Il file non contiene una traccia video")
+    rate = str(video.get("avg_frame_rate") or video.get("r_frame_rate") or "0/1"); numerator, denominator = rate.split("/", 1)
+    fps = float(numerator) / float(denominator) if float(denominator) else 0.0
+    frames = int(video.get("nb_read_frames") or 0); duration = float(video.get("duration") or payload.get("format", {}).get("duration") or 0)
+    # Reuse the same rotation/SAR parser used by video ingest. Smartphone files
+    # commonly store landscape-coded pixels plus a 90-degree display matrix;
+    # comparing raw coded dimensions would reject a correct autorotated output.
+    geometry = parse_ffprobe_geometry({"streams": [video]})
+    sar = str(geometry["sample_aspect_ratio"])
+    if int(geometry["rotation"]) % 180 == 90 and ":" in sar:
+        numerator, denominator = sar.split(":", 1)
+        sar = f"{denominator}:{numerator}"
+    return {
+        "frameCount": frames,
+        "fps": fps,
+        "durationSeconds": duration,
+        "width": int(geometry["display_width"]),
+        "height": int(geometry["display_height"]),
+        "codedWidth": int(geometry["width"]),
+        "codedHeight": int(geometry["height"]),
+        "rotation": int(geometry["rotation"]),
+        "sampleAspectRatio": sar,
+        "displayAspectRatio": float(geometry["display_aspect_ratio"]),
+        "hasAudio": any(item.get("codec_type") == "audio" for item in streams),
+    }
+
+
+def _resolve_interpolation_rates(
+    *, probed_source_fps: float, declared_source_fps: object,
+    target_fps: object, target_multiplier: object,
+) -> tuple[float, float]:
+    if target_multiplier is not None:
+        source = float(probed_source_fps)
+        return source, source * float(target_multiplier)
+    source = float(declared_source_fps or probed_source_fps)
+    return source, float(target_fps or 0)
+
+
 def _run_ffmpeg_interpolation_job(job_id: str, source: Path, destination: Path, target_fps: float, method: str, expected_frames: int) -> str:
     """Run ffmpeg with machine-readable progress and cooperative cancellation."""
     binary = ffmpeg_binary()
@@ -1014,84 +2022,73 @@ def _run_ffmpeg_interpolation_job(job_id: str, source: Path, destination: Path, 
         "-c:v", "libx264", "-preset", "slow", "-crf", "16", "-pix_fmt", "yuv420p",
         "-movflags", "+faststart", "-c:a", "copy", "-progress", "pipe:1", str(destination)
     ]
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
-    with interpolation_job_lock:
-        item = interpolation_jobs.get(job_id)
-        if item is not None:
-            item["processId"] = process.pid
     started = time.monotonic()
-    try:
-        assert process.stdout is not None
-        for raw_line in process.stdout:
-            if time.monotonic() - started > INTERPOLATION_TIMEOUT_SECONDS:
-                process.kill()
-                process.wait(timeout=3)
-                raise TimeoutError("ffmpeg non ha terminato l'interpolazione entro il tempo massimo.")
-            if _interpolation_job_cancelled(job_id):
-                process.terminate()
-                try:
-                    process.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=3)
-                raise InterruptedError("Interpolazione annullata")
-            line = raw_line.strip()
-            if "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            elapsed = time.monotonic() - started
-            if key == "frame":
+    def on_progress_line(line: str) -> None:
+        if "=" not in line:
+            return
+        key, value = line.split("=", 1)
+        elapsed = time.monotonic() - started
+        if key == "frame":
+            try:
                 frame = max(0, int(float(value or 0)))
-                fraction = min(1.0, frame / max(1, expected_frames))
-                _update_interpolation_job(job_id, currentFrame=frame, totalFrames=expected_frames, progress=fraction, stageProgress=fraction, elapsedSeconds=elapsed, estimatedRemainingSeconds=(elapsed / frame * (expected_frames - frame)) if frame else None, indeterminate=False)
-            elif key == "total_size":
+            except ValueError:
+                return
+            fraction = min(1.0, frame / max(1, expected_frames))
+            _update_interpolation_job(job_id, currentFrame=frame, totalFrames=expected_frames, progress=fraction, stageProgress=fraction, elapsedSeconds=elapsed, estimatedRemainingSeconds=(elapsed / frame * (expected_frames - frame)) if frame else None, indeterminate=False)
+        elif key == "total_size":
+            try:
                 size = max(0, int(float(value or 0)))
-                _update_interpolation_job(job_id, processedBytes=size, bytesProcessed=size, elapsedSeconds=elapsed)
-            elif key == "progress" and value == "end":
-                _update_interpolation_job(job_id, progress=1.0, stageProgress=1.0, currentFrame=expected_frames, totalFrames=expected_frames, elapsedSeconds=elapsed, estimatedRemainingSeconds=0)
-        returncode = process.wait(timeout=INTERPOLATION_TIMEOUT_SECONDS)
-    except subprocess.TimeoutExpired as error:
-        process.kill()
-        process.wait(timeout=3)
-        raise TimeoutError("ffmpeg non ha terminato l'interpolazione entro il tempo massimo.") from error
-    finally:
-        if process.poll() is None:
-            process.kill()
-            process.wait(timeout=3)
+            except ValueError:
+                return
+            _update_interpolation_job(job_id, processedBytes=size, bytesProcessed=size, elapsedSeconds=elapsed)
+        elif key == "progress" and value == "end":
+            _update_interpolation_job(job_id, progress=1.0, stageProgress=1.0, currentFrame=expected_frames, totalFrames=expected_frames, elapsedSeconds=elapsed, estimatedRemainingSeconds=0)
+
+    result = _run_interpolation_subprocess(job_id, command, on_stdout_line=on_progress_line)
+    returncode = result.returncode
     if returncode != 0:
-        detail = (process.stderr.read() if process.stderr else "").strip()[-600:]
+        detail = result.stderr.decode("utf-8", "replace").strip()[-600:]
         raise RuntimeError(f"ffmpeg ha restituito un errore: {detail or 'nessun dettaglio disponibile'}")
     return f"ffmpeg · {method}"
 
 
-def _rife_worker_command(source: Path, destination: Path, target_fps: float) -> list[str]:
+def _rife_worker_command(source: Path, destination: Path, target_fps: float, device: str = "auto", precision: str = "auto", model_id: str = "rife-v4.26") -> list[str]:
     return [
         sys.executable, str(Path(__file__).resolve()), "--rife-worker",
-        str(source), str(destination), f"{target_fps:g}", str(RIFE_WEIGHTS), str(device_from("auto")),
+        str(source), str(destination), f"{target_fps:g}", str(model_id), str(device), str(precision),
     ]
 
 
-def _run_rife_worker(source: Path, destination: Path, target_fps: float, weights: Path, device: str) -> None:
-    try:
-        from rife_interpolate import interpolate_file  # type: ignore[import-not-found]
-    except ImportError as error:
-        raise RuntimeError("Runtime RIFE non installato in questo ambiente. Usa la stima del movimento ffmpeg.") from error
-    interpolate_file(str(source), str(destination), target_fps=target_fps, weights=str(weights), device=device)
+def _run_rife_worker(source: Path, destination: Path, target_fps: float, model_id: str, device: str, precision: str = "auto") -> None:
+    # The worker may run only after the server-side manifest, checksum and
+    # PyTorch device validation have passed.  Never import a random module or
+    # silently switch to FFmpeg when those checks fail.
+    runtime = validate_rife_request(model_id, device, precision, require_self_test=False)
+    practical_rife_interpolate_file(
+        source,
+        destination,
+        target_fps=target_fps,
+        runtime_path=Path(str(runtime["runtimePath"])),
+        device=str(runtime["device"]),
+        precision=str(runtime["precision"]),
+    )
 
 
-def _run_isolated_rife(source: Path, destination: Path, target_fps: float, job_id: str | None = None) -> str:
+def _run_isolated_rife(source: Path, destination: Path, target_fps: float, job_id: str | None = None, device: str = "auto", precision: str = "auto", model_id: str = "rife-v4.26") -> str:
     """Run the callable-only RIFE runtime in a killable worker process."""
-    if not rife_available():
-        raise HTTPException(409, f"Pesi RIFE non presenti in {RIFE_WEIGHTS}. Copiali lì oppure scegli la stima del movimento ffmpeg.")
+    try:
+        # Validate the device the user actually selected. A failed automatic
+        # MPS test must not block an explicitly verified CUDA/CPU job (or vice
+        # versa), and the worker receives the resolved device/precision.
+        request = validate_rife_request(model_id, device, precision)
+    except (RuntimeError, ValueError) as error:
+        raise HTTPException(409, str(error)) from error
+    effective_device = str(request["device"])
+    effective_precision = str(request["precision"])
     log_path = destination.with_suffix(".rife-worker.log")
     with log_path.open("w+b") as worker_log:
-        process = subprocess.Popen(_rife_worker_command(source, destination, target_fps), stdout=subprocess.DEVNULL, stderr=worker_log)
-        if job_id:
-            with interpolation_job_lock:
-                interpolation_processes[job_id] = process
-                item = interpolation_jobs.get(job_id)
-                if item is not None:
-                    item["processId"] = process.pid
+        process = subprocess.Popen(_rife_worker_command(source, destination, target_fps, effective_device, effective_precision, model_id), stdout=subprocess.DEVNULL, stderr=worker_log)
+        _register_interpolation_process(job_id, process)
         try:
             returncode = _wait_for_interpolation_process(
                 process,
@@ -1106,16 +2103,30 @@ def _run_isolated_rife(source: Path, destination: Path, target_fps: float, job_i
                 detail = worker_log.read().decode("utf-8", "replace").strip()[-600:]
                 raise RuntimeError(f"RIFE ha restituito un errore: {detail or 'nessun dettaglio disponibile'}")
         finally:
-            if job_id:
-                with interpolation_job_lock:
-                    if interpolation_processes.get(job_id) is process:
-                        interpolation_processes.pop(job_id, None)
             if process.poll() is None:
                 _terminate_subprocess(process)
+            _unregister_interpolation_process(job_id, process)
     log_path.unlink(missing_ok=True)
     if not destination.exists() or destination.stat().st_size == 0:
         raise HTTPException(500, "Il runtime RIFE non ha prodotto un file utilizzabile.")
-    return f"rife · {device_from('auto')}"
+    return f"rife · {effective_device}/{effective_precision}"
+
+
+def _remux_interpolation_audio(source: Path, destination: Path, job_id: str | None = None) -> None:
+    """Copy the original audio stream onto a RIFE video without re-encoding it."""
+    binary = ffmpeg_binary()
+    if not binary: raise RuntimeError("ffmpeg non disponibile per il remux audio RIFE")
+    temporary = destination.with_suffix(".audio-remux.mp4")
+    command = [binary, "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", str(destination), "-i", str(source), "-map", "0:v:0", "-map", "1:a?", "-c:v", "copy", "-c:a", "copy", "-shortest", str(temporary)]
+    try:
+        if job_id:
+            result = _run_interpolation_subprocess(job_id, command)
+        else:
+            result = subprocess.run(command, capture_output=True, check=False, timeout=INTERPOLATION_TIMEOUT_SECONDS)
+        if result.returncode != 0: raise RuntimeError((result.stderr or b"").decode("utf-8", "replace")[-500:] or "Remux audio RIFE fallito")
+        temporary.replace(destination)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def run_rife(source: Path, destination: Path, target_fps: float) -> str:
@@ -1132,11 +2143,22 @@ def process_interpolation_job(job_id: str) -> None:
     destination = Path(str(job["tempDirectory"])) / "interpolated.mp4"
     started = time.monotonic()
     try:
-        source_fps = float(job["sourceFps"])
-        target_fps = float(job["targetFps"])
-        source_frames, probed_source_fps, source_duration = _interpolation_probe(source)
+        source_frames, probed_source_fps, source_duration = _interpolation_probe(source, job_id)
+        source_audit = _interpolation_media_audit(source, job_id)
+        # Multiplier mode is derived exclusively from ffprobe. Browser metadata
+        # is often missing or rounded (29.97 vs 30) and must never determine the
+        # output timeline.
+        source_fps, target_fps = _resolve_interpolation_rates(
+            probed_source_fps=probed_source_fps,
+            declared_source_fps=job.get("sourceFps"),
+            target_fps=job.get("targetFps"),
+            target_multiplier=job.get("targetMultiplier"),
+        )
+        if not 1 <= target_fps <= 480 or target_fps <= source_fps:
+            raise RuntimeError("Frame rate target non valido o non superiore alla sorgente")
         if abs(probed_source_fps - source_fps) > max(.05, source_fps * INTERPOLATION_FPS_RELATIVE_TOLERANCE):
             raise RuntimeError(f"Frame rate sorgente non coerente: dichiarati {source_fps:g} fps, rilevati {probed_source_fps:g} fps")
+        _update_interpolation_job(job_id, sourceFps=source_fps, targetFps=target_fps)
         expected = expected_minterpolate_frame_count(source_frames, source_fps, target_fps)
         _update_interpolation_job(job_id, sourceFrames=source_frames, totalFrames=expected, stageTotalFrames=expected, phase="interpolating", phaseLabel="Interpolazione dei fotogrammi", progress=0.0, stageProgress=0.0)
         if _interpolation_job_cancelled(job_id):
@@ -1146,7 +2168,10 @@ def process_interpolation_job(job_id: str) -> None:
             # RIFE runtimes generally expose no frame callback.  Mark this honestly
             # as indeterminate and still check cancellation at the boundaries.
             _update_interpolation_job(job_id, indeterminate=True, progress=0.0, stageProgress=None, phaseLabel="RIFE · elaborazione GPU in corso")
-            backend = _run_isolated_rife(source, destination, target_fps, job_id)
+            backend = _run_isolated_rife(source, destination, target_fps, job_id, str(job.get("device", "auto")), str(job.get("precision", "auto")), str(job.get("rifeModel", "rife-v4.26")))
+            if bool(source_audit.get("hasAudio")):
+                _update_interpolation_job(job_id, phase="remuxing", phaseLabel="Ripristino audio originale", indeterminate=True)
+                _remux_interpolation_audio(source, destination, job_id)
         else:
             backend = _run_ffmpeg_interpolation_job(job_id, source, destination, target_fps, method, expected)
         if _interpolation_job_cancelled(job_id):
@@ -1154,12 +2179,14 @@ def process_interpolation_job(job_id: str) -> None:
         _update_interpolation_job(job_id, phase="verifying", phaseLabel="Verifica del file interpolato", progress=1.0, stageProgress=1.0, indeterminate=False)
         if not destination.exists() or destination.stat().st_size <= 0:
             raise RuntimeError("L'interpolazione non ha prodotto un file utilizzabile.")
-        frames, fps, duration = _interpolation_probe(destination)
+        frames, fps, duration = _interpolation_probe(destination, job_id)
+        output_audit = _interpolation_media_audit(destination, job_id)
         validate_interpolation_audit(
             source_frames=source_frames, source_fps=source_fps, source_duration=source_duration,
             output_frames=frames, output_fps=fps, output_duration=duration, target_fps=target_fps,
+            source_width=int(source_audit["width"]), source_height=int(source_audit["height"]), output_width=int(output_audit["width"]), output_height=int(output_audit["height"]), source_sar=str(source_audit["sampleAspectRatio"]), output_sar=str(output_audit["sampleAspectRatio"]), source_dar=float(source_audit["displayAspectRatio"]), output_dar=float(output_audit["displayAspectRatio"]), source_has_audio=bool(source_audit["hasAudio"]), output_has_audio=bool(output_audit["hasAudio"]),
         )
-        _update_interpolation_job(job_id, phase="ready", phaseLabel="Interpolazione completata", progress=1.0, stageProgress=1.0, currentFrame=frames, totalFrames=frames, resultPath=str(destination), resultBytes=destination.stat().st_size, processedBytes=destination.stat().st_size, bytesProcessed=destination.stat().st_size, outputFps=fps, backend=backend, elapsedSeconds=time.monotonic() - started, estimatedRemainingSeconds=0, indeterminate=False)
+        _update_interpolation_job(job_id, phase="ready", phaseLabel="Interpolazione completata", progress=1.0, stageProgress=1.0, currentFrame=frames, totalFrames=frames, resultPath=str(destination), resultBytes=destination.stat().st_size, processedBytes=destination.stat().st_size, bytesProcessed=destination.stat().st_size, outputFps=fps, backend=backend, source=source_audit, output=output_audit, elapsedSeconds=time.monotonic() - started, estimatedRemainingSeconds=0, indeterminate=False)
         schedule_interpolation_job_cleanup(job_id, INTERPOLATION_READY_RETENTION_SECONDS, "interpolation-ready-expired")
     except InterruptedError:
         _update_interpolation_job(job_id, phase="cancelled", phaseLabel="Interpolazione annullata", indeterminate=False, cancelled=True)
@@ -1195,15 +2222,27 @@ async def _stream_upload_limited(file: UploadFile, destination: Path, max_bytes:
 @app.post("/interpolation/jobs")
 @app.post("/interpolate/jobs")
 async def create_interpolation_job(
-    file: UploadFile = File(...), source_fps: float = Form(...), target_fps: float = Form(...),
-    method: str = Form("motion"), client_id: str = Form("")
+    file: UploadFile = File(...), source_fps: float | None = Form(None), target_fps: float | None = Form(None),
+    target_multiplier: float | None = Form(None), method: str = Form("motion"), client_id: str = Form(""),
+    device: str = Form("auto"), rife_model: str = Form("rife-v4.26"), precision: str = Form("auto")
 ):
     if method not in INTERPOLATION_METHODS:
         raise HTTPException(400, "Metodo di interpolazione sconosciuto")
-    if not 1 <= source_fps <= 480 or not 1 <= target_fps <= 480 or target_fps <= source_fps:
-        raise HTTPException(400, "Frame rate fuori dai limiti o target non superiore alla sorgente")
-    if method == "rife" and not rife_available():
-        raise HTTPException(409, "Pesi RIFE non presenti nel servizio locale")
+    if target_multiplier is not None and target_fps is not None:
+        raise HTTPException(400, "Scegli un moltiplicatore oppure FPS diretti, non entrambi")
+    if target_multiplier is None and target_fps is None:
+        raise HTTPException(400, "Target di interpolazione mancante")
+    if target_multiplier is not None and (not math.isfinite(target_multiplier) or target_multiplier <= 1 or target_multiplier > 16):
+        raise HTTPException(400, "Moltiplicatore fuori dai limiti supportati")
+    if target_fps is not None and (not math.isfinite(target_fps) or not 1 <= target_fps <= 480):
+        raise HTTPException(400, "Frame rate target fuori dai limiti supportati")
+    if device not in ("auto", "mps", "cuda", "cpu") or precision not in ("auto", "fp16", "fp32"):
+        raise HTTPException(400, "Device o precisione non supportati")
+    if method == "rife":
+        try:
+            validate_rife_request(rife_model, device, precision)
+        except (RuntimeError, ValueError) as error:
+            raise HTTPException(409, str(error)) from error
     if method != "rife" and not ffmpeg_binary():
         raise HTTPException(503, "ffmpeg non disponibile nel servizio locale")
     job_id = f"interpolation-{uuid.uuid4().hex}"
@@ -1223,9 +2262,10 @@ async def create_interpolation_job(
             raise HTTPException(409, "La pagina che ha creato il job non è più attiva")
         record: dict[str, object] = {
             "id": job_id, "phase": "queued", "phaseLabel": "Job di interpolazione in coda", "progress": 0.0, "stageProgress": 0.0,
-            "currentFrame": 0, "totalFrames": 0, "sourceFps": source_fps, "targetFps": target_fps, "method": method,
+            "currentFrame": 0, "totalFrames": 0, "sourceFps": source_fps, "targetFps": target_fps, "targetMultiplier": target_multiplier, "method": method,
             "tempDirectory": str(workspace), "sourcePath": str(source), "clientId": client_id,
-            "cancelRequested": False, "cancelled": False, "indeterminate": method == "rife", "processedBytes": 0, "totalBytes": source_bytes
+            "cancelRequested": False, "cancelled": False, "indeterminate": method == "rife", "processedBytes": 0, "totalBytes": source_bytes,
+            "device": device, "rifeModel": rife_model, "precision": precision
         }
         interpolation_jobs[job_id] = record
     log_upscaler_event("backend", "interpolation-job-created", jobId=job_id, sourceBytes=source_bytes, targetFps=target_fps, method=method)
@@ -1310,15 +2350,20 @@ async def interpolate(file: UploadFile = File(...), source_fps: float = Form(...
         finally:
             await file.close()
         source_frames, probed_source_fps, source_duration = _interpolation_probe(source)
+        source_audit = _interpolation_media_audit(source)
         if abs(probed_source_fps - source_fps) > max(.05, source_fps * INTERPOLATION_FPS_RELATIVE_TOLERANCE):
             raise HTTPException(400, f"Frame rate sorgente non coerente: dichiarati {source_fps:g} fps, rilevati {probed_source_fps:g} fps")
         backend = run_rife(source, destination, target_fps) if method == "rife" else run_ffmpeg(source, destination, target_fps, method)
+        if method == "rife" and bool(source_audit.get("hasAudio")):
+            _remux_interpolation_audio(source, destination)
         if not destination.exists() or destination.stat().st_size == 0:
             raise HTTPException(500, "L'interpolazione non ha prodotto un file utilizzabile.")
         frames, fps, duration = _interpolation_probe(destination)
+        output_audit = _interpolation_media_audit(destination)
         validate_interpolation_audit(
             source_frames=source_frames, source_fps=source_fps, source_duration=source_duration,
             output_frames=frames, output_fps=fps, output_duration=duration, target_fps=target_fps,
+            source_width=int(source_audit["width"]), source_height=int(source_audit["height"]), output_width=int(output_audit["width"]), output_height=int(output_audit["height"]), source_sar=str(source_audit["sampleAspectRatio"]), output_sar=str(output_audit["sampleAspectRatio"]), source_dar=float(source_audit["displayAspectRatio"]), output_dar=float(output_audit["displayAspectRatio"]), source_has_audio=bool(source_audit["hasAudio"]), output_has_audio=bool(output_audit["hasAudio"]),
         )
         return Response(
             destination.read_bytes(),
@@ -1332,9 +2377,12 @@ async def interpolate(file: UploadFile = File(...), source_fps: float = Form(...
 
 
 if __name__ == "__main__":
-    if len(sys.argv) == 7 and sys.argv[1] == "--rife-worker":
+    if len(sys.argv) in (7, 8) and sys.argv[1] == "--rife-worker":
         try:
-            _run_rife_worker(Path(sys.argv[2]), Path(sys.argv[3]), float(sys.argv[4]), Path(sys.argv[5]), sys.argv[6])
+            # argv[5] is the manifest model identifier, not a filesystem path.
+            # Converting it to Path makes even the supported ``rife-v4.26``
+            # fail the worker-side allow-list before inference can start.
+            _run_rife_worker(Path(sys.argv[2]), Path(sys.argv[3]), float(sys.argv[4]), sys.argv[5], sys.argv[6], sys.argv[7] if len(sys.argv) == 8 else "auto")
         except Exception as error:
             print(str(error), file=sys.stderr, flush=True)
             raise SystemExit(1) from error

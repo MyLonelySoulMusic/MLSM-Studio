@@ -55,6 +55,8 @@ Audio di clip e traccia hanno muto e volume indipendenti; il guadagno finale è 
 
 I parametri di regolazione, trasformazione, opacità, volume, blend ed effetti possono essere automatizzati. Le curve disponibili sono lineare, esponenziale, logaritmica e Bézier personalizzata. La velocità supporta valore costante e rampe; la mappatura canonica half-open resta locale alla clip e viene condivisa da preview, export, audio e strumenti, inclusi i tagli frazionari. Il comportamento del pitch segue questa mappatura: il preserva-pitch DSP professionale non è disponibile per velocità diverse da 1× o per rampe (l’interfaccia lo disabilita quando necessario).
 
+Per riprodurre una clip video dalla fine all’inizio, selezionala e premi **↶ Reverse** nella barra superiore della timeline, a destra dei controlli di riproduzione e montaggio. Il simbolo `↶` sulla clip identifica la direzione inversa. Trim, split, velocità costante e rampe continuano a usare lo stesso intervallo sorgente; la preview campiona i fotogrammi in ordine decrescente e l’export ricostruisce al contrario sia il video sia l’audio della clip. I progetti precedenti restano compatibili e mantengono la direzione normale.
+
 La preview usa un backing stabile per evitare sfarfallii durante seek, gap, sostituzioni e ridimensionamento dei pannelli. Il ridimensionamento modifica solo il layout disponibile: il video mantiene il proprio rapporto reale e non viene rimontato.
 
 ## Export

@@ -3,7 +3,7 @@
 ## Operativo
 
 - Home a quattro aree con lingua e tema.
-- Dieci modalità Sound Animation visibili.
+- Undici modalità Sound Animation visibili.
 - Watermark Remover e upscaling immagine/video.
 - Video Editor multitraccia con 14 effetti.
 - AI Quantizer integrato nel repository.

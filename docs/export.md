@@ -29,7 +29,8 @@ Nel pannello Upscaler, quando **Mantieni proporzioni** è attivo, importazione e
 - **From 9:16 to 16:9:** compositor a livelli con video centrale, immagini laterali, cubo, spettro ed effetti.
 - **Pro Subtitles:** video completo oppure livello trasparente MOV ProRes 4444/WebM VP9 alpha quando il runtime lo supporta; sfondo pieno come fallback.
 - **Static Watermark Remover:** decodifica e correzione frame per frame.
-- **Upscaler video:** frame originali temporanei, elaborazione per frame/tile, ricostruzione audio/video.
+- **Upscaler video:** frame originali temporanei, elaborazione per frame/tile, ricostruzione audio/video. Nel percorso remoto la scelta tra ripresa dei checkpoint compatibili e ripartenza completa è esplicita per ogni job; il backend non riusa mai automaticamente la cache.
+- **Frame Booster standalone:** la stessa pipeline di interpolazione è disponibile anche fuori dal Video Editor per video singoli. Blend, Motion e RIFE producono un job cancellabile con avanzamento; il risultato viene accettato soltanto dopo l’audit di FPS, durata, numero frame, DAR/rotazione, dimensioni e audio della sorgente. Non viene applicato alcun fallback silenzioso.
 - **Video Editor:** livelli, blend, correzione, effetti e mix audio dalla timeline; le immagini PNG/WebP mantengono l’alpha durante la composizione dei livelli. Le ombre delle immagini usano la silhouette alpha e gli stili Ombra morbida, Bagliore o Ombra lunga con gli stessi parametri della preview (colore, opacità, diffusione e, quando applicabile, distanza/direzione). Trasformazioni, fade e ordine delle tracce vengono applicati prima della composizione dell’ombra; il file MP4 finale viene consegnato come composizione opaca.
 
 Per il Video Editor l’export usa la stessa base temporale razionale e la stessa mappatura canonica half-open locale delle clip della preview, dell’audio e degli strumenti. Sono preservati i tagli frazionari e l’identità dei frame; automazioni e rampe di velocità vengono risolte offline con le curve salvate nel progetto. Il preserva-pitch DSP professionale non viene applicato a velocità diverse da 1× o a rampe: quando non è supportato il controllo viene disabilitato nell’interfaccia.
@@ -38,7 +39,38 @@ Se **Frame interpolation (optional)** è attivata, l’encoder crea e verifica p
 
 L’interpolazione viene eseguita come job remoto cancellabile: annullando l’export il job viene terminato e i suoi temporanei vengono rimossi anche in caso di errore di rete o di download. Il file interpolato viene accettato solo se la verifica conferma durata, FPS target e numero di frame atteso; se il servizio non è disponibile, fallisce o la verifica non passa, viene consegnato il file base già verificato con un avviso non bloccante. Disattivando l’opzione, il file mantiene esattamente gli FPS renderizzati.
 
+La modalità standalone Frame Booster usa lo stesso contratto e conserva inoltre
+audio, rapporto di visualizzazione e rotazione del video sorgente. Per RIFE la
+barra può essere indeterminata durante l’inferenza, perché il runtime non espone
+un conteggio affidabile dei frame; l’annullamento resta comunque effettivo.
+
 ## Audio
+
+### Cassette Desk
+
+La finestra di export permette di scegliere tra **Brano caricato + effetti meccanici** e **Solo effetti meccanici**. La seconda modalità non incorpora il brano, così il video può essere associato al suono ufficiale su TikTok o altri servizi, ma mantiene sempre nell’audio esportato lo scorrimento della cassetta, la chiusura dello sportello e la pressione del tasto PLAY. Entrambe le modalità vengono codificate e verificate come MP4 H.264/AAC.
+
+L’export comprende l’intro oltre alla durata del brano. Il motore inserisce silenzio ed effetti meccanici all’inizio della traccia AAC, sposta il brano al tempo configurato e renderizza ogni frame con la stessa timeline della preview. Il controllo finale continua a richiedere frame video e pacchetti audio validi.
+
+### Song Player
+
+Song Player mantiene separati due ingressi espliciti: lo spezzone audio della
+clip (`project.audio`) e la canzone completa, caricata come file oppure
+scaricata da YouTube. Il matching cerca lo spezzone nella canzone completa.
+La preview e l’export riproducono sempre lo spezzone; lo spettrogramma in basso
+rappresenta invece l’intera canzone e mostra riquadro e playhead nella posizione
+riconosciuta. Lo spettrogramma è pienamente opaco per impostazione predefinita;
+la sua opacità resta regolabile. Barre animate e spettrogramma hanno due palette
+indipendenti: entrambe seguono inizialmente la palette della cover, ma possono
+essere sbloccate e modificate a tre colori separatamente. Cover flat/cube, sfondo
+e rapporti 9:16, 16:9, 1:1 e 4:5 vengono renderizzati dallo stesso renderer
+deterministico.
+
+Il download YouTube richiede il runtime desktop Song Player, configurabile con
+`npm run song-player:setup`, oltre a FFmpeg. Con due file locali, analisi FFT e
+matching automatico funzionano anche nel browser tramite Web Audio; se il
+worker desktop non è disponibile, l’app usa automaticamente questo percorso
+senza generare dati audio sintetici.
 
 L’audio non viene mandato alle cuffie durante l’export. Quando è possibile viene copiato o transcodificato in AAC/codec compatibile e muxato sul file finale; la durata viene verificata insieme al video.
 

@@ -8,6 +8,11 @@ L’introduzione resta aperta finché non premi **Entra in MLSM Studio**. I puls
 
 La Home mostra soltanto le aree di lavoro. Ogni card indica quante modalità contiene; il pulsante **Home** dell’editor riporta qui senza cambiare area in modo implicito.
 
+**LongCat Video** apre un workspace autonomo: scegli Text-to-Video,
+Image-to-Video o Video Continuation, inserisci il prompt, seleziona sorgente e
+destinazione e avvia un job locale. Lo stato del runtime indica separatamente
+GPU CUDA, repository, ambiente Python e checkpoint.
+
 ![Home con le aree](screenshots/02-home-areas.png)
 
 ## Layout dell’editor

@@ -197,7 +197,7 @@ describe("ProSubtitles UI", () => {
   });
 
   it("non mostra la nota generica delle altre modalità sotto il workflow Pro", () => {
-    render(<LibraryPanel canRegenerate={false} onRegenerate={vi.fn()} onImportSubtitleVideo={vi.fn(async () => undefined)} audioUrl={null} duration={0} currentTime={0} selectedSubtitleId={null} onSelectSubtitle={vi.fn()} />);
+    render(<LibraryPanel canRegenerate={false} onRegenerate={vi.fn()} onImportAudioFragment={vi.fn(async () => undefined)} onImportSubtitleVideo={vi.fn(async () => undefined)} audioUrl={null} duration={0} currentTime={0} selectedSubtitleId={null} onSelectSubtitle={vi.fn()} />);
     expect(screen.getByText("1 · Video guida")).toBeInTheDocument();
     expect(screen.queryByText("Ogni modalità fornisce generatore", { exact: false })).not.toBeInTheDocument();
   });

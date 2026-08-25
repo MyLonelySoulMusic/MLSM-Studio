@@ -316,6 +316,7 @@ const staticWatermarkSchema = z.object({
 const defaultUpscaler = {
   sourceUrl: null, sourceName: "", sourceKind: "image" as const, sourceWidth: 0, sourceHeight: 0, durationSeconds: 0,
   model: "canvas" as const, backend: "auto" as const, tileSize: 256, tta: false,
+  remote: { enabled: false, endpoints: [] as Array<{ id: string; label: string; url: string; enabled: boolean }>, model: "", frameRetries: 2 },
   scale: 4, finalWidth: 3840, finalHeight: 2160, lockAspectRatio: true,
   comparisonMode: "split" as const, comparisonPosition: .5, originalBlend: 0,
   adjustments: { exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, saturation: 0, vibrance: 0, temperature: 0, tint: 0, sharpness: 12, denoise: 0 }
@@ -331,6 +332,14 @@ const upscalerSchema = z.object({
   backend: z.enum(["auto", "cuda", "metal", "webgpu", "cpu"]).default(defaultUpscaler.backend),
   tileSize: z.number().int().min(64).max(1024).default(defaultUpscaler.tileSize),
   tta: z.boolean().default(defaultUpscaler.tta),
+  remote: z.object({
+    enabled: z.boolean().default(defaultUpscaler.remote.enabled),
+    endpoints: z.array(z.object({
+      id: z.string().min(1).max(100), label: z.string().max(100), url: z.string().url().max(2048), enabled: z.boolean()
+    }).strict()).max(16).default(defaultUpscaler.remote.endpoints),
+    model: z.string().max(200).default(defaultUpscaler.remote.model),
+    frameRetries: z.number().int().min(0).max(6).default(defaultUpscaler.remote.frameRetries)
+  }).strict().default(defaultUpscaler.remote),
   scale: z.number().min(1).max(4).default(defaultUpscaler.scale),
   finalWidth: z.number().int().min(64).max(16384).default(defaultUpscaler.finalWidth),
   finalHeight: z.number().int().min(64).max(16384).default(defaultUpscaler.finalHeight),
@@ -343,6 +352,54 @@ const upscalerSchema = z.object({
     whites: z.number().min(-100).max(100), blacks: z.number().min(-100).max(100), saturation: z.number().min(-100).max(100), vibrance: z.number().min(-100).max(100),
     temperature: z.number().min(-100).max(100), tint: z.number().min(-100).max(100), sharpness: z.number().min(0).max(100), denoise: z.number().min(0).max(100)
   }).strict().default(defaultUpscaler.adjustments)
+}).strict();
+const defaultFrameBooster = {
+  sourceUrl: null,
+  sourceName: "",
+  sourceWidth: 0,
+  sourceHeight: 0,
+  sourceDurationSeconds: 0,
+  sourceFps: null,
+  sourceFrameCount: null,
+  sourceHasAudio: false,
+  method: "rife" as const,
+  targetMode: "multiplier" as const,
+  targetMultiplier: 2 as const,
+  targetFps: 60,
+  device: "auto" as const,
+  rifeModel: "rife-v4.26" as const,
+  scale: 1 as const,
+  precision: "auto" as const,
+  sceneCut: true,
+  quality: "balanced" as const,
+  lastOutput: null
+};
+const frameBoosterSchema = z.object({
+  sourceUrl: z.string().nullable().default(defaultFrameBooster.sourceUrl),
+  sourceName: z.string().max(500).default(defaultFrameBooster.sourceName),
+  sourceWidth: z.number().int().nonnegative().default(defaultFrameBooster.sourceWidth),
+  sourceHeight: z.number().int().nonnegative().default(defaultFrameBooster.sourceHeight),
+  sourceDurationSeconds: z.number().nonnegative().default(defaultFrameBooster.sourceDurationSeconds),
+  sourceFps: z.number().positive().nullable().default(defaultFrameBooster.sourceFps),
+  sourceFrameCount: z.number().int().nonnegative().nullable().default(defaultFrameBooster.sourceFrameCount),
+  sourceHasAudio: z.boolean().default(defaultFrameBooster.sourceHasAudio),
+  method: z.enum(["rife", "motion", "blend"]).default(defaultFrameBooster.method),
+  targetMode: z.enum(["multiplier", "fps"]).default(defaultFrameBooster.targetMode),
+  targetMultiplier: z.union([z.literal(2), z.literal(3), z.literal(4), z.literal(5)]).default(defaultFrameBooster.targetMultiplier),
+  targetFps: z.number().positive().max(480).default(defaultFrameBooster.targetFps),
+  device: z.enum(["auto", "mps", "cuda", "cpu"]).default(defaultFrameBooster.device),
+  // Accept the short-lived pre-release value, but always migrate it to the
+  // first model backed by a pinned, checksummed upstream artifact.
+  rifeModel: z.enum(["rife-v4.25", "rife-v4.26"]).transform(() => "rife-v4.26" as const).default(defaultFrameBooster.rifeModel),
+  scale: z.union([z.literal(.5), z.literal(1), z.literal(2)]).default(defaultFrameBooster.scale),
+  precision: z.enum(["auto", "fp32", "fp16"]).default(defaultFrameBooster.precision),
+  sceneCut: z.boolean().default(defaultFrameBooster.sceneCut),
+  quality: z.enum(["balanced", "high"]).default(defaultFrameBooster.quality),
+  lastOutput: z.object({
+    name: z.string().max(500), fps: z.number().positive(), frameCount: z.number().int().nonnegative(),
+    durationSeconds: z.number().nonnegative(), width: z.number().int().nonnegative(), height: z.number().int().nonnegative(),
+    hasAudio: z.boolean(), backend: z.string().max(200)
+  }).strict().nullable().default(defaultFrameBooster.lastOutput)
 }).strict();
 // Le modalità di fusione corrispondono uno a uno a `globalCompositeOperation`.
 // L’export offline le compone esattamente; la preview DOM conserva la stessa
@@ -408,6 +465,7 @@ const videoEditorImageShadowSchema = z.object({
 const videoEditorClipSchema = z.object({
   id: z.string().min(1), assetId: z.string().min(1), trackId: z.string().min(1),
   startSeconds: z.number().nonnegative(), durationSeconds: z.number().positive(), sourceInSeconds: z.number().nonnegative().default(0),
+  reversed: z.boolean().default(false),
   fadeInSeconds: z.number().nonnegative().max(60).default(0), fadeOutSeconds: z.number().nonnegative().max(60).default(0),
   fadeCurve: videoEditorFadeCurveSchema.default("smooth"), audioFadeInSeconds: z.number().nonnegative().max(60).default(0), audioFadeOutSeconds: z.number().nonnegative().max(60).default(0),
   blendMode: videoEditorBlendModeSchema.default("normal"), blendIntensity: z.number().min(0).max(1).default(1),
@@ -532,6 +590,114 @@ const sceneLightingSchema = z.object({
   reflectionBoost: z.number().min(.25).max(3).default(defaultSceneLighting.reflectionBoost)
 }).strict();
 
+// Song Player keeps the imported fragment in `project.audio` and stores the
+// optional full track as a separate, content-addressed asset.  All fields use
+// defaults so projects written before Song Player remain valid when parsed.
+const defaultSongPlayer = {
+  assets: [],
+  fullTrackAssetId: null,
+  coverImageUrl: null,
+  backgroundImageUrl: null,
+  backgroundFit: "cover" as const,
+  title: "",
+  artist: "",
+  coverStyle: "flat" as const,
+  autoPalette: true,
+  palette: ["#63f0d1", "#7657ff", "#ff4f9a"] as [string, string, string],
+  spectrumPaletteMode: "auto" as const,
+  spectrumPalette: ["#63f0d1", "#7657ff", "#ff4f9a"] as [string, string, string],
+  spectrogramPaletteMode: "auto" as const,
+  spectrogramPalette: ["#63f0d1", "#7657ff", "#ff4f9a"] as [string, string, string],
+  spectrumGain: 1,
+  spectrogramOpacity: 1,
+  metadataVisible: true,
+  match: {
+    state: "idle" as const,
+    fragmentHash: "",
+    fullTrackHash: "",
+    selectedOffsetMs: 0,
+    confidence: 0,
+    candidates: [],
+    resolution: "auto" as const,
+    error: null,
+    analyzedAt: null
+  }
+};
+const defaultCassetteDesk = {
+  coverImageUrl: null,
+  title: "",
+  artist: "",
+  stereoStyle: "classic" as const,
+  autoPalette: true,
+  palette: ["#d8c4a6", "#6d8068", "#d34f69"] as [string, string, string],
+  waveformColorMode: "auto" as const,
+  waveformColor: "#d34f69",
+  displaySpectrumColorMode: "auto" as const,
+  displaySpectrumColor: "#d34f69",
+  stereoBodyColorMode: "auto" as const,
+  stereoBodyColor: "#d8c4a6",
+  pianoColorMode: "auto" as const,
+  pianoColor: "#d8c4a6",
+  deskColorMode: "auto" as const,
+  deskColor: "#6d513f",
+  introDurationSeconds: 4.8,
+  vocalToleranceCents: 42,
+  tempoDetectionMode: "auto" as const,
+  manualBpm: 120,
+  halfTime: false,
+  keyDetectionMode: "auto" as const,
+  manualKeyRoot: 9,
+  manualKeyMode: "major" as const,
+  showWaveform: true,
+  showPiano: true,
+  showTrackInfo: true
+};
+const cassetteDeskSchema = z.object({
+  coverImageUrl: z.string().refine((value) => !value.startsWith("blob:"), "Gli URL blob runtime non possono essere salvati nel progetto.").nullable().default(defaultCassetteDesk.coverImageUrl),
+  title: z.string().max(160).default(defaultCassetteDesk.title), artist: z.string().max(160).default(defaultCassetteDesk.artist),
+  stereoStyle: z.enum(["classic", "poster"]).default(defaultCassetteDesk.stereoStyle),
+  autoPalette: z.boolean().default(defaultCassetteDesk.autoPalette), palette: z.tuple([z.string(), z.string(), z.string()]).default(defaultCassetteDesk.palette),
+  waveformColorMode: z.enum(["auto", "manual"]).default(defaultCassetteDesk.waveformColorMode), waveformColor: z.string().default(defaultCassetteDesk.waveformColor),
+  displaySpectrumColorMode: z.enum(["auto", "manual"]).default(defaultCassetteDesk.displaySpectrumColorMode), displaySpectrumColor: z.string().default(defaultCassetteDesk.displaySpectrumColor),
+  stereoBodyColorMode: z.enum(["auto", "manual"]).default(defaultCassetteDesk.stereoBodyColorMode), stereoBodyColor: z.string().default(defaultCassetteDesk.stereoBodyColor),
+  pianoColorMode: z.enum(["auto", "manual"]).default(defaultCassetteDesk.pianoColorMode), pianoColor: z.string().default(defaultCassetteDesk.pianoColor),
+  deskColorMode: z.enum(["auto", "manual"]).default(defaultCassetteDesk.deskColorMode), deskColor: z.string().default(defaultCassetteDesk.deskColor),
+  introDurationSeconds: z.number().min(3.6).max(8).default(defaultCassetteDesk.introDurationSeconds), vocalToleranceCents: z.number().min(10).max(100).default(defaultCassetteDesk.vocalToleranceCents),
+  tempoDetectionMode: z.enum(["auto", "manual"]).default(defaultCassetteDesk.tempoDetectionMode), manualBpm: z.number().min(20).max(300).default(defaultCassetteDesk.manualBpm), halfTime: z.boolean().default(defaultCassetteDesk.halfTime),
+  keyDetectionMode: z.enum(["auto", "manual"]).default(defaultCassetteDesk.keyDetectionMode), manualKeyRoot: z.number().int().min(0).max(11).default(defaultCassetteDesk.manualKeyRoot), manualKeyMode: z.enum(["major", "minor"]).default(defaultCassetteDesk.manualKeyMode),
+  showWaveform: z.boolean().default(defaultCassetteDesk.showWaveform), showPiano: z.boolean().default(defaultCassetteDesk.showPiano), showTrackInfo: z.boolean().default(defaultCassetteDesk.showTrackInfo)
+}).strict();
+const songPlayerAssetSchema = z.object({
+  id: z.string().min(1), kind: z.literal("fullTrack"),
+  source: z.enum(["localImport", "youtubeDownload"]), sourcePath: z.string().min(1),
+  fileName: z.string().min(1).max(500), mimeType: z.string().min(1).max(160),
+  hash: z.string().regex(/^[a-fA-F0-9]{64}$/), durationSeconds: z.number().positive(),
+  sampleRate: z.number().int().positive(), channels: z.number().int().positive(), fileSize: z.number().int().positive(),
+  provider: z.object({ sourceUrl: z.string().url().nullable().default(null), videoId: z.string().min(1).max(128).nullable().default(null), title: z.string().min(1).max(500).nullable().default(null) }).strict().default({ sourceUrl: null, videoId: null, title: null })
+}).strict();
+const songPlayerCandidateSchema = z.object({ offsetMs: z.number().int().min(0).max(7_200_000), score: z.number().min(0).max(1) }).strict();
+const songPlayerMatchSchema = z.object({
+  state: z.enum(["idle", "running", "matched", "ambiguous", "manual", "failed"]).default(defaultSongPlayer.match.state),
+  fragmentHash: z.string().regex(/^(?:|[a-fA-F0-9]{64})$/).default(""), fullTrackHash: z.string().regex(/^(?:|[a-fA-F0-9]{64})$/).default(""),
+  selectedOffsetMs: z.number().int().min(0).max(7_200_000).default(0), confidence: z.number().min(0).max(1).default(0),
+  candidates: z.array(songPlayerCandidateSchema).max(5).default([]), resolution: z.enum(["auto", "manual"]).default("auto"),
+  error: z.string().max(500).nullable().default(null), analyzedAt: z.iso.datetime().nullable().default(null)
+}).strict();
+const songPlayerSchema = z.object({
+  assets: z.array(songPlayerAssetSchema).max(8).default(defaultSongPlayer.assets),
+  fullTrackAssetId: z.string().min(1).nullable().default(defaultSongPlayer.fullTrackAssetId),
+  coverImageUrl: z.string().refine((value) => !value.startsWith("blob:"), "Gli URL blob runtime non possono essere salvati nel progetto.").nullable().default(defaultSongPlayer.coverImageUrl), backgroundImageUrl: z.string().refine((value) => !value.startsWith("blob:"), "Gli URL blob runtime non possono essere salvati nel progetto.").nullable().default(defaultSongPlayer.backgroundImageUrl),
+  backgroundFit: z.enum(["cover", "contain"]).default(defaultSongPlayer.backgroundFit), title: z.string().max(160).default(defaultSongPlayer.title), artist: z.string().max(160).default(defaultSongPlayer.artist),
+  coverStyle: z.enum(["flat", "cube"]).default(defaultSongPlayer.coverStyle), autoPalette: z.boolean().default(defaultSongPlayer.autoPalette), palette: z.tuple([z.string(), z.string(), z.string()]).default(defaultSongPlayer.palette),
+  spectrumPaletteMode: z.enum(["auto", "manual"]).default(defaultSongPlayer.spectrumPaletteMode), spectrumPalette: z.tuple([z.string(), z.string(), z.string()]).default(defaultSongPlayer.spectrumPalette),
+  spectrogramPaletteMode: z.enum(["auto", "manual"]).default(defaultSongPlayer.spectrogramPaletteMode), spectrogramPalette: z.tuple([z.string(), z.string(), z.string()]).default(defaultSongPlayer.spectrogramPalette),
+  spectrumGain: z.number().min(0).max(3).default(defaultSongPlayer.spectrumGain), spectrogramOpacity: z.number().min(0).max(1).default(defaultSongPlayer.spectrogramOpacity), metadataVisible: z.boolean().default(defaultSongPlayer.metadataVisible),
+  match: songPlayerMatchSchema.default(defaultSongPlayer.match)
+}).strict().superRefine((value, context) => {
+  if (value.fullTrackAssetId && !value.assets.some((asset) => asset.id === value.fullTrackAssetId)) context.addIssue({ code: "custom", path: ["fullTrackAssetId"], message: "La traccia completa selezionata non esiste nel registro asset." });
+  if (value.match.fullTrackHash && !value.fullTrackAssetId) context.addIssue({ code: "custom", path: ["match", "fullTrackHash"], message: "Il matching richiede una traccia completa." });
+});
+
 export const musicEventSchema = z.object({
   id: z.string().min(1), timeSeconds: z.number().nonnegative(), timeSamples: z.number().int().nonnegative(),
   eventType: z.enum(["beat", "downbeat", "onset", "kick", "snare", "hihat", "piano", "guitar", "strings", "percussion", "manual", "custom"]),
@@ -548,7 +714,7 @@ export const projectSchema = z.object({
   canvas: z.object({ aspectRatio: z.enum(["9:16", "16:9", "1:1", "4:5", "custom"]), previewWidth: z.number().int().positive(), previewHeight: z.number().int().positive(), previewFps: fpsSchema, exportWidth: z.number().int().positive(), exportHeight: z.number().int().positive(), exportFps: fpsSchema }).strict(),
   analysis: z.object({ analyzerVersion: z.string(), cacheKey: z.string(), globalBpm: z.number().positive().nullable(), latencyCompensationMs: z.number(), waveform: z.array(z.number().min(-1).max(1)), localTempo: z.array(z.unknown()).default([]), segments: z.array(z.unknown()).default([]) }).strict(),
   events: z.array(musicEventSchema),
-  animation: z.object({ modeId: z.string().min(1), baseObjectTypes: z.array(z.enum(["drum", "kick", "snare", "cymbal", "piano", "guitar", "strings", "peg", "platform", "block", "spring", "pebble"])).min(1), newYorkStreets: newYorkStreetsSchema.default(defaultNewYorkStreets), coverSphere: coverSphereSchema.default(defaultCoverSphere), stereoUnfold: stereoUnfoldSchema.default(defaultStereoUnfold), walkingCube: walkingCubeSchema.default(defaultWalkingCube), portraitLandscape: portraitLandscapeSchema.default(defaultPortraitLandscape), teddyWalk: teddyWalkSchema.default(defaultTeddyWalk), teddySing: teddySingSchema.default(defaultTeddySing), proSubtitles: proSubtitlesSchema.default(defaultProSubtitles), pixelsSub: pixelsSubSchema.default(defaultPixelsSub), backgroundAuto: backgroundAutoSchema.default(defaultBackgroundAuto), staticWatermark: staticWatermarkSchema.default(defaultStaticWatermark), upscaler: upscalerSchema.default(defaultUpscaler), videoEditor: videoEditorSchema.default(defaultVideoEditor) }).default({ modeId: "instrumentalFalling", baseObjectTypes: ["kick", "snare", "drum", "cymbal"], newYorkStreets: defaultNewYorkStreets, coverSphere: defaultCoverSphere, stereoUnfold: defaultStereoUnfold, walkingCube: defaultWalkingCube, portraitLandscape: defaultPortraitLandscape, teddyWalk: defaultTeddyWalk, teddySing: defaultTeddySing, proSubtitles: defaultProSubtitles, pixelsSub: defaultPixelsSub, backgroundAuto: defaultBackgroundAuto, staticWatermark: defaultStaticWatermark, upscaler: defaultUpscaler, videoEditor: defaultVideoEditor }),
+  animation: z.object({ modeId: z.string().min(1), baseObjectTypes: z.array(z.enum(["drum", "kick", "snare", "cymbal", "piano", "guitar", "strings", "peg", "platform", "block", "spring", "pebble"])).min(1), newYorkStreets: newYorkStreetsSchema.default(defaultNewYorkStreets), coverSphere: coverSphereSchema.default(defaultCoverSphere), stereoUnfold: stereoUnfoldSchema.default(defaultStereoUnfold), walkingCube: walkingCubeSchema.default(defaultWalkingCube), portraitLandscape: portraitLandscapeSchema.default(defaultPortraitLandscape), teddyWalk: teddyWalkSchema.default(defaultTeddyWalk), teddySing: teddySingSchema.default(defaultTeddySing), proSubtitles: proSubtitlesSchema.default(defaultProSubtitles), pixelsSub: pixelsSubSchema.default(defaultPixelsSub), backgroundAuto: backgroundAutoSchema.default(defaultBackgroundAuto), staticWatermark: staticWatermarkSchema.default(defaultStaticWatermark), upscaler: upscalerSchema.default(defaultUpscaler), frameBooster: frameBoosterSchema.default(defaultFrameBooster), videoEditor: videoEditorSchema.default(defaultVideoEditor), songPlayer: songPlayerSchema.default(defaultSongPlayer), cassetteDesk: cassetteDeskSchema.default(defaultCassetteDesk) }).default({ modeId: "instrumentalFalling", baseObjectTypes: ["kick", "snare", "drum", "cymbal"], newYorkStreets: defaultNewYorkStreets, coverSphere: defaultCoverSphere, stereoUnfold: defaultStereoUnfold, walkingCube: defaultWalkingCube, portraitLandscape: defaultPortraitLandscape, teddyWalk: defaultTeddyWalk, teddySing: defaultTeddySing, proSubtitles: defaultProSubtitles, pixelsSub: defaultPixelsSub, backgroundAuto: defaultBackgroundAuto, staticWatermark: defaultStaticWatermark, upscaler: defaultUpscaler, frameBooster: defaultFrameBooster, videoEditor: defaultVideoEditor, songPlayer: defaultSongPlayer, cassetteDesk: defaultCassetteDesk }),
   ball: z.object({ radius: z.number().positive(), visualMass: z.number().positive(), material: materialSchema, spinRate: z.number(), impactDeformation: z.number().min(0).max(1), trailEnabled: z.boolean(), innerColor: z.string().default("#63f0d1"), innerShape: z.enum(["orb", "icosahedron", "torusKnot"]).default("icosahedron"), innerImageUrl: z.string().nullable().default(null), endRevealEnabled: z.boolean().default(false), revealMode: z.enum(["end", "time"]).default("end"), revealTimeSeconds: z.number().nonnegative().default(0), revealHoldSeconds: z.number().min(0).max(30).default(2) }).strict(),
   objects: z.array(sceneObjectSchema), trajectorySegments: z.array(trajectorySegmentSchema),
   camera: z.object({ mode: z.enum(["fixed", "verticalTracking", "fullTracking", "smoothFollow", "cinematic", "keyframed", "autoFraming", "spline"]), position: vector3Schema, target: vector3Schema, fieldOfView: z.number().positive().max(179), damping: z.number().min(0).max(1), lookAhead: z.number().nonnegative() }).strict(),
@@ -574,6 +740,13 @@ export const projectSchema = z.object({
   project.animation.videoEditor.tracks.forEach((track, index) => { if (trackIds.has(track.id)) context.addIssue({ code: "custom", path: ["animation", "videoEditor", "tracks", index, "id"], message: "ID traccia duplicato" }); trackIds.add(track.id); });
   const assetIds = new Set<string>();
   project.animation.videoEditor.assets.forEach((asset, index) => { if (assetIds.has(asset.id)) context.addIssue({ code: "custom", path: ["animation", "videoEditor", "assets", index, "id"], message: "ID media duplicato" }); assetIds.add(asset.id); });
+  const songAssetIds = new Set<string>();
+  project.animation.songPlayer.assets.forEach((asset, index) => { if (songAssetIds.has(asset.id)) context.addIssue({ code: "custom", path: ["animation", "songPlayer", "assets", index, "id"], message: "ID asset Song Player duplicato" }); songAssetIds.add(asset.id); });
+  const song = project.animation.songPlayer;
+  if (song.match.fragmentHash && song.match.fragmentHash !== project.audio.hash) context.addIssue({ code: "custom", path: ["animation", "songPlayer", "match", "fragmentHash"], message: "Il matching non corrisponde al frammento audio corrente." });
+  const selectedSongAsset = song.fullTrackAssetId ? song.assets.find((asset) => asset.id === song.fullTrackAssetId) : undefined;
+  if (song.match.fullTrackHash && selectedSongAsset && song.match.fullTrackHash !== selectedSongAsset.hash) context.addIssue({ code: "custom", path: ["animation", "songPlayer", "match", "fullTrackHash"], message: "Il matching non corrisponde alla traccia completa selezionata." });
+  if (selectedSongAsset && song.match.selectedOffsetMs > Math.max(0, Math.round((selectedSongAsset.durationSeconds - project.audio.durationSeconds) * 1000))) context.addIssue({ code: "custom", path: ["animation", "songPlayer", "match", "selectedOffsetMs"], message: "L’offset Song Player supera il segmento disponibile nella traccia completa." });
   const clipIds = new Set<string>();
   project.animation.videoEditor.clips.forEach((clip, index) => {
     const path = ["animation", "videoEditor", "clips", index] as const;
@@ -614,6 +787,10 @@ export const projectSchema = z.object({
 });
 
 export type RhythmBallProject = z.infer<typeof projectSchema>;
+export type SongPlayerSettings = RhythmBallProject["animation"]["songPlayer"];
+export type SongPlayerAsset = SongPlayerSettings["assets"][number];
+export type SongPlayerMatch = SongPlayerSettings["match"];
+export type CassetteDeskSettings = RhythmBallProject["animation"]["cassetteDesk"];
 
 export function parseProject(input: unknown): RhythmBallProject {
   if (!input || typeof input !== "object" || Array.isArray(input)) return projectSchema.parse(input);
@@ -709,7 +886,7 @@ export function parseProject(input: unknown): RhythmBallProject {
     : migratedProSubtitles;
   const currentAnimation = { ...legacyAnimation }; delete currentAnimation.addSubtitles; delete currentAnimation.pixelArt;
   const migratedBaseObjectTypes = legacyAnimation.modeId === "pixelArt" ? ["kick", "snare", "drum", "cymbal"] : currentAnimation.baseObjectTypes;
-  return projectSchema.parse({ ...candidate, animation: { ...currentAnimation, modeId: migratedModeId, baseObjectTypes: migratedBaseObjectTypes, teddyWalk: migratedTeddy, proSubtitles: migratedLegacySubtitleSource, pixelsSub: legacyAnimation.pixelsSub ?? defaultPixelsSub, staticWatermark: migratedStaticWatermark, videoEditor: migratedVideoEditor } });
+  return projectSchema.parse({ ...candidate, animation: { ...currentAnimation, modeId: migratedModeId, baseObjectTypes: migratedBaseObjectTypes, teddyWalk: migratedTeddy, proSubtitles: migratedLegacySubtitleSource, pixelsSub: legacyAnimation.pixelsSub ?? defaultPixelsSub, staticWatermark: migratedStaticWatermark, videoEditor: migratedVideoEditor, songPlayer: legacyAnimation.songPlayer ?? defaultSongPlayer, cassetteDesk: legacyAnimation.cassetteDesk ?? defaultCassetteDesk } });
 }
 
 export function createProject(name = "Progetto senza titolo", now = new Date()): RhythmBallProject {
@@ -721,7 +898,7 @@ export function createProject(name = "Progetto senza titolo", now = new Date()):
     canvas: { aspectRatio: "9:16", previewWidth: 540, previewHeight: 960, previewFps: { numerator: 30, denominator: 1 }, exportWidth: 1080, exportHeight: 1920, exportFps: { numerator: 60, denominator: 1 } },
     analysis: { analyzerVersion: "", cacheKey: "", globalBpm: null, latencyCompensationMs: 0, waveform: [], localTempo: [], segments: [] },
     events: [],
-    animation: { modeId: "instrumentalFalling", baseObjectTypes: ["kick", "snare", "drum", "cymbal"], newYorkStreets: defaultNewYorkStreets, coverSphere: defaultCoverSphere, stereoUnfold: defaultStereoUnfold, walkingCube: defaultWalkingCube, portraitLandscape: defaultPortraitLandscape, teddyWalk: defaultTeddyWalk, teddySing: defaultTeddySing, proSubtitles: defaultProSubtitles, pixelsSub: defaultPixelsSub, backgroundAuto: defaultBackgroundAuto, staticWatermark: defaultStaticWatermark, upscaler: defaultUpscaler, videoEditor: defaultVideoEditor },
+    animation: { modeId: "instrumentalFalling", baseObjectTypes: ["kick", "snare", "drum", "cymbal"], newYorkStreets: defaultNewYorkStreets, coverSphere: defaultCoverSphere, stereoUnfold: defaultStereoUnfold, walkingCube: defaultWalkingCube, portraitLandscape: defaultPortraitLandscape, teddyWalk: defaultTeddyWalk, teddySing: defaultTeddySing, proSubtitles: defaultProSubtitles, pixelsSub: defaultPixelsSub, backgroundAuto: defaultBackgroundAuto, staticWatermark: defaultStaticWatermark, upscaler: defaultUpscaler, frameBooster: defaultFrameBooster, videoEditor: defaultVideoEditor, songPlayer: defaultSongPlayer, cassetteDesk: defaultCassetteDesk },
     ball: { radius: 0.45, visualMass: 1, material: { color: "#dffeff", palette: ["#63f0d1", "#7857ff"], roughness: 0.05, metalness: 0, emission: 0.2, opacity: .32, textureAssetId: null }, spinRate: 1, impactDeformation: 0.2, trailEnabled: true, innerColor: "#63f0d1", innerShape: "icosahedron", innerImageUrl: null, endRevealEnabled: false, revealMode: "end", revealTimeSeconds: 0, revealHoldSeconds: 2 },
     objects: [], trajectorySegments: [],
     camera: { mode: "smoothFollow", position: { x: 0, y: 2, z: 10 }, target: { x: 0, y: 2, z: 0 }, fieldOfView: 45, damping: 0.12, lookAhead: 1.5 },

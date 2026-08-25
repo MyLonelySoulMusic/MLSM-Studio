@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { useProjectStore } from "../store/project-store";
 import { requestVideoEditorTransport, useVideoEditorPlayback } from "../store/video-editor-playback-store";
 import {
@@ -27,6 +27,8 @@ import {
 } from "../services/video-editor-effects";
 import { VideoEditorClipWaveform } from "./VideoEditorClipWaveform";
 import { videoEditorAssetDragType, videoEditorAssetKindDragType } from "../services/video-editor-import";
+import { videoEditorClipSourceDuration } from "../services/video-editor-speed";
+import { videoEditorContextMenuPosition } from "../services/video-editor-context-menu";
 
 /** Altezza di una traccia in timeline: le clip video mostrano etichetta e onda, quelle audio la sola onda. */
 const trackHeight = 52;
@@ -122,6 +124,7 @@ export function VideoEditorTimeline({ timelineHeight = 300, onResizeHeight }: { 
   const [preview, setPreview] = useState<DragPreview | null>(null);
   const [effectPreview, setEffectPreview] = useState<EffectDragPreview | null>(null);
   const lanes = useRef<HTMLDivElement>(null);
+  const contextMenu = useRef<HTMLDivElement>(null);
   const pointerSessionCleanups = useRef(new Set<() => void>());
 
   const duration = useMemo(() => videoEditorTimelineDuration(settings), [settings]);
@@ -133,6 +136,9 @@ export function VideoEditorTimeline({ timelineHeight = 300, onResizeHeight }: { 
   const selectedEffects = settings.selectedEffectClipIds;
   const selectedEffectSet = useMemo(() => new Set(selectedEffects), [selectedEffects]);
   const activeClipId = selected[selected.length - 1] ?? null;
+  const activeClip = activeClipId ? settings.clips.find((clip) => clip.id === activeClipId) ?? null : null;
+  const activeAsset = activeClip ? videoEditorAsset(settings, activeClip.assetId) : null;
+  const activeTrack = activeClip ? settings.tracks.find((track) => track.id === activeClip.trackId) ?? null : null;
   const effectLayout = useMemo(() => effectSublaneLayout(settings.effectClips), [settings.effectClips]);
   const effectLaneHeight = effectLayout.count * effectSublaneHeight;
   const totalLanesHeight = effectLaneHeight + settings.tracks.length * trackHeight;
@@ -150,6 +156,21 @@ export function VideoEditorTimeline({ timelineHeight = 300, onResizeHeight }: { 
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("blur", dismiss);
     return () => { window.removeEventListener("pointerdown", dismiss); window.removeEventListener("keydown", onKeyDown); window.removeEventListener("blur", dismiss); };
+  }, [menu]);
+
+  useLayoutEffect(() => {
+    const element = contextMenu.current;
+    if (!menu || !element) return;
+    const bounds = element.getBoundingClientRect();
+    const next = videoEditorContextMenuPosition({
+      x: menu.x,
+      y: menu.y,
+      menuWidth: bounds.width,
+      menuHeight: bounds.height,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight
+    });
+    if (next.x !== menu.x || next.y !== menu.y) setMenu({ ...menu, ...next });
   }, [menu]);
 
   const startPointerSession = (sourceEvent: ReactPointerEvent<HTMLElement>, handlers: PointerSessionHandlers) => {
@@ -471,6 +492,15 @@ export function VideoEditorTimeline({ timelineHeight = 300, onResizeHeight }: { 
       <button type="button" className={looping ? "active-control" : ""} aria-pressed={looping} onClick={() => setLooping(!looping)} disabled={duration <= 0}>Loop</button>
       <button type="button" className="split-phoneme" onClick={() => { if (activeClipId) splitClip(activeClipId, currentTime); }} disabled={!activeClipId} title="Taglia la clip selezionata sul playhead (S)">✂ Taglia</button>
       <button type="button" className={settings.snapEnabled ? "active-control" : ""} aria-pressed={settings.snapEnabled} onClick={() => updateSettings({ snapEnabled: !settings.snapEnabled })} title="Calamita: accosta le clip senza vuoti">🧲 Calamita</button>
+      <button
+        type="button"
+        className={`video-editor-reverse-control${activeClip?.reversed ? " active-control" : ""}`}
+        aria-label="Riproduci clip selezionata al contrario"
+        aria-pressed={activeClip?.reversed ?? false}
+        disabled={!activeClip || activeAsset?.kind !== "video" || activeTrack?.locked === true}
+        title={!activeClip ? "Seleziona una clip video" : activeAsset?.kind !== "video" ? "Reverse è disponibile per le clip video" : activeTrack?.locked ? "Sblocca la traccia per invertire la clip" : "Riproduci la clip selezionata dalla fine all’inizio"}
+        onClick={() => { if (activeClip) updateClip(activeClip.id, { reversed: !activeClip.reversed }); }}
+      >↶ Reverse</button>
       {selectedEffects.length ? <button type="button" className="delete-selection" onClick={() => deleteEffects(selectedEffects)}>Elimina {selectedEffects.length} effetti</button> : null}
       {selected.length ? <button type="button" className="delete-selection" onClick={() => deleteClips(selected)}>Elimina {selected.length}</button> : null}
       <div className="timecode">{formatTime(currentTime)} / {formatTime(duration)}</div>
@@ -562,13 +592,13 @@ export function VideoEditorTimeline({ timelineHeight = 300, onResizeHeight }: { 
                   data-video-editor-clip-id={clip.id}
                   className={`video-editor-clip clip-${asset.kind}${isSelected ? " selected" : ""}${dragging ? " dragging" : ""}${dragging && preview?.snapped ? " snapped" : ""}${clip.muted ? " muted-clip" : ""}`}
                   style={clipStyle(clip)}
-                  title={`${asset.name} · ${clip.startSeconds.toFixed(2)} → ${videoEditorClipEnd(clip).toFixed(2)} s · trascina il corpo, i bordi per estendere, tasto destro per sincronizzare`}
+                  title={`${asset.name}${clip.reversed ? " · riproduzione inversa" : ""} · ${clip.startSeconds.toFixed(2)} → ${videoEditorClipEnd(clip).toFixed(2)} s · trascina il corpo, i bordi per estendere, tasto destro per sincronizzare`}
                   onContextMenu={(event) => openMenu(event, clip)}
                 >
                   <button type="button" className="clip-body" aria-label={`Clip ${asset.name} da ${clip.startSeconds.toFixed(2)} a ${videoEditorClipEnd(clip).toFixed(2)} secondi`} aria-pressed={isSelected} onPointerDown={(event) => beginClipDrag(event, clip, track)} onDoubleClick={(event) => { event.stopPropagation(); splitClip(clip.id, currentTime); }}>
                     {asset.thumbnailUrl ? <span className="clip-thumbnail-strip" style={{ backgroundImage: `url(${asset.thumbnailUrl})` }} aria-hidden="true" /> : null}
-                    {asset.waveform.length && asset.durationSeconds > 0 ? <VideoEditorClipWaveform waveform={asset.waveform} sourceInSeconds={clip.sourceInSeconds} durationSeconds={clip.durationSeconds} assetDurationSeconds={asset.durationSeconds} color={asset.kind === "audio" ? "#7ce7c1" : "#8fb6ff"} /> : null}
-                    <span className="clip-name">{asset.name}</span>
+                    {asset.waveform.length && asset.durationSeconds > 0 ? <VideoEditorClipWaveform waveform={asset.waveform} sourceInSeconds={clip.sourceInSeconds} durationSeconds={videoEditorClipSourceDuration(clip, settings.timebase)} assetDurationSeconds={asset.durationSeconds} color={asset.kind === "audio" ? "#7ce7c1" : "#8fb6ff"} reversed={clip.reversed} /> : null}
+                    <span className="clip-name">{clip.reversed ? <span className="clip-reversed" aria-label="Riproduzione inversa">↶</span> : null}{asset.name}</span>
                     <span className="clip-badges">
                       {clip.blendMode === "normal" ? null : <i className="clip-badge-blend" aria-hidden="true">◐</i>}
                       {clip.audioFadeInSeconds > 0 || clip.audioFadeOutSeconds > 0 ? <i className="clip-badge-fade" aria-hidden="true">◺</i> : null}
@@ -594,7 +624,7 @@ export function VideoEditorTimeline({ timelineHeight = 300, onResizeHeight }: { 
     </div>
     {settings.automationLanes.length ? <div className="video-editor-automation-lanes" aria-label="Lane automazioni">{settings.automationLanes.map((lane) => <div key={lane.id} className="video-editor-automation-lane"><strong>{lane.target.property}</strong><span>{lane.keyframes.map((point) => <span key={point.id} className="video-editor-keyframe-editor" style={{ left: automationMarkerPosition(settings, point.frame) }}><button type="button" aria-label={`Vai al keyframe ${lane.target.property} frame ${point.frame}`} title={`${point.curve} · frame ${point.frame}`} onClick={() => setCurrentTime(videoEditorFrameToSeconds(point.frame, settings.timebase))}>◆</button><input aria-label={`Valore keyframe ${lane.target.property} frame ${point.frame}`} type="number" step=".01" value={point.value} onChange={(event) => upsertKeyframe(lane.target, { ...point, value: Number(event.target.value) })} /><button type="button" aria-label={`Elimina keyframe ${lane.target.property} frame ${point.frame}`} onClick={() => removeKeyframe(lane.target, point.frame)}>×</button></span>)}</span></div>)}</div> : null}
     {menu && menuClip
-      ? <div className="video-editor-context-menu" role="menu" aria-label="Azioni clip" style={{ left: menu.x, top: menu.y }} onPointerDown={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()}>
+      ? <div ref={contextMenu} className="video-editor-context-menu" role="menu" aria-label="Azioni clip" style={{ left: menu.x, top: menu.y }} onPointerDown={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()}>
         <button type="button" role="menuitem" disabled={syncTargets.length === 0} onClick={() => runMenu(() => syncClips(menuClip.id, syncTargets))}>
           {syncTargets.length ? `Sincronizza audio e video (${syncTargets.length})` : "Sincronizza audio e video"}
         </button>

@@ -200,10 +200,10 @@ export function videoEditorSpeedAtFrame(speed: VideoEditorSpeed | undefined, fra
  * Keeping the interval origin on the clip, rather than subtracting two rounded
  * global frame ordinals, is what makes sub-frame moves phase-neutral.
  */
-export function videoEditorClipSourceTimeAtLocalSeconds(clip: VideoEditorClip, localSeconds: number, timebase: VideoEditorTimebase): number {
+export function videoEditorClipConsumedSourceSeconds(clip: VideoEditorClip, localSeconds: number, timebase: VideoEditorTimebase): number {
   const duration = Math.max(0, Math.min(clip.durationSeconds, Number.isFinite(localSeconds) ? localSeconds : 0));
   const constant = clip.speed?.constant ?? 1;
-  if (!clip.speed || clip.speed.mode === "constant") return clip.sourceInSeconds + duration * constant;
+  if (!clip.speed || clip.speed.mode === "constant") return duration * constant;
   const frameRate = videoEditorFrameRate(timebase);
   const exactFrames = duration * frameRate;
   // Absorb only floating-point noise at exact rational frame boundaries. A real
@@ -218,7 +218,14 @@ export function videoEditorClipSourceTimeAtLocalSeconds(clip: VideoEditorClip, l
     consumedSeconds += videoEditorSampledSpeedAtFrame(clip.speed, cursorFrame) * spanFrames / frameRate;
     cursorFrame += spanFrames;
   }
-  return clip.sourceInSeconds + consumedSeconds;
+  return consumedSeconds;
+}
+
+export function videoEditorClipSourceTimeAtLocalSeconds(clip: VideoEditorClip, localSeconds: number, timebase: VideoEditorTimebase): number {
+  const consumed = videoEditorClipConsumedSourceSeconds(clip, localSeconds, timebase);
+  if (!clip.reversed) return clip.sourceInSeconds + consumed;
+  const total = videoEditorClipConsumedSourceSeconds(clip, clip.durationSeconds, timebase);
+  return clip.sourceInSeconds + Math.max(0, total - consumed);
 }
 
 /** Compatibility bridge for frame-index callers. The frame is converted back
@@ -263,13 +270,15 @@ export function videoEditorClipTimelineDurationForSource(sourceDurationSeconds: 
 /** Source range consumed by the current timeline duration. This is the canonical
  * bridge used by speed edits, trims, splits, preview and export. */
 export function videoEditorClipSourceDuration(clip: VideoEditorClip, timebase: VideoEditorTimebase): number {
-  return Math.max(0, videoEditorClipSourceTimeAtLocalSeconds(clip, clip.durationSeconds, timebase) - clip.sourceInSeconds);
+  return videoEditorClipConsumedSourceSeconds(clip, clip.durationSeconds, timebase);
 }
 
 /** Inverse mapping used for beat markers and source-relative tool ranges. */
 export function videoEditorClipTimelineTimeForSourceTime(clip: VideoEditorClip, sourceTimeSeconds: number, timebase: VideoEditorTimebase): number | null {
-  const target = sourceTimeSeconds - clip.sourceInSeconds;
-  if (target < 0) return null;
+  const sourceOffset = sourceTimeSeconds - clip.sourceInSeconds;
+  const sourceDuration = videoEditorClipSourceDuration(clip, timebase);
+  if (sourceOffset < -1e-12 || sourceOffset > sourceDuration + 1e-12) return null;
+  const target = clip.reversed ? sourceDuration - sourceOffset : sourceOffset;
   if (target === 0) return clip.startSeconds;
   const frameRate = videoEditorFrameRate(timebase);
   const exactFrames = clip.durationSeconds * frameRate;
