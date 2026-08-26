@@ -3,7 +3,13 @@ import type { AudioAnalysisResult } from "@rbs/audio-analysis";
 export const CASSETTE_DESK_DEFAULT_INTRO_SECONDS = 4.8;
 export type CassetteDeskPhase = "case" | "opening" | "inserting" | "closing" | "pressing" | "playing";
 export interface CassetteDeskTimeline { phase: CassetteDeskPhase; phaseProgress: number; songTimeSeconds: number; musicStarted: boolean; }
-export interface CassetteDeskPitchFrame { timeSeconds: number; midi: number; confidence: number; }
+export interface CassetteDeskPitchFrame {
+  timeSeconds: number;
+  midi: number;
+  confidence: number;
+  /** Present on the display-ready, stabilized vocal segments. */
+  durationSeconds?: number;
+}
 export interface CassetteDeskMusicalAnalysis { bpm:number;keyRoot:number;keyMode:"major"|"minor";keyConfidence:number; }
 export interface CassetteDeskAnalysisOptions { musicalAnalysis?:CassetteDeskMusicalAnalysis|null;tempoDetectionMode?:"auto"|"manual";manualBpm?:number;halfTime?:boolean;keyDetectionMode?:"auto"|"manual";manualKeyRoot?:number;manualKeyMode?:"major"|"minor"; }
 export interface CassetteDeskSpectrumFrame { timeSeconds:number;bands12:number[]; }
@@ -33,6 +39,145 @@ export function estimateCassetteDeskKey(analysis: AudioAnalysisResult | null): P
 
 export function stabilizeCassetteVocalMidi(sourceMidi:number,confidence:number,keyRoot:number,keyMode:"major"|"minor",toleranceCents:number){const rounded=Math.round(sourceMidi);const pitchClass=(rounded%12+12)%12;const scale=keyMode==="major"?MAJOR_SCALE:MINOR_SCALE;const allowed=new Set(scale.map(step=>(keyRoot+step)%12));if(allowed.has(pitchClass)||confidence>=.82)return rounded;let nearest=rounded,nearestDistance=Infinity;for(let candidate=rounded-6;candidate<=rounded+6;candidate+=1){if(!allowed.has((candidate%12+12)%12))continue;const distance=Math.abs(candidate-sourceMidi);if(distance<nearestDistance){nearest=candidate;nearestDistance=distance;}}const confidenceAllowance=Math.max(0,.82-clamp01(confidence))*100;const effectiveTolerance=Math.max(0,Math.min(100,toleranceCents))+confidenceAllowance;return nearestDistance*100<=effectiveTolerance?nearest:rounded;}
 
+interface PreparedVocalFrame {
+  timeSeconds: number;
+  midi: number;
+  confidence: number;
+}
+
+interface VocalSegmentDraft extends PreparedVocalFrame {
+  lastTimeSeconds: number;
+  confidenceTotal: number;
+  confidenceFrames: number;
+}
+
+const pitchClass = (midi: number) => (Math.round(midi) % 12 + 12) % 12;
+const median = (values: readonly number[]) => {
+  const sorted = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? ((sorted[middle - 1] ?? 0) + (sorted[middle] ?? 0)) / 2 : (sorted[middle] ?? 0);
+};
+
+/**
+ * Converte i frame pYIN dello stem vocale in segmenti leggibili dalla tastiera.
+ *
+ * La griglia deriva dalla cadenza temporale dei frame (mai dal BPM). Un filtro
+ * mediano rimuove i salti isolati, due frame consecutivi confermano un cambio
+ * nota e un breve hold/release evita sfarfallii senza invadere le pause vocali.
+ */
+export function stabilizeCassetteVocalTimeline(
+  source: readonly CassetteDeskPitchFrame[],
+  keyRoot: number,
+  keyMode: "major" | "minor",
+  toleranceCents: number
+): CassetteDeskPitchFrame[] {
+  const valid = source
+    .filter((frame) => Number.isFinite(frame.timeSeconds) && Number.isFinite(frame.midi) && Number.isFinite(frame.confidence) && frame.confidence >= .45)
+    .map((frame) => ({ timeSeconds: Math.max(0, frame.timeSeconds), midi: frame.midi, confidence: clamp01(frame.confidence) }))
+    .sort((left, right) => left.timeSeconds - right.timeSeconds || right.confidence - left.confidence);
+  if (!valid.length) return [];
+
+  const cadenceCandidates = valid.slice(1).flatMap((frame, index) => {
+    const difference = frame.timeSeconds - valid[index]!.timeSeconds;
+    return difference >= .012 && difference <= .13 ? [difference] : [];
+  });
+  const cadence = Math.max(.025, Math.min(.08, cadenceCandidates.length ? median(cadenceCandidates) : 1_024 / 22_050));
+  const quantize = (timeSeconds: number) => Math.max(0, Math.round(timeSeconds / cadence) * cadence);
+
+  // If two detections land on the same grid point, keep the most reliable one.
+  const quantized: PreparedVocalFrame[] = [];
+  for (const frame of valid) {
+    const prepared = { ...frame, timeSeconds: quantize(frame.timeSeconds) };
+    const previous = quantized.at(-1);
+    if (previous && Math.abs(previous.timeSeconds - prepared.timeSeconds) < cadence * .2) {
+      if (prepared.confidence > previous.confidence) quantized[quantized.length - 1] = prepared;
+    } else quantized.push(prepared);
+  }
+
+  const prepared = quantized.map((frame, index) => {
+    const nearbyMidi = quantized
+      .slice(Math.max(0, index - 1), index + 2)
+      .filter((candidate) => Math.abs(candidate.timeSeconds - frame.timeSeconds) <= cadence * 1.6)
+      .map((candidate) => candidate.midi);
+    // An odd three-frame window rejects a single vibrato spike without ever
+    // averaging two real adjacent notes into a chromatic pitch in the middle.
+    const filteredMidi = nearbyMidi.length === 3 ? median(nearbyMidi) : frame.midi;
+    return {
+      ...frame,
+      midi: Math.max(36, Math.min(84, stabilizeCassetteVocalMidi(filteredMidi, frame.confidence, keyRoot, keyMode, toleranceCents)))
+    };
+  });
+
+  const gapThreshold = Math.max(.14, cadence * 3.1);
+  const drafts: VocalSegmentDraft[] = [];
+  let active: VocalSegmentDraft | null = null;
+  let pending: { pitch: number; frames: PreparedVocalFrame[] } | null = null;
+
+  const createDraft = (frames: readonly PreparedVocalFrame[]): VocalSegmentDraft => {
+    const first = frames[0]!;
+    const strongest = frames.reduce((best, frame) => frame.confidence > best.confidence ? frame : best, first);
+    return {
+      timeSeconds: first.timeSeconds,
+      lastTimeSeconds: frames.at(-1)!.timeSeconds,
+      midi: strongest.midi,
+      confidence: strongest.confidence,
+      confidenceTotal: frames.reduce((sum, frame) => sum + frame.confidence, 0),
+      confidenceFrames: frames.length
+    };
+  };
+  const finish = () => {
+    if (!active) return;
+    active.confidence = active.confidenceTotal / Math.max(1, active.confidenceFrames);
+    drafts.push(active);
+    active = null;
+  };
+
+  for (const frame of prepared) {
+    if (!active) { active = createDraft([frame]); pending = null; continue; }
+    if (frame.timeSeconds - active.lastTimeSeconds > gapThreshold) {
+      finish();
+      active = createDraft([frame]);
+      pending = null;
+      continue;
+    }
+    if (pitchClass(frame.midi) === pitchClass(active.midi)) {
+      active.lastTimeSeconds = frame.timeSeconds;
+      active.confidenceTotal += frame.confidence;
+      active.confidenceFrames += 1;
+      if (frame.confidence > active.confidence) { active.midi = frame.midi; active.confidence = frame.confidence; }
+      pending = null;
+      continue;
+    }
+
+    const candidatePitch = pitchClass(frame.midi);
+    if (!pending || pending.pitch !== candidatePitch || frame.timeSeconds - pending.frames.at(-1)!.timeSeconds > cadence * 1.8) pending = { pitch: candidatePitch, frames: [frame] };
+    else pending.frames.push(frame);
+    // A high-confidence onset may switch immediately; ordinary changes require
+    // two adjacent frames, preventing one-frame vibrato from flashing a key.
+    if (pending.frames.length >= 2 || frame.confidence >= .9) {
+      finish();
+      active = createDraft(pending.frames);
+      pending = null;
+    }
+  }
+  finish();
+
+  const onsetCompensation = Math.min(.038, cadence * .65);
+  const holdRelease = Math.max(.105, cadence * 2.25);
+  return drafts.map((draft, index) => {
+    const start = Math.max(0, draft.timeSeconds - onsetCompensation);
+    const nextStart = drafts[index + 1] ? Math.max(0, drafts[index + 1]!.timeSeconds - onsetCompensation) : Infinity;
+    const naturalEnd = draft.lastTimeSeconds + holdRelease;
+    const end = Math.max(start + cadence, Math.min(naturalEnd, nextStart));
+    return {
+      timeSeconds: start,
+      durationSeconds: end - start,
+      midi: draft.midi,
+      confidence: clamp01(draft.confidence)
+    };
+  });
+}
+
 /**
  * Consuma esclusivamente note pYIN ricavate dallo stem vocale separato da
  * Demucs. Lo spettro del mix non viene mai usato come surrogato della voce.
@@ -43,18 +188,24 @@ export function buildCassetteDeskAnalysis(analysis: AudioAnalysisResult | null, 
   const keyRoot=options.keyDetectionMode==="manual"?Math.max(0,Math.min(11,Math.round(options.manualKeyRoot??0))):automaticKey.keyRoot;
   const keyMode=options.keyDetectionMode==="manual"?(options.manualKeyMode??"major"):automaticKey.keyMode;
   const key={keyRoot,keyMode,keyLabel:`${NOTE_NAMES[keyRoot]} ${keyMode}`};
-  const vocalNotes = separatedVocalNotes.flatMap((source) => { if (!Number.isFinite(source.timeSeconds) || !Number.isFinite(source.midi) || source.confidence < .45) return []; const midi=stabilizeCassetteVocalMidi(source.midi,source.confidence,key.keyRoot,key.keyMode,toleranceCents);return [{timeSeconds:Math.max(0,source.timeSeconds),midi:Math.max(36,Math.min(84,midi)),confidence:clamp01(source.confidence)}]; });
+  const vocalNotes = stabilizeCassetteVocalTimeline(separatedVocalNotes, key.keyRoot, key.keyMode, toleranceCents);
   const spectrumFrames=(analysis?.energy??[]).map(frame=>({timeSeconds:frame.timeSeconds,bands12:Array.from({length:12},(_,band)=>{const values=(frame.bands48??[]).slice(band*4,band*4+4);return clamp01(values.reduce((sum,value)=>sum+Math.max(0,value),0)/Math.max(1,values.length));})}));
   const detectedBpm=options.musicalAnalysis?.bpm??analysis?.globalBpm??null;const baseBpm=options.tempoDetectionMode==="manual"?Math.max(20,Math.min(300,options.manualBpm??120)):detectedBpm;const bpm=baseBpm===null?null:baseBpm*(options.halfTime?.5:1);
   return { bpm, ...key, waveform: [...waveform], spectrumFrames,vocalNotes };
 }
 
 export function cassetteDeskActiveNote(analysis: CassetteDeskAnalysis | null, songTimeSeconds: number): CassetteDeskPitchFrame | null {
-  if (!analysis?.vocalNotes.length) return null; let nearest: CassetteDeskPitchFrame | null = null; for (const note of analysis.vocalNotes) { if (note.timeSeconds > songTimeSeconds + .12) break; if (Math.abs(note.timeSeconds - songTimeSeconds) <= .22) nearest = note; } return nearest;
+  if (!analysis?.vocalNotes.length || !Number.isFinite(songTimeSeconds)) return null;
+  for (const note of analysis.vocalNotes) {
+    if (note.timeSeconds > songTimeSeconds) break;
+    const duration = Math.max(0, note.durationSeconds ?? .22);
+    if (songTimeSeconds < note.timeSeconds + duration) return note;
+  }
+  return null;
 }
 
 export function cassetteDeskSpectrumBars(analysis:CassetteDeskAnalysis|null,songTimeSeconds:number):number[]{if(!analysis?.spectrumFrames.length)return Array(12).fill(0);let nearest=analysis.spectrumFrames[0]!;for(const frame of analysis.spectrumFrames){if(frame.timeSeconds>songTimeSeconds)break;nearest=frame;}return Array.from({length:12},(_,index)=>clamp01(nearest.bands12[index]??0));}
 
 export const cassetteDeskMechanicalEvents = (introSeconds = CASSETTE_DESK_DEFAULT_INTRO_SECONDS) => {
-  const scale = introSeconds / CASSETTE_DESK_DEFAULT_INTRO_SECONDS; return [{ timeSeconds: 1.7 * scale, kind: "slide" as const }, { timeSeconds: 3.82 * scale, kind: "door" as const }, { timeSeconds: 4.38 * scale, kind: "play" as const }];
+  const scale = introSeconds / CASSETTE_DESK_DEFAULT_INTRO_SECONDS; return [{ timeSeconds: 1.7 * scale, kind: "slide" as const }, { timeSeconds: 3.72 * scale, kind: "door" as const }, { timeSeconds: 4.43 * scale, kind: "play" as const }];
 };

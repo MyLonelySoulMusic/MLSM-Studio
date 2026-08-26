@@ -1,14 +1,134 @@
-import type { RhythmBallProject } from "@rbs/project-schema";
+import type { CassetteDeskSettings, RhythmBallProject } from "@rbs/project-schema";
 import { useProjectStore } from "../store/project-store";
 
 const KEY_NAMES = ["C", "C# / Db", "D", "Eb", "E", "F", "F# / Gb", "G", "Ab", "A", "Bb", "B"];
 
-export function CassetteDeskInspector({aspectRatio,onAspectRatio}:{aspectRatio:RhythmBallProject["canvas"]["aspectRatio"];onAspectRatio:(ratio:RhythmBallProject["canvas"]["aspectRatio"])=>void}) {
-  const settings=useProjectStore(state=>state.project.animation.cassetteDesk);const update=useProjectStore(state=>state.updateCassetteDesk);
+const WINDOW_ENVIRONMENTS: ReadonlyArray<{
+  value: CassetteDeskSettings["windowEnvironment"];
+  label: string;
+}> = [
+  { value: "summer-day", label: "Giorno d’estate" },
+  { value: "snow-day", label: "Giorno con neve" },
+  { value: "night", label: "Notte" },
+  { value: "rain-night", label: "Notte con pioggia" },
+  { value: "starry-moon", label: "Notte stellata con luna" },
+  { value: "pink-moon", label: "Notte con luna rosa" },
+  { value: "pink-meteor", label: "Notte con meteora rosa" }
+];
+
+export function CassetteDeskInspector({
+  aspectRatio,
+  onAspectRatio
+}: {
+  aspectRatio: RhythmBallProject["canvas"]["aspectRatio"];
+  onAspectRatio: (ratio: RhythmBallProject["canvas"]["aspectRatio"]) => void;
+}) {
+  const settings = useProjectStore((state) => state.project.animation.cassetteDesk);
+  const update = useProjectStore((state) => state.updateCassetteDesk);
+
   return <aside className="panel inspector cassette-desk-inspector" aria-label="Inspector Cassette Desk">
-    <section><h2>Formato e stereo</h2><label>Formato<select aria-label="Formato Cassette Desk" value={aspectRatio} onChange={event=>onAspectRatio(event.target.value as typeof aspectRatio)}><option value="9:16">9:16 verticale</option><option value="16:9">16:9 orizzontale</option><option value="1:1">1:1 quadrato</option><option value="4:5">4:5 social</option><option value="custom">Personalizzato</option></select></label><label>Versione stereo<select aria-label="Versione stereo" value={settings.stereoStyle} onChange={event=>update({stereoStyle:event.target.value as "classic"|"poster"})}><option value="classic">Classico scuro</option><option value="poster">Hi-Fi chiaro / pink</option></select></label></section>
-    <section><h2>Tempo e tonalità</h2><p className="muted">Auto analizza il mix completo; la tastiera usa solo la voce separata.</p><label>Origine BPM<select aria-label="Origine BPM" value={settings.tempoDetectionMode} onChange={event=>update({tempoDetectionMode:event.target.value as "auto"|"manual"})}><option value="auto">Analisi automatica</option><option value="manual">BPM manuale</option></select></label>{settings.tempoDetectionMode==="manual"?<label>BPM manuale<input aria-label="BPM manuale" type="number" min="20" max="300" step=".1" value={settings.manualBpm} onChange={event=>{const value=Number(event.target.value);if(Number.isFinite(value))update({manualBpm:Math.max(20,Math.min(300,value))});}}/></label>:null}<label className="cassette-toggle"><input type="checkbox" checked={settings.halfTime} onChange={event=>update({halfTime:event.target.checked})}/><span>Half Time (BPM ÷ 2)</span></label><label>Origine tonalità<select aria-label="Origine tonalità" value={settings.keyDetectionMode} onChange={event=>update({keyDetectionMode:event.target.value as "auto"|"manual"})}><option value="auto">Analisi armonica automatica</option><option value="manual">Tonalità manuale</option></select></label>{settings.keyDetectionMode==="manual"?<><label>Tonica<select aria-label="Tonica manuale" value={settings.manualKeyRoot} onChange={event=>update({manualKeyRoot:Number(event.target.value)})}>{KEY_NAMES.map((name,index)=><option key={name} value={index}>{name}</option>)}</select></label><label>Mode<select aria-label="Modo manuale" value={settings.manualKeyMode} onChange={event=>update({manualKeyMode:event.target.value as "major"|"minor"})}><option value="major">Major</option><option value="minor">Minor</option></select></label></>:null}</section>
-    <section><h2>Colori indipendenti</h2>{([ ["waveform","Onda sonora",settings.waveformColorMode,settings.waveformColor], ["displaySpectrum","Spettro display (12 barre)",settings.displaySpectrumColorMode,settings.displaySpectrumColor], ["stereoBody","Scocca stereo Hi-Fi",settings.stereoBodyColorMode,settings.stereoBodyColor], ["piano","Note pianoforte",settings.pianoColorMode,settings.pianoColor], ["desk","Scrivania",settings.deskColorMode,settings.deskColor] ] as const).map(([key,label,mode,color])=><div key={key} className="cassette-color-control"><label><span>{label} dalla palette</span><input type="checkbox" checked={mode==="auto"} onChange={event=>update({[`${key}ColorMode`]:event.target.checked?"auto":"manual"})}/></label><input aria-label={`Colore ${label}`} type="color" value={color} disabled={mode==="auto"} onChange={event=>update({[`${key}Color`]:event.target.value,[`${key}ColorMode`]:"manual"})}/></div>)}</section>
-    <section><h2>Elementi</h2><p className="muted">Titolo e artista restano leggibili nel display superiore dello stereo.</p><div className="cassette-toggle-list"><label className="cassette-toggle"><input type="checkbox" checked={settings.showTrackInfo} onChange={event=>update({showTrackInfo:event.target.checked})}/><span>BPM e tonalità</span></label><label className="cassette-toggle"><input type="checkbox" checked={settings.showWaveform} onChange={event=>update({showWaveform:event.target.checked})}/><span>Onda sonora</span></label><label className="cassette-toggle"><input type="checkbox" checked={settings.showPiano} onChange={event=>update({showPiano:event.target.checked})}/><span>Pianoforte vocale</span></label></div><label className="cassette-duration-control"><span>Durata intro: {settings.introDurationSeconds.toFixed(1)} s</span><input type="range" min="3.6" max="8" step=".1" value={settings.introDurationSeconds} onChange={event=>update({introDurationSeconds:Number(event.target.value)})}/></label></section>
+    <section>
+      <h2>Formato e stereo</h2>
+      <label>Formato
+        <select aria-label="Formato Cassette Desk" value={aspectRatio} onChange={(event) => onAspectRatio(event.target.value as typeof aspectRatio)}>
+          <option value="9:16">9:16 verticale</option>
+          <option value="16:9">16:9 orizzontale</option>
+          <option value="1:1">1:1 quadrato</option>
+          <option value="4:5">4:5 social</option>
+          <option value="custom">Personalizzato</option>
+        </select>
+      </label>
+      <label>Versione stereo
+        <select aria-label="Versione stereo" value={settings.stereoStyle} onChange={(event) => update({ stereoStyle: event.target.value as "classic" | "poster" })}>
+          <option value="classic">Classico scuro</option>
+          <option value="poster">Hi-Fi chiaro / pink</option>
+        </select>
+      </label>
+    </section>
+
+    <section>
+      <h2>Tempo e tonalità</h2>
+      <p className="muted">Auto analizza il mix completo; la tastiera usa solo la voce separata.</p>
+      <label>Origine BPM
+        <select aria-label="Origine BPM" value={settings.tempoDetectionMode} onChange={(event) => update({ tempoDetectionMode: event.target.value as "auto" | "manual" })}>
+          <option value="auto">Analisi automatica</option>
+          <option value="manual">BPM manuale</option>
+        </select>
+      </label>
+      {settings.tempoDetectionMode === "manual" ? <label>BPM manuale
+        <input aria-label="BPM manuale" type="number" min="20" max="300" step=".1" value={settings.manualBpm} onChange={(event) => {
+          const value = Number(event.target.value);
+          if (Number.isFinite(value)) update({ manualBpm: Math.max(20, Math.min(300, value)) });
+        }} />
+      </label> : null}
+      <label className="cassette-toggle">
+        <input type="checkbox" checked={settings.halfTime} onChange={(event) => update({ halfTime: event.target.checked })} />
+        <span>Half Time (BPM ÷ 2)</span>
+      </label>
+      <label>Origine tonalità
+        <select aria-label="Origine tonalità" value={settings.keyDetectionMode} onChange={(event) => update({ keyDetectionMode: event.target.value as "auto" | "manual" })}>
+          <option value="auto">Analisi armonica automatica</option>
+          <option value="manual">Tonalità manuale</option>
+        </select>
+      </label>
+      {settings.keyDetectionMode === "manual" ? <>
+        <label>Tonica
+          <select aria-label="Tonica manuale" value={settings.manualKeyRoot} onChange={(event) => update({ manualKeyRoot: Number(event.target.value) })}>
+            {KEY_NAMES.map((name, index) => <option key={name} value={index}>{name}</option>)}
+          </select>
+        </label>
+        <label>Mode
+          <select aria-label="Modo manuale" value={settings.manualKeyMode} onChange={(event) => update({ manualKeyMode: event.target.value as "major" | "minor" })}>
+            <option value="major">Major</option>
+            <option value="minor">Minor</option>
+          </select>
+        </label>
+      </> : null}
+    </section>
+
+    <section>
+      <h2>Finestra</h2>
+      <label>Ambiente fuori dalla finestra
+        <select
+          aria-label="Ambiente fuori dalla finestra"
+          value={settings.windowEnvironment}
+          onChange={(event) => update({ windowEnvironment: event.target.value as CassetteDeskSettings["windowEnvironment"] })}
+        >
+          {WINDOW_ENVIRONMENTS.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
+        </select>
+      </label>
+      <p className="muted">La scena selezionata resta visibile sopra la scrivania in entrambe le versioni dello stereo.</p>
+    </section>
+
+    <section>
+      <h2>Colori indipendenti</h2>
+      {([
+        ["waveform", "Onda sonora", settings.waveformColorMode, settings.waveformColor],
+        ["displaySpectrum", "Spettro display (12 barre)", settings.displaySpectrumColorMode, settings.displaySpectrumColor],
+        ["stereoBody", "Scocca stereo Hi-Fi", settings.stereoBodyColorMode, settings.stereoBodyColor],
+        ["piano", "Note pianoforte", settings.pianoColorMode, settings.pianoColor],
+        ["desk", "Scrivania", settings.deskColorMode, settings.deskColor]
+      ] as const).map(([key, label, mode, color]) => <div key={key} className="cassette-color-control">
+        <label>
+          <span>{label} dalla palette</span>
+          <input type="checkbox" checked={mode === "auto"} onChange={(event) => update({ [`${key}ColorMode`]: event.target.checked ? "auto" : "manual" })} />
+        </label>
+        <input aria-label={`Colore ${label}`} type="color" value={color} disabled={mode === "auto"} onChange={(event) => update({ [`${key}Color`]: event.target.value, [`${key}ColorMode`]: "manual" })} />
+      </div>)}
+    </section>
+
+    <section>
+      <h2>Elementi</h2>
+      <p className="muted">Titolo e artista restano leggibili nel display superiore dello stereo.</p>
+      <div className="cassette-toggle-list">
+        <label className="cassette-toggle"><input type="checkbox" checked={settings.showTrackInfo} onChange={(event) => update({ showTrackInfo: event.target.checked })} /><span>BPM e tonalità</span></label>
+        <label className="cassette-toggle"><input type="checkbox" checked={settings.showWaveform} onChange={(event) => update({ showWaveform: event.target.checked })} /><span>Onda sonora</span></label>
+        <label className="cassette-toggle"><input type="checkbox" checked={settings.showPiano} onChange={(event) => update({ showPiano: event.target.checked })} /><span>Pianoforte vocale</span></label>
+      </div>
+      <label className="cassette-duration-control">
+        <span>Durata intro: {settings.introDurationSeconds.toFixed(1)} s</span>
+        <input type="range" min="3.6" max="8" step=".1" value={settings.introDurationSeconds} onChange={(event) => update({ introDurationSeconds: Number(event.target.value) })} />
+      </label>
+    </section>
   </aside>;
 }

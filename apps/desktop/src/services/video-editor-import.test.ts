@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  clearVideoEditorSession,
   importVideoEditorAsset,
   registerVideoEditorFiles,
   videoEditorAcceptedFiles,
@@ -39,5 +40,13 @@ describe("Video Editor · importazione immagini", () => {
       registerVideoEditorFiles(new Map([[imported.asset.id, imported.file]]));
       expect(videoEditorSessionFile(imported.asset.id)).toBe(file);
     }
+  });
+
+  it("svuota file runtime e revoca una sola volta gli URL del pool",()=>{
+    const revoke=vi.fn();Object.defineProperty(URL,"revokeObjectURL",{configurable:true,value:revoke});
+    const file=new File(["video"],"old.mp4",{type:"video/mp4"});registerVideoEditorFiles(new Map([["old",file]]));
+    clearVideoEditorSession([{url:"blob:old-video",thumbnailUrl:"blob:old-thumb"},{url:"blob:old-video",thumbnailUrl:null}]);
+    expect(videoEditorSessionFile("old")).toBeNull();
+    expect(revoke.mock.calls.map(([url])=>url)).toEqual(["blob:old-video","blob:old-thumb"]);
   });
 });

@@ -322,7 +322,9 @@ pub fn run() {
         longcat_video::longcat_video_capabilities,
         longcat_video::longcat_video_start_job,
         longcat_video::longcat_video_get_job,
-        longcat_video::longcat_video_cancel_job
+        longcat_video::longcat_video_cancel_job,
+        longcat_video::longcat_video_write_remote_result,
+        longcat_video::longcat_video_open_colab
     ]).run(tauri::generate_context!()).expect("errore durante l'avvio di MLSM Studio");
 }
 

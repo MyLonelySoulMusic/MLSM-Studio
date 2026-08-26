@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createProject } from "@rbs/project-schema";
-import { activeRemoteUpscalerEndpoints, discoverRemoteUpscalerModels, normalizeRemoteUpscalerEndpoint, shouldGenerateUpscalerAi, usesRemoteUpscaler } from "./remote-upscaler-client";
+import { activeRemoteUpscalerEndpoints, discoverRemoteUpscalerModels, normalizeRemoteUpscalerEndpoint, shouldGenerateUpscalerAi, upscaleRemoteImageDirect, usesRemoteUpscaler } from "./remote-upscaler-client";
 
 describe("remote upscaler client", () => {
   afterEach(() => vi.restoreAllMocks());
@@ -21,12 +21,55 @@ describe("remote upscaler client", () => {
   it("carica il catalogo attraverso il coordinatore locale", async () => {
     const catalog = { ok: true, endpoints: [{ url: "https://a.gradio.live", ok: true, models: [] }], models: [{ name: "x4", scale: 4, description: "", default: true }], defaultModel: "x4" };
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(catalog), { status: 200 }));
-    await expect(discoverRemoteUpscalerModels(["https://a.gradio.live"])).resolves.toEqual(catalog);
+    await expect(discoverRemoteUpscalerModels(["https://a.gradio.live"])).resolves.toEqual({ ...catalog, transport: "coordinator" });
     expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:8765/upscale/remote/catalog", expect.objectContaining({ method: "POST", body: JSON.stringify({ endpoints: ["https://a.gradio.live"] }) }));
   });
 
   it("propaga il dettaglio del backend quando la discovery fallisce", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ detail: "endpoint offline" }), { status: 502 }));
     await expect(discoverRemoteUpscalerModels(["https://a.gradio.live"])).rejects.toThrow("endpoint offline");
+  });
+
+  it("interroga Gradio direttamente quando il coordinatore locale non risponde", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [{
+        ok: true,
+        default_model: "RealESRGAN_x4plus",
+        models: [{ name: "RealESRGAN_x4plus", scale: 4, description: "photo", default: true }]
+      }] }), { status: 200 }));
+
+    await expect(discoverRemoteUpscalerModels(["https://live.gradio.live/"])).resolves.toMatchObject({
+      transport: "direct",
+      defaultModel: "RealESRGAN_x4plus",
+      endpoints: [{ url: "https://live.gradio.live", ok: true }]
+    });
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "http://127.0.0.1:8765/upscale/remote/catalog",
+      "https://live.gradio.live/gradio_api/api/upscale_models"
+    ]);
+  });
+
+  it("completa direttamente il job Gradio in coda e decodifica l'immagine", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({ event_id: "event-123" }), { status: 200 }))
+      .mockResolvedValueOnce(new Response([
+        "event: complete",
+        `data: ${JSON.stringify([{ ok: true, image: "data:image/png;base64,AQID" }])}`,
+        ""
+      ].join("\n"), { status: 200, headers: { "Content-Type": "text/event-stream" } }));
+
+    const result = await upscaleRemoteImageDirect(
+      "https://live.gradio.live/",
+      new Blob([new Uint8Array([4, 5, 6])], { type: "image/png" }),
+      "RealESRGAN_x4plus"
+    );
+
+    expect(result.type).toBe("image/png");
+    expect(result.size).toBe(3);
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "https://live.gradio.live/gradio_api/call/upscale_image",
+      "https://live.gradio.live/gradio_api/call/upscale_image/event-123"
+    ]);
   });
 });

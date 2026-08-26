@@ -5,6 +5,7 @@ import { useProjectStore } from "../store/project-store";
 import { AreaIcon } from "./StudioIcons";
 import { SupportArtistButton } from "./ArtistSupport";
 import { MemoryButton } from "./MemoryStudio";
+import { resetWorkspaceForAreaEntry } from "../services/workspace-area-lifecycle";
 
 const areaCopyKeys = {
   soundAnimation: { label: "soundAnimation", description: "soundDescription" },
@@ -18,6 +19,7 @@ export type StudioAreaDestination = AnimationCategoryId | "longCatVideo";
 export function StudioHome({ onEnterArea }: { onEnterArea: (category: StudioAreaDestination) => void }) {
   const { language, theme, setLanguage, setTheme } = useUiPreferences(); const copy = uiCopy[language]; const setAnimationMode = useProjectStore((state) => state.setAnimationMode);
   const enter = (categoryId: AnimationCategoryId) => {
+    resetWorkspaceForAreaEntry();
     const category = animationCategories.find((item) => item.id === categoryId) ?? animationCategories[0]!;
     const firstMode = getAnimationMode(category.groups[0]!.modeIds[0]!);
     setAnimationMode(firstMode.id, [...firstMode.defaultBaseObjectTypes]); onEnterArea(category.id);
@@ -39,7 +41,7 @@ export function StudioHome({ onEnterArea }: { onEnterArea: (category: StudioArea
             <span className="studio-area-card__action">{copy.enterArea}<b>↗</b></span><i className="studio-area-card__shine" aria-hidden="true" />
           </button>;
         })}
-        <button className="studio-area-card area-longCatVideo" style={{ "--area-index": animationCategories.length } as CSSProperties} type="button" onClick={() => onEnterArea("longCatVideo")}>
+        <button className="studio-area-card area-longCatVideo" style={{ "--area-index": animationCategories.length } as CSSProperties} type="button" onClick={() => { resetWorkspaceForAreaEntry(); onEnterArea("longCatVideo"); }}>
           <span className="studio-area-card__number">0{animationCategories.length + 1}</span><span className="studio-area-card__icon"><AreaIcon category="longCatVideo" /></span>
           <span className="studio-area-card__copy"><small>3 {copy.creativeModes}</small><strong>LongCat Video</strong><em>{copy.longCatVideoDescription}</em></span>
           <span className="studio-area-card__action">{copy.enterArea}<b>↗</b></span><i className="studio-area-card__shine" aria-hidden="true" />

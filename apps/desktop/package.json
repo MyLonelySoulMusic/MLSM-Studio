@@ -9,6 +9,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@gradio/client": "^2.5.1",
     "@huggingface/transformers": "^3.8.1",
     "@rbs/audio-analysis": "0.1.0",
     "@rbs/core": "0.1.0",

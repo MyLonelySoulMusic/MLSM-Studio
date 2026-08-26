@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
-    fs,
-    io::{BufRead, BufReader, Read},
+    fs::{self, OpenOptions},
+    io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
@@ -23,6 +23,9 @@ const MAX_INPUT_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const MAX_STDOUT_LINE_BYTES: usize = 1024 * 1024;
 const MAX_STDERR_BYTES: usize = 128 * 1024;
 const JOB_TIMEOUT: Duration = Duration::from_secs(12 * 60 * 60);
+const COLAB_NOTEBOOK_URL: &str =
+    "https://colab.research.google.com/drive/1-Dcjc4S6GCLhbN4N8qujhzzWBFyG6Bz0?usp=sharing";
+const MAX_REMOTE_RESULT_BYTES: usize = 2 * 1024 * 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LongCatVideoError {
@@ -997,6 +1000,90 @@ fn run_job(shared: Arc<Shared>, id: String, cancel: Arc<AtomicBool>, run: Worker
     let _ = fs::remove_dir_all(run.job_root);
 }
 
+fn validate_remote_filename(value: &str) -> Result<&str, LongCatVideoError> {
+    if value.is_empty()
+        || value.len() > 180
+        || Path::new(value).file_name().and_then(|part| part.to_str()) != Some(value)
+        || !value.to_ascii_lowercase().ends_with(".mp4")
+        || value.chars().any(|character| {
+            !(character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.'))
+        })
+    {
+        return Err(LongCatVideoError::InvalidRequest(
+            "nome risultato remoto non valido".into(),
+        ));
+    }
+    Ok(value)
+}
+
+fn write_remote_result(
+    directory_path: &str,
+    filename: &str,
+    payload: &[u8],
+) -> Result<PathBuf, LongCatVideoError> {
+    let directory = canonical_directory(directory_path)?;
+    let filename = validate_remote_filename(filename)?;
+    if payload.is_empty() || payload.len() > MAX_REMOTE_RESULT_BYTES {
+        return Err(LongCatVideoError::InvalidRequest(
+            "risultato remoto vuoto o oltre 2 GiB".into(),
+        ));
+    }
+    let stem = filename.strip_suffix(".mp4").unwrap_or(filename);
+    for suffix in 0..10_000_u32 {
+        let candidate = directory.join(if suffix == 0 {
+            filename.to_owned()
+        } else {
+            format!("{stem}-{suffix}.mp4")
+        });
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(mut file) => {
+                if let Err(error) = file.write_all(payload).and_then(|_| file.sync_all()) {
+                    drop(file);
+                    let _ = fs::remove_file(&candidate);
+                    return Err(LongCatVideoError::Io(error));
+                }
+                return Ok(candidate);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(LongCatVideoError::Io(error)),
+        }
+    }
+    Err(LongCatVideoError::InvalidRequest(
+        "troppi risultati con lo stesso nome".into(),
+    ))
+}
+
+#[tauri::command]
+pub fn longcat_video_write_remote_result(
+    directory_path: String,
+    filename: String,
+    payload: Vec<u8>,
+) -> Result<String, LongCatVideoError> {
+    Ok(write_remote_result(&directory_path, &filename, &payload)?
+        .to_string_lossy()
+        .into_owned())
+}
+
+#[tauri::command]
+pub fn longcat_video_open_colab() -> Result<(), LongCatVideoError> {
+    #[cfg(target_os = "macos")]
+    let mut command = Command::new("open");
+    #[cfg(target_os = "linux")]
+    let mut command = Command::new("xdg-open");
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut value = Command::new("cmd");
+        value.args(["/C", "start", ""]);
+        value
+    };
+    command.arg(COLAB_NOTEBOOK_URL).spawn()?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1040,5 +1127,32 @@ mod tests {
             enable_compile: false,
         };
         assert!(validate_request(valid).is_ok());
+    }
+
+    #[test]
+    fn remote_result_is_collision_safe_and_rejects_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = write_remote_result(
+            directory.path().to_str().unwrap(),
+            "longcat-remote-job.mp4",
+            b"video-one",
+        )
+        .unwrap();
+        let second = write_remote_result(
+            directory.path().to_str().unwrap(),
+            "longcat-remote-job.mp4",
+            b"video-two",
+        )
+        .unwrap();
+        assert_ne!(first, second);
+        assert_eq!(fs::read(first).unwrap(), b"video-one");
+        assert_eq!(fs::read(second).unwrap(), b"video-two");
+        assert!(
+            write_remote_result(directory.path().to_str().unwrap(), "../outside.mp4", b"no",)
+                .is_err()
+        );
+        assert!(
+            write_remote_result(directory.path().to_str().unwrap(), "empty.mp4", b"",).is_err()
+        );
     }
 }

@@ -183,3 +183,12 @@ export function videoEditorSessionFile(assetId: string): File | null {
 export function forgetVideoEditorFile(assetId: string): void {
   sessionFiles.delete(assetId);
 }
+
+/** Releases every runtime-only Video Editor file and object URL on area reset. */
+export function clearVideoEditorSession(
+  assets: readonly Pick<VideoEditorAsset, "url" | "thumbnailUrl">[] = []
+): void {
+  const urls = new Set(assets.flatMap((asset) => [asset.url, asset.thumbnailUrl].filter((url): url is string => Boolean(url))));
+  for (const url of urls) if (url.startsWith("blob:")) URL.revokeObjectURL(url);
+  sessionFiles.clear();
+}

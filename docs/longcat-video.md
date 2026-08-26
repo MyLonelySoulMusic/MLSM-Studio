@@ -19,6 +19,40 @@ Nel launcher web il bridge locale avviato insieme a Vite riceve i media,
 esegue lo stesso worker e presenta **Scarica MP4**. Nel pacchetto Tauri i
 percorsi sono gestiti direttamente dai comandi nativi.
 
+## Google Colab e server remoto stand-alone
+
+Quando CUDA locale non è disponibile, LongCat può essere eseguito su una GPU
+remota. L’app non apre siti esterni e non invia file automaticamente: l’utente
+deve selezionare **Google Colab**, premere **Apri notebook Colab**, aggiungere il
+link endpoint completo e avviare esplicitamente la generazione.
+
+Notebook ufficiale del progetto MLSM:
+
+[Apri MLSM LongCat Remote su Google Colab](https://colab.research.google.com/drive/1-Dcjc4S6GCLhbN4N8qujhzzWBFyG6Bz0?usp=sharing)
+
+Il notebook Drive è il contenitore vuoto destinato al runtime. Il progetto
+stand-alone generato in `/Users/presutto/Documents/personal_prj/software/MLSM LongCat`
+include lo script completo in `colab/MLSM_LongCat_Remote.ipynb`, oltre a server,
+worker, setup automatico, test e un README operativo dettagliato. Il notebook:
+
+1. verifica che Colab abbia assegnato una GPU NVIDIA;
+2. ricostruisce il repository remoto MLSM incluso nel file;
+3. installa automaticamente Python 3.10, pipeline e checkpoint fissati;
+4. avvia il server Gradio con token casuale;
+5. stampa un link `https://…gradio.live#mlsm-token=…` da incollare nell’app.
+
+Nell’area LongCat si possono mantenere fino a dodici endpoint come schede,
+rinominarli, abilitarli e verificarli in parallelo. Ogni scheda rappresenta una
+GPU indipendente e accetta un job alla volta. Un singolo processo di diffusione
+non viene diviso tra più Colab: gli endpoint multipli offrono capacità per job
+indipendenti, scelta esplicita della GPU e failover, non accelerazione lineare
+dello stesso video.
+
+Al completamento MLSM scarica l’MP4 dal Colab e lo salva con creazione atomica e
+nome collision-safe nella cartella locale scelta; preview e download usano la
+copia locale. Endpoint e token restano soltanto nel profilo locale del browser
+o della WebView e devono essere aggiornati quando il runtime Colab scade.
+
 ## Preparazione
 
 La pipeline ufficiale richiede Linux, Python 3.10 e una GPU NVIDIA CUDA. Il

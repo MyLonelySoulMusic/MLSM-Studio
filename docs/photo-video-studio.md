@@ -42,6 +42,11 @@ selezionabili soltanto i modelli disponibili in comune tra gli endpoint che
 rispondono. Anche queste chiamate di discovery partono in parallelo, senza
 attendere la risposta del Colab precedente. Sono supportati anche endpoint HTTPS compatibili con le stesse API;
 gli URL privati/locali sono bloccati salvo l’esplicita modalità di sviluppo.
+Se il coordinatore locale non è ancora disponibile, catalogo e upscaling delle
+foto passano direttamente dalle API HTTPS di Gradio: l'interfaccia lo segnala
+esplicitamente invece di mostrare il generico errore `Failed to fetch`. Per i
+video il coordinatore locale resta necessario perché gestisce estrazione,
+checkpoint su disco, distribuzione parallela dei frame e mux dell'audio.
 
 Per una foto, MLSM prova gli endpoint attivi in failover. Per un video il
 coordinatore locale estrae prima tutti i frame e avvia un worker seriale per ogni

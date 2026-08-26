@@ -69,6 +69,11 @@ const browserCapabilities: LongCatVideoCapabilities = {
   reason: "Il servizio locale LongCat-Video non risponde oppure il runtime CUDA non è pronto.",
   setupCommand: "npm run longcat-video:setup"
 };
+const browserInputFiles = new Map<string, File>();
+function rememberBrowserInput(key: string, file: File): void {
+  browserInputFiles.set(key, file);
+  while (browserInputFiles.size > 4) browserInputFiles.delete(browserInputFiles.keys().next().value as string);
+}
 
 export async function getLongCatVideoCapabilities(): Promise<LongCatVideoCapabilities> {
   if (!isTauri()) {
@@ -114,11 +119,16 @@ function chooseBrowserMedia(mode: Exclude<LongCatVideoMode, "textToVideo">): Pro
         const response = await fetch(`http://127.0.0.1:8766/uploads?kind=${mode === "imageToVideo" ? "image" : "video"}&name=${encodeURIComponent(file.name)}`, { method: "POST", headers: { "X-MLSM-LongCat": "1", "Content-Type": "application/octet-stream" }, body: file });
         const payload = await response.json().catch(() => null) as { inputRef?: string; error?: string } | null;
         if (!response.ok || !payload?.inputRef) throw new Error(payload?.error || `Upload LongCat-Video fallito: HTTP ${response.status}`);
+        rememberBrowserInput(payload.inputRef, file);
         resolve(payload.inputRef);
       } catch (error) { reject(error); }
     };
     input.click();
   });
+}
+
+export function getLongCatBrowserInputFile(inputPath: string): File | null {
+  return browserInputFiles.get(inputPath) ?? null;
 }
 
 export async function chooseLongCatInput(mode: Exclude<LongCatVideoMode, "textToVideo">): Promise<string | null> {

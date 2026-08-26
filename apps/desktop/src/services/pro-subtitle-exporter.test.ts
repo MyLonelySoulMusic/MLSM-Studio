@@ -15,6 +15,10 @@ const mediabunnyMock = vi.hoisted(() => ({
   audioSourceAdd: vi.fn<(packet: unknown, metadata: unknown) => Promise<void>>(),
   audioSourceClose: vi.fn(),
   primaryAudioTrack: null as Record<string, unknown> | null,
+  sourceDuration: .1,
+  videoTimings: [[0, .04], [.04, .04], [.08, .02]] as Array<[number, number]>,
+  forceLastProcessedDurationZero: false,
+  processedDurations: [] as number[],
   videoTrack: {
     canDecode: vi.fn(async () => true),
     getDisplayWidth: vi.fn(async () => 640),
@@ -171,7 +175,7 @@ vi.mock("mediabunny", () => {
     }
 
     async computeDuration(): Promise<number> {
-      return .1;
+      return mediabunnyMock.sourceDuration;
     }
 
     dispose(): void {
@@ -194,9 +198,9 @@ vi.mock("mediabunny", () => {
         }
         return;
       }
-      yield { timestamp: 0, duration: .04 };
-      yield { timestamp: .04, duration: .04 };
-      yield { timestamp: .08, duration: .02 };
+      for (const [timestamp, duration] of mediabunnyMock.videoTimings) {
+        yield { timestamp, duration };
+      }
     }
   }
 
@@ -227,19 +231,37 @@ vi.mock("mediabunny", () => {
     async execute(): Promise<void> {
       this.state = "executing";
       const video = this.options.video as {
+        frameRate?: number;
         process: (sample: {
           timestamp: number;
           duration: number;
+          setDuration: (duration: number) => void;
           draw: (context: CanvasRenderingContext2D, x: number, y: number, width: number, height: number) => void;
         }) => unknown;
       };
-      const timings: Array<[number, number]> = [[0, .04], [.04, .04], [.08, .02]];
-      for (const [timestamp, duration] of timings) {
-        await video.process({
+      const timings: Array<[number, number]> = video.frameRate
+        ? Array.from(
+          {
+            length: Math.max(1, Math.floor(
+              mediabunnyMock.sourceDuration * video.frameRate
+              + Math.max(1, mediabunnyMock.sourceDuration * video.frameRate) * Number.EPSILON * 16
+            ))
+          },
+          (_, index) => [
+            index / video.frameRate!,
+            Math.min(1 / video.frameRate!, mediabunnyMock.sourceDuration - index / video.frameRate!)
+          ]
+        )
+        : mediabunnyMock.videoTimings;
+      for (const [index, [timestamp, duration]] of timings.entries()) {
+        const sample = {
           timestamp,
-          duration,
-          draw: (...args) => mediabunnyMock.sampleDraw(...args)
-        });
+          duration: mediabunnyMock.forceLastProcessedDurationZero && index === timings.length - 1 ? 0 : duration,
+          setDuration(value: number) { this.duration = value; },
+          draw: (...args: [CanvasRenderingContext2D, number, number, number, number]) => mediabunnyMock.sampleDraw(...args)
+        };
+        await video.process(sample);
+        mediabunnyMock.processedDurations.push(sample.duration);
       }
       this.state = "done";
     }
@@ -282,7 +304,9 @@ import {
   rebaseProSubtitleCues,
   probeProSubtitleExportCapabilities,
   proSubtitleFrameCount,
+  proSubtitleNormalizedFrameCount,
   proSubtitleFrameTiming,
+  resolveProSubtitleSourceFrameDuration,
   resolveProSubtitleExportPlan,
   type ProSubtitleExportSettings
 } from "./pro-subtitle-exporter";
@@ -411,6 +435,10 @@ describe("ProSubtitles exporter", () => {
     mediabunnyMock.audioSourceAdd.mockReset().mockResolvedValue(undefined);
     mediabunnyMock.audioSourceClose.mockReset();
     mediabunnyMock.primaryAudioTrack = null;
+    mediabunnyMock.sourceDuration = .1;
+    mediabunnyMock.videoTimings = [[0, .04], [.04, .04], [.08, .02]];
+    mediabunnyMock.forceLastProcessedDurationZero = false;
+    mediabunnyMock.processedDurations.length = 0;
     mediabunnyMock.videoTrack.computePacketStats.mockReset().mockResolvedValue({
       packetCount: 3,
       averagePacketRate: 30,
@@ -604,6 +632,8 @@ describe("ProSubtitles exporter", () => {
 
   it("produce timestamp deterministici e chiude esattamente alla durata richiesta", () => {
     expect(proSubtitleFrameCount(.09, 20)).toBe(2);
+    expect(proSubtitleFrameCount(48.03333333333334, 30)).toBe(1441);
+    expect(proSubtitleNormalizedFrameCount(48.03333333333334, 30)).toBe(1441);
     expect(proSubtitleFrameTiming(0, .09, 20)).toEqual({
       timestampSeconds: 0,
       durationSeconds: .05
@@ -627,11 +657,16 @@ describe("ProSubtitles exporter", () => {
     expect(() => assertCompleteVideoFrameIntegrity(120, 120)).not.toThrow();
   });
 
-  it("compone una volta ogni frame sorgente senza normalizzare il frame rate", async () => {
+  it("compone il video completo al frame rate scelto senza dipendere da quello sorgente", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(new Blob(["source-video"], { type: "video/mp4" }))
     );
     const onProgress = vi.fn();
+    mediabunnyMock.videoTrack.computePacketStats.mockResolvedValue({
+      packetCount: 2,
+      averagePacketRate: 20,
+      averageBitrate: 2_000_000
+    });
 
     const result = await exportProSubtitleVideo(
       baseSettings({
@@ -652,9 +687,9 @@ describe("ProSubtitles exporter", () => {
     expect(result).toMatchObject({
       format: { id: "mp4H264Solid" },
       sourceFrameCount: 3,
-      encodedFrameCount: 3
+      encodedFrameCount: 2
     });
-    expect(mediabunnyMock.sampleDraw).toHaveBeenCalledTimes(3);
+    expect(mediabunnyMock.sampleDraw).toHaveBeenCalledTimes(2);
     expect(context.fillText).toHaveBeenCalled();
     expect(mediabunnyMock.conversionOptions).toMatchObject({
       tracks: "primary",
@@ -664,18 +699,101 @@ describe("ProSubtitles exporter", () => {
       video: {
         codec: "avc",
         forceTranscode: true,
+        frameRate: 20,
         allowRotationMetadata: false,
         processedWidth: 640,
         processedHeight: 360
       }
     });
-    expect((mediabunnyMock.conversionOptions?.video as Record<string, unknown>).frameRate)
-      .toBeUndefined();
     expect(onProgress).toHaveBeenLastCalledWith(expect.objectContaining({
-      currentFrame: 3,
-      totalFrames: 3,
+      currentFrame: 2,
+      totalFrames: 2,
       progress: 1
     }));
+  });
+
+  it("recupera la durata zero dell’ultimo frame sorgente 1801 senza perderlo", async () => {
+    const frameRate = 30;
+    const frameCount = 1801;
+    mediabunnyMock.sourceDuration = frameCount / frameRate;
+    mediabunnyMock.forceLastProcessedDurationZero = true;
+    mediabunnyMock.videoTimings = Array.from({ length: frameCount }, (_, index) => [
+      index / frameRate,
+      index === frameCount - 1 ? 0 : 1 / frameRate
+    ]);
+    mediabunnyMock.videoTrack.computePacketStats.mockResolvedValue({
+      packetCount: frameCount,
+      averagePacketRate: frameRate,
+      averageBitrate: 2_000_000
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(new Blob(["source-video"], { type: "video/mp4" }))
+    );
+
+    expect(resolveProSubtitleSourceFrameDuration(
+      1800 / frameRate,
+      0,
+      1 / frameRate,
+      frameCount / frameRate,
+      frameRate
+    )).toBeCloseTo(1 / frameRate);
+
+    const result = await exportProSubtitleVideo(
+      baseSettings({
+        outputMode: "completeVideo",
+        sourceVideoUrl: "blob:source-video",
+        fps: frameRate,
+        durationSeconds: mediabunnyMock.sourceDuration
+      }),
+      createRenderer(),
+      vi.fn(),
+      new AbortController().signal,
+      vi.fn()
+    );
+
+    expect(result).toMatchObject({
+      sourceFrameCount: frameCount,
+      encodedFrameCount: frameCount
+    });
+    expect(mediabunnyMock.sampleDraw).toHaveBeenCalledTimes(frameCount);
+    expect(mediabunnyMock.processedDurations.at(-1)).toBeCloseTo(1 / frameRate);
+  });
+
+  it("non inventa il frame 1442 per una durata flottante di 1441 frame", async () => {
+    const frameRate = 30;
+    const frameCount = 1441;
+    mediabunnyMock.sourceDuration = 48.03333333333334;
+    mediabunnyMock.videoTimings = Array.from({ length: frameCount }, (_, index) => [
+      index / frameRate,
+      1 / frameRate
+    ]);
+    mediabunnyMock.videoTrack.computePacketStats.mockResolvedValue({
+      packetCount: frameCount,
+      averagePacketRate: frameRate,
+      averageBitrate: 2_000_000
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(new Blob(["source-video"], { type: "video/mp4" }))
+    );
+
+    const result = await exportProSubtitleVideo(
+      baseSettings({
+        outputMode: "completeVideo",
+        sourceVideoUrl: "blob:source-video",
+        fps: frameRate,
+        durationSeconds: mediabunnyMock.sourceDuration
+      }),
+      createRenderer(),
+      vi.fn(),
+      new AbortController().signal,
+      vi.fn()
+    );
+
+    expect(result).toMatchObject({
+      sourceFrameCount: frameCount,
+      encodedFrameCount: frameCount
+    });
+    expect(mediabunnyMock.sampleDraw).toHaveBeenCalledTimes(frameCount);
   });
 
   it("annulla il risultato se il file finalizzato ha perso anche un solo frame", async () => {
@@ -693,6 +811,7 @@ describe("ProSubtitles exporter", () => {
       baseSettings({
         outputMode: "completeVideo",
         sourceVideoUrl: "blob:source-video",
+        fps: 30,
         durationSeconds: .1
       }),
       createRenderer(),
@@ -723,6 +842,7 @@ describe("ProSubtitles exporter", () => {
       baseSettings({
         outputMode: "completeVideo",
         sourceVideoUrl: "blob:source-video",
+        fps: 30,
         durationSeconds: .1
       }),
       createRenderer(),

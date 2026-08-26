@@ -623,11 +623,22 @@ const defaultSongPlayer = {
     analyzedAt: null
   }
 };
+export const cassetteDeskWindowEnvironments = [
+  "summer-day",
+  "snow-day",
+  "night",
+  "rain-night",
+  "starry-moon",
+  "pink-moon",
+  "pink-meteor"
+] as const;
+
 const defaultCassetteDesk = {
   coverImageUrl: null,
   title: "",
   artist: "",
   stereoStyle: "classic" as const,
+  windowEnvironment: "starry-moon" as const,
   autoPalette: true,
   palette: ["#d8c4a6", "#6d8068", "#d34f69"] as [string, string, string],
   waveformColorMode: "auto" as const,
@@ -656,6 +667,7 @@ const cassetteDeskSchema = z.object({
   coverImageUrl: z.string().refine((value) => !value.startsWith("blob:"), "Gli URL blob runtime non possono essere salvati nel progetto.").nullable().default(defaultCassetteDesk.coverImageUrl),
   title: z.string().max(160).default(defaultCassetteDesk.title), artist: z.string().max(160).default(defaultCassetteDesk.artist),
   stereoStyle: z.enum(["classic", "poster"]).default(defaultCassetteDesk.stereoStyle),
+  windowEnvironment: z.enum(cassetteDeskWindowEnvironments).default(defaultCassetteDesk.windowEnvironment),
   autoPalette: z.boolean().default(defaultCassetteDesk.autoPalette), palette: z.tuple([z.string(), z.string(), z.string()]).default(defaultCassetteDesk.palette),
   waveformColorMode: z.enum(["auto", "manual"]).default(defaultCassetteDesk.waveformColorMode), waveformColor: z.string().default(defaultCassetteDesk.waveformColor),
   displaySpectrumColorMode: z.enum(["auto", "manual"]).default(defaultCassetteDesk.displaySpectrumColorMode), displaySpectrumColor: z.string().default(defaultCassetteDesk.displaySpectrumColor),
@@ -791,6 +803,7 @@ export type SongPlayerSettings = RhythmBallProject["animation"]["songPlayer"];
 export type SongPlayerAsset = SongPlayerSettings["assets"][number];
 export type SongPlayerMatch = SongPlayerSettings["match"];
 export type CassetteDeskSettings = RhythmBallProject["animation"]["cassetteDesk"];
+export type CassetteDeskWindowEnvironment = CassetteDeskSettings["windowEnvironment"];
 
 export function parseProject(input: unknown): RhythmBallProject {
   if (!input || typeof input !== "object" || Array.isArray(input)) return projectSchema.parse(input);

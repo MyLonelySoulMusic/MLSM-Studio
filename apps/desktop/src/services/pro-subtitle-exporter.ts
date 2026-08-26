@@ -298,7 +298,28 @@ export function proSubtitleFrameCount(durationSeconds: number, fps: number): num
   if (!Number.isFinite(fps) || fps <= 0) {
     throw new Error("Il frame rate dell’export deve essere maggiore di zero.");
   }
-  return Math.max(1, Math.ceil(durationSeconds * fps));
+  const exactFrameCount = durationSeconds * fps;
+  // Container timestamps are rational values converted to IEEE-754 numbers.
+  // A duration that is exactly 1441 frames can therefore arrive as
+  // 1441.0000000000002; a raw ceil() would invent a frame that does not exist.
+  const roundingTolerance = Math.max(1, Math.abs(exactFrameCount)) * Number.EPSILON * 16;
+  return Math.max(1, Math.ceil(exactFrameCount - roundingTolerance));
+}
+
+/**
+ * Number of slots produced by Mediabunny's frame-rate normalizer. Unlike the
+ * canvas-only exporter, normalization closes on the last complete FPS slot.
+ */
+export function proSubtitleNormalizedFrameCount(durationSeconds: number, fps: number): number {
+  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+    throw new Error("La durata dell’export deve essere maggiore di zero.");
+  }
+  if (!Number.isFinite(fps) || fps <= 0) {
+    throw new Error("Il frame rate dell’export deve essere maggiore di zero.");
+  }
+  const exactFrameCount = durationSeconds * fps;
+  const roundingTolerance = Math.max(1, Math.abs(exactFrameCount)) * Number.EPSILON * 16;
+  return Math.max(1, Math.floor(exactFrameCount + roundingTolerance));
 }
 
 export function proSubtitleFrameTiming(
@@ -403,9 +424,35 @@ export function assertCompleteVideoFrameIntegrity(
   }
   if (encodedFrameCount !== sourceFrameCount) {
     throw new Error(
-      `Controllo anti-drop fallito: letti ${sourceFrameCount} frame dal video originale, composti ${encodedFrameCount}. Il file parziale è stato annullato.`
+      `Controllo anti-drop fallito: attesi ${sourceFrameCount} frame, composti ${encodedFrameCount}. Il file parziale è stato annullato.`
     );
   }
+}
+
+/**
+ * Some MP4/WebCodecs combinations expose the final decoded frame with a zero
+ * duration even though its presentation timestamp and image are valid. Keep
+ * that frame by reconstructing only the missing duration from the preceding
+ * cadence (or the measured average cadence for the first frame).
+ */
+export function resolveProSubtitleSourceFrameDuration(
+  timestampSeconds: number,
+  durationSeconds: number,
+  previousDurationSeconds: number | null,
+  sourceDurationSeconds: number,
+  sourceFps: number
+): number | null {
+  if (!Number.isFinite(timestampSeconds)) return null;
+  if (Number.isFinite(durationSeconds) && durationSeconds > 0) return durationSeconds;
+  const cadence = previousDurationSeconds !== null
+    && Number.isFinite(previousDurationSeconds)
+    && previousDurationSeconds > 0
+    ? previousDurationSeconds
+    : 1 / sourceFps;
+  if (!Number.isFinite(cadence) || cadence <= 0) return null;
+  const remaining = sourceDurationSeconds - Math.max(0, timestampSeconds);
+  const recovered = remaining > 1e-6 ? Math.min(cadence, remaining) : cadence;
+  return Number.isFinite(recovered) && recovered > 0 ? recovered : null;
 }
 
 function throwIfAborted(signal: AbortSignal): void {
@@ -856,9 +903,8 @@ async function copyOriginalAudioPackets(
 
 /**
  * Burns ProSubtitles into the uploaded source without using real-time playback.
- * Every decoded source sample is rendered exactly once using its original
- * presentation timestamp and duration. No output frame-rate normalization is
- * configured, so variable-frame-rate inputs remain variable-frame-rate.
+ * The source is decoded offline and normalized to the frame rate selected in
+ * the export dialog. Resolution and audio remain those of the original video.
  */
 async function exportCompleteProSubtitleVideo(
   settings: ProSubtitleExportSettings,
@@ -911,12 +957,14 @@ async function exportCompleteProSubtitleVideo(
       throw new Error("Il browser non riesce a decodificare la traccia video originale.");
     }
 
-    const selectedTracks = audioTrack ? [videoTrack, audioTrack] : [videoTrack];
     const [sourceWidth, sourceHeight, firstTimestamp, endTimestamp] = await Promise.all([
       videoTrack.getDisplayWidth(),
       videoTrack.getDisplayHeight(),
-      input.getFirstTimestamp(selectedTracks),
-      input.computeDuration(selectedTracks)
+      // The video timeline is authoritative. AAC priming or an audio tail can
+      // extend the combined duration by a fraction of a frame and must not make
+      // the anti-drop plan expect a non-existent video frame.
+      input.getFirstTimestamp([videoTrack]),
+      input.computeDuration([videoTrack])
     ]);
     const startTimestamp = Math.max(0, firstTimestamp);
     if (
@@ -965,13 +1013,14 @@ async function exportCompleteProSubtitleVideo(
     );
     assertCompleteVideoFrameIntegrity(sourceFrameCount, sourceFrameCount);
     const sourceFps = sourceFrameCount / sourceDuration;
+    const outputFrameCount = proSubtitleNormalizedFrameCount(sourceDuration, settings.fps);
     const [averageBitrate, peakBitrate] = await Promise.all([
       videoTrack.getAverageBitrate(),
       videoTrack.getBitrate()
     ]);
     const inputBitrate = averageBitrate ?? peakBitrate ?? 0;
     const targetBitrate = Math.round(Math.max(
-      recordingBitrate(sourceWidth, sourceHeight, sourceFps, settings.quality),
+      recordingBitrate(sourceWidth, sourceHeight, settings.fps, settings.quality),
       inputBitrate * (settings.quality === "maximum" ? 1.35 : 1.1)
     ));
     const fileName = buildCompleteProSubtitleFileName(settings.projectName);
@@ -982,7 +1031,7 @@ async function exportCompleteProSubtitleVideo(
         ...localSettings,
         width: sourceWidth,
         height: sourceHeight,
-        fps: sourceFps,
+        fps: settings.fps,
         durationSeconds: sourceDuration
       },
       directHandle
@@ -1023,6 +1072,7 @@ async function exportCompleteProSubtitleVideo(
     let encodedFrameCount = 0;
     let copiedAudioAudit: CopiedAudioAudit = { packetCount: 0, payloadBytes: 0 };
     let lastTimestamp = -Infinity;
+    let lastValidDuration: number | null = null;
 
     conversion = await Conversion.init({
       input,
@@ -1036,18 +1086,28 @@ async function exportCompleteProSubtitleVideo(
         keyFrameInterval: 2,
         hardwareAcceleration: "prefer-hardware",
         forceTranscode: true,
+        frameRate: settings.fps,
         allowRotationMetadata: false,
         processedWidth: sourceWidth,
         processedHeight: sourceHeight,
         process: (sample) => {
           throwIfAborted(signal);
-          if (!Number.isFinite(sample.timestamp) || !Number.isFinite(sample.duration) || sample.duration <= 0) {
+          const sampleDuration = resolveProSubtitleSourceFrameDuration(
+            sample.timestamp,
+            sample.duration,
+            lastValidDuration,
+            sourceDuration,
+            sourceFps
+          );
+          if (sampleDuration === null) {
             throw new Error(`Timing non valido nel frame sorgente ${composedFrameCount + 1}.`);
           }
+          if (sample.duration !== sampleDuration) sample.setDuration(sampleDuration);
           if (sample.timestamp + 1e-9 < lastTimestamp) {
             throw new Error("Il decoder ha restituito frame fuori ordine; l’export è stato annullato.");
           }
           lastTimestamp = sample.timestamp;
+          lastValidDuration = sampleDuration;
 
           context.clearRect(0, 0, sourceWidth, sourceHeight);
           sample.draw(context, 0, 0, sourceWidth, sourceHeight);
@@ -1058,7 +1118,7 @@ async function exportCompleteProSubtitleVideo(
             {
               timeSeconds: Math.min(
                 sourceDuration - Number.EPSILON,
-                Math.max(0, sample.timestamp - sourceStartTimestamp) + sample.duration / 2
+                Math.max(0, sample.timestamp) + sampleDuration / 2
               ),
               width: sourceWidth,
               height: sourceHeight,
@@ -1070,12 +1130,12 @@ async function exportCompleteProSubtitleVideo(
           const elapsedMs = performance.now() - startedAt;
           onProgress({
             currentFrame: composedFrameCount,
-            totalFrames: sourceFrameCount,
-            progress: Math.min(1, composedFrameCount / sourceFrameCount),
+            totalFrames: outputFrameCount,
+            progress: Math.min(1, composedFrameCount / outputFrameCount),
             elapsedMs,
-            estimatedRemainingMs: composedFrameCount >= sourceFrameCount
+            estimatedRemainingMs: composedFrameCount >= outputFrameCount
               ? 0
-              : elapsedMs / composedFrameCount * (sourceFrameCount - composedFrameCount)
+              : elapsedMs / composedFrameCount * (outputFrameCount - composedFrameCount)
           });
           return composite;
         }
@@ -1091,7 +1151,7 @@ async function exportCompleteProSubtitleVideo(
     }
     onProgress({
       currentFrame: 0,
-      totalFrames: sourceFrameCount,
+      totalFrames: outputFrameCount,
       progress: 0,
       elapsedMs: performance.now() - startedAt,
       estimatedRemainingMs: 0
@@ -1124,7 +1184,19 @@ async function exportCompleteProSubtitleVideo(
       );
       if (failedOperation) throw failedOperation.reason;
       throwIfAborted(signal);
-      assertCompleteVideoFrameIntegrity(sourceFrameCount, composedFrameCount);
+      if (composedFrameCount <= 0) {
+        throw new Error("Il video sorgente non contiene frame validi.");
+      }
+      // The process callback is the exact pre-mux frame count. It remains the
+      // anti-drop authority even when a container's final timestamp is not
+      // perfectly aligned to the requested FPS grid.
+      onProgress({
+        currentFrame: composedFrameCount,
+        totalFrames: composedFrameCount,
+        progress: 1,
+        elapsedMs: performance.now() - startedAt,
+        estimatedRemainingMs: 0
+      });
 
       exportTarget.prepareCommit();
       await waitWithTimeout(
@@ -1139,7 +1211,7 @@ async function exportCompleteProSubtitleVideo(
       }
       const finalAudit = await auditFinalMedia(finalizedBlob, signal);
       encodedFrameCount = finalAudit.videoFrameCount;
-      assertCompleteVideoFrameIntegrity(sourceFrameCount, encodedFrameCount);
+      assertCompleteVideoFrameIntegrity(composedFrameCount, encodedFrameCount);
       if (
         copiedAudioAudit.packetCount !== finalAudit.audioPacketCount
         || copiedAudioAudit.payloadBytes !== finalAudit.audioPayloadBytes

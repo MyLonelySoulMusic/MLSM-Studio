@@ -247,7 +247,7 @@ describe("ExportDialog", () => {
     }));
   });
 
-  it("esporta il video completo usando frame rate e risoluzione del sorgente", () => {
+  it("mantiene la risoluzione sorgente ma permette di scegliere il frame rate del video completo", () => {
     const onStart = vi.fn();
     render(<ExportDialog
       duration={8}
@@ -273,14 +273,16 @@ describe("ExportDialog", () => {
     });
 
     expect(screen.queryByLabelText("Risoluzione")).not.toBeInTheDocument();
-    expect(screen.queryByText("Frame rate")).not.toBeInTheDocument();
-    expect(screen.getByText(/ordine, timestamp e durata di ogni frame/))
+    expect(screen.getByLabelText("Frame rate")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Frame rate"), { target: { value: "60" } });
+    expect(screen.getByText(/ricampiona i fotogrammi al frame rate scelto/))
       .toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", {
       name: "Scegli destinazione e crea video"
     }));
 
     expect(onStart).toHaveBeenCalledWith(expect.objectContaining({
+      fps: 60,
       proSubtitles: expect.objectContaining({
         outputMode: "completeVideo",
         format: "mp4H264Solid"

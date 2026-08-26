@@ -87,6 +87,7 @@ export function RemoteUpscalerPanel({ settings, update }: { settings: Settings; 
       </div>;
     })}</div> : null}
     <button type="button" disabled={loading || !active.length} onClick={() => void discover()}>{loading ? "Controllo endpoint…" : "Verifica endpoint e carica modelli"}</button>
+    {catalog?.transport === "direct" ? <small className="remote-upscaler-transport">Collegamento diretto a Gradio attivo. Il coordinatore locale resta necessario soltanto per estrarre, salvare e ricomporre i frame video.</small> : null}
     {catalog?.models.length ? <label>Modello remoto comune<select aria-label="Modello Upscaler remoto" value={remote.model} onChange={(event) => patchRemote({ model: event.target.value })}>{catalog.models.map((model) => <option key={model.name} value={model.name}>{model.name} · {model.scale}×{model.description ? ` · ${model.description}` : ""}</option>)}</select></label> : null}
     <label>Tentativi aggiuntivi per frame: {remote.frameRetries}<input aria-label="Tentativi frame Upscaler remoto" type="range" min="0" max="6" step="1" value={remote.frameRetries} onChange={(event) => patchRemote({ frameRetries: Number(event.target.value) })} /></label>
     {error ? <p className="remote-upscaler-error">{error}</p> : null}

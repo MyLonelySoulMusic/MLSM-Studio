@@ -488,20 +488,16 @@ def separate_vocals(request: dict[str, Any]) -> dict[str, Any]:
     f0, voiced, probability = librosa.pyin(samples, fmin=librosa.note_to_hz("C2"), fmax=librosa.note_to_hz("C6"), sr=sample_rate, frame_length=2_048, hop_length=1_024)
     times = librosa.times_like(f0, sr=sample_rate, hop_length=1_024)
     pitch = []
-    last_emitted_time = -1.0
-    last_emitted_midi = None
     for time_value, frequency, is_voiced, confidence in zip(times, f0, voiced, probability):
         confidence_value = float(confidence) if confidence is not None else 0.0
         if not bool(is_voiced) or not np.isfinite(frequency) or not np.isfinite(confidence_value) or confidence_value < 0.45:
             continue
         time_number = float(time_value)
         midi_number = float(librosa.hz_to_midi(frequency))
-        rounded_midi = round(midi_number)
-        if rounded_midi == last_emitted_midi and time_number - last_emitted_time < 0.25:
-            continue
+        # Keep the native pYIN cadence.  The UI turns these frames into stable
+        # note segments with median filtering and hysteresis; dropping repeated
+        # notes here used to erase onsets/releases and made the piano lag.
         pitch.append([round(time_number, 4), round(midi_number, 3), round(confidence_value, 4)])
-        last_emitted_time = time_number
-        last_emitted_midi = rounded_midi
         if len(pitch) >= 30_000:
             break
     progress(0.91, "Analisi armonica e tempo dal mix completo")

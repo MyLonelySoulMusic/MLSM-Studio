@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createProject } from "@rbs/project-schema";
 import { useProjectStore } from "../store/project-store";
@@ -26,5 +26,21 @@ describe("CassetteDeskInspector",()=>{
     expect(paletteToggle).toBeChecked();fireEvent.click(paletteToggle);
     fireEvent.change(screen.getByLabelText("Colore Scocca stereo Hi-Fi"),{target:{value:"#f4f1ea"}});
     expect(useProjectStore.getState().project.animation.cassetteDesk).toMatchObject({stereoStyle:"poster",stereoBodyColorMode:"manual",stereoBodyColor:"#f4f1ea"});
+  });
+  it("offers every window environment and persists the selection",()=>{
+    render(<CassetteDeskInspector aspectRatio="9:16" onAspectRatio={()=>undefined}/>);
+    const selector=screen.getByLabelText("Ambiente fuori dalla finestra");
+    expect(selector).toHaveValue("starry-moon");
+    expect(within(selector).getAllByRole("option").map(option=>({label:option.textContent,value:(option as HTMLOptionElement).value}))).toEqual([
+      {label:"Giorno d’estate",value:"summer-day"},
+      {label:"Giorno con neve",value:"snow-day"},
+      {label:"Notte",value:"night"},
+      {label:"Notte con pioggia",value:"rain-night"},
+      {label:"Notte stellata con luna",value:"starry-moon"},
+      {label:"Notte con luna rosa",value:"pink-moon"},
+      {label:"Notte con meteora rosa",value:"pink-meteor"}
+    ]);
+    fireEvent.change(selector,{target:{value:"pink-meteor"}});
+    expect(useProjectStore.getState().project.animation.cassetteDesk.windowEnvironment).toBe("pink-meteor");
   });
 });

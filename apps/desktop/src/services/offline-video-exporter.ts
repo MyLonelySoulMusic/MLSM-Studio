@@ -45,7 +45,13 @@ export interface OfflineSceneExportSettings {
   sourceDuration: number;
   backgroundDimming?: number;
   backgroundFit?: ExportMediaFit;
-  audioLeadIn?: { durationSeconds: number; events: Array<{ timeSeconds: number; kind: "slide" | "door" | "play" }>;includeSourceAudio?:boolean };
+  audioLeadIn?: {
+    durationSeconds: number;
+    events: Array<{ timeSeconds: number; kind: "slide" | "door" | "play" }>;
+    includeSourceAudio?: boolean;
+    /** Optional mode-specific PCM renderer. It receives the encoder format. */
+    renderPcm?: (sampleRate: number, channels: number) => Float32Array;
+  };
 }
 
 export interface OfflineSceneExportResult {
@@ -129,6 +135,15 @@ export function cassetteMechanicalLeadIn(sampleRate: number, channels: number, d
   const noise = (index: number) => { const value = Math.sin(index * 12.9898) * 43758.5453; return (value - Math.floor(value)) * 2 - 1; };
   events.forEach((event, eventIndex) => { const start = Math.floor(event.timeSeconds * sampleRate); const length = Math.floor(sampleRate * (event.kind === "slide" ? .32 : event.kind === "door" ? .16 : .09)); for (let frame = 0; frame < length && start + frame < frames; frame += 1) { const t = frame / sampleRate; const envelope = Math.pow(1 - frame / Math.max(1, length), event.kind === "slide" ? 1.8 : 4); const tone = event.kind === "slide" ? Math.sin(t * Math.PI * 2 * 86) * .16 + noise(frame + eventIndex * 991) * .12 : event.kind === "door" ? Math.sin(t * Math.PI * 2 * 132) * .34 + noise(frame) * .09 : Math.sin(t * Math.PI * 2 * 920) * .24 + noise(frame) * .06; for (let channel = 0; channel < channels; channel += 1) data[(start + frame) * channels + channel] = tone * envelope; } });
   return data;
+}
+
+function renderAudioLeadIn(
+  leadIn: NonNullable<OfflineSceneExportSettings["audioLeadIn"]>,
+  sampleRate: number,
+  channels: number
+): Float32Array {
+  return leadIn.renderPcm?.(sampleRate, channels)
+    ?? cassetteMechanicalLeadIn(sampleRate, channels, leadIn.durationSeconds, leadIn.events);
 }
 
 function waitWithTimeout<T>(promise: Promise<T>, milliseconds: number, message: string, signal: AbortSignal): Promise<T> {
@@ -346,7 +361,7 @@ export async function exportOfflineSceneVideo(settings: OfflineSceneExportSettin
     output.addVideoTrack(videoSource, { frameRate: settings.fps });
     if (audioTrack&&includeSourceAudio) {
       const leadIn = settings.audioLeadIn; let emittedLeadIn = false;
-      conversion = await Conversion.init({ input: sourceInput, output, tracks: "primary", trim: { start: 0, end: Math.min(settings.sourceDuration, audioDuration) }, video: { discard: true }, audio: leadIn ? { codec: "aac", bitrate: 320_000, forceTranscode: true, sampleFormat: "f32", process: (sample: AudioSample) => { sample.setTimestamp(sample.timestamp + leadIn.durationSeconds); if (emittedLeadIn) return sample; emittedLeadIn = true; const data = cassetteMechanicalLeadIn(sample.sampleRate, sample.numberOfChannels, leadIn.durationSeconds, leadIn.events); return [new AudioSample({ data, format: "f32", numberOfChannels: sample.numberOfChannels, sampleRate: sample.sampleRate, timestamp: 0 }), sample]; } } : { codec: "aac", bitrate: 320_000, forceTranscode: true }, composable: true, showWarnings: false });
+      conversion = await Conversion.init({ input: sourceInput, output, tracks: "primary", trim: { start: 0, end: Math.min(settings.sourceDuration, audioDuration) }, video: { discard: true }, audio: leadIn ? { codec: "aac", bitrate: 320_000, forceTranscode: true, sampleFormat: "f32", process: (sample: AudioSample) => { sample.setTimestamp(sample.timestamp + leadIn.durationSeconds); if (emittedLeadIn) return sample; emittedLeadIn = true; const data = renderAudioLeadIn(leadIn, sample.sampleRate, sample.numberOfChannels); return [new AudioSample({ data, format: "f32", numberOfChannels: sample.numberOfChannels, sampleRate: sample.sampleRate, timestamp: 0 }), sample]; } } : { codec: "aac", bitrate: 320_000, forceTranscode: true }, composable: true, showWarnings: false });
       if (!conversion.isValid || !conversion.utilizedTracks.includes(audioTrack)) throw new Error("La traccia audio non può essere codificata senza riproduzione live.");
     }else if(settings.audioLeadIn){effectsAudioSource=new AudioSampleSource({codec:"aac",bitrate:320_000});output.addAudioTrack(effectsAudioSource);}
     const abort = () => { void conversion?.cancel();effectsAudioSource?.close(); void output?.cancel(); };
@@ -354,7 +369,7 @@ export async function exportOfflineSceneVideo(settings: OfflineSceneExportSettin
     renderer.setExportSize(settings.width, settings.height);
     try {
       await waitWithTimeout(output.start(), 60_000, "L’encoder offline non è partito entro 60 secondi.", signal);
-      const audioPromise = conversion?.execute() ?? (effectsAudioSource&&settings.audioLeadIn?(async()=>{const sampleRate=48_000,channels=2;const data=cassetteMechanicalLeadIn(sampleRate,channels,settings.audioLeadIn!.durationSeconds,settings.audioLeadIn!.events);await effectsAudioSource!.add(new AudioSample({data,format:"f32",numberOfChannels:channels,sampleRate,timestamp:0}));effectsAudioSource!.close();})():Promise.resolve()); let encodedFrames = 0;
+      const audioPromise = conversion?.execute() ?? (effectsAudioSource&&settings.audioLeadIn?(async()=>{const sampleRate=48_000,channels=2;const data=renderAudioLeadIn(settings.audioLeadIn!,sampleRate,channels);await effectsAudioSource!.add(new AudioSample({data,format:"f32",numberOfChannels:channels,sampleRate,timestamp:0}));effectsAudioSource!.close();})():Promise.resolve()); let encodedFrames = 0;
       for (let frameIndex = 0; frameIndex < totalFrames; frameIndex += 1) {
         throwIfAborted(signal);
         const timing = offlineFrameTiming(frameIndex, duration, settings.fps);
