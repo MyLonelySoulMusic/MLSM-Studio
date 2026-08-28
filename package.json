@@ -27,10 +27,6 @@
     "rife:verify": "node tools/verify_rife_runtime.cjs",
     "song-player:setup": "node tools/setup_python_runtime.cjs song-player",
     "song-player:worker": "node tools/song-player/run_worker.cjs",
-    "longcat-video:setup": "node tools/setup_longcat_video_runtime.cjs",
-    "longcat-video:setup:runtime": "node tools/setup_longcat_video_runtime.cjs --skip-weights",
-    "longcat-video:check": "node tools/setup_longcat_video_runtime.cjs --check",
-    "longcat-video:server": "node tools/longcat-video/server.cjs",
     "ai-quantizer:setup": "node tools/setup_python_runtime.cjs ai-quantizer",
     "ai-quantizer:server": "node tools/run_python_service.cjs ai-quantizer"
   },

@@ -7,7 +7,8 @@ import { upscalerModels } from "../services/upscaler-runtime";
 import { exportUpscaledVideo, type UpscalerVideoExportProgress, type UpscalerVideoExportResult } from "../services/upscaler-video-exporter";
 import { chooseUpscalerVideoSaveTarget, prepareUpscalerVideoSaveTarget, saveUpscalerVideoArtifact } from "../services/upscaler-video-artifact";
 import { getUpscalerSourceFile } from "../services/upscaler-source-file";
-import { reportUpscalerDiagnostic, UPSCALER_REMOTE_CACHE_CLEARED_EVENT, type RemoteVideoCheckpointPolicy } from "../services/upscaler-python-client";
+import { reportUpscalerDiagnostic, UPSCALER_REMOTE_CACHE_CLEARED_EVENT, type RemoteVideoCheckpointPolicy, type RemoteVideoEndpointDecision, type RemoteVideoEndpointPreflight } from "../services/upscaler-python-client";
+import { hasCompatibleRemoteUpscalerCheckpoint } from "../services/upscaler-remote-checkpoint";
 import { exportUpscalerImage } from "../services/upscaler-image-exporter";
 import { useProjectStore } from "../store/project-store";
 import { useUpscalerBatchStore } from "../store/upscaler-batch-store";
@@ -30,13 +31,18 @@ function formatRemaining(milliseconds: number | undefined): string {
 function aiPreviewKey(settings: Settings): string {
   const remote = settings.remote;
   return [settings.sourceUrl, settings.model, settings.backend, settings.tileSize, settings.tta, settings.finalWidth, settings.finalHeight,
-    JSON.stringify(settings.adjustments), remote.enabled, remote.model, remote.frameRetries, ...remote.endpoints.map((item) => `${item.id}:${item.enabled}:${item.url}`)].join(":");
+    JSON.stringify(settings.adjustments), remote.enabled, remote.model, remote.frameRetries, remote.segmentFrames, remote.outputFps ?? "original", ...remote.endpoints.map((item) => `${item.id}:${item.enabled}:${item.url}`)].join(":");
 }
 
 function videoOutputKey(settings: Settings): string {
   return [settings.sourceUrl, settings.model, settings.backend, settings.tileSize, settings.tta, settings.finalWidth, settings.finalHeight,
     settings.lockAspectRatio, JSON.stringify(settings.adjustments), settings.remote.enabled, settings.remote.model,
-    settings.remote.frameRetries, ...settings.remote.endpoints.map((item) => `${item.id}:${item.enabled}:${item.url}`)].join(":");
+    settings.remote.frameRetries, settings.remote.segmentFrames, settings.remote.outputFps ?? "original", ...settings.remote.endpoints.map((item) => `${item.id}:${item.enabled}:${item.url}`)].join(":");
+}
+
+function remoteModeConfigurationError(settings: Settings): string | null {
+  if (!settings.remote.enabled || usesRemoteUpscaler(settings)) return null;
+  return "Modalità Gradio / Colab selezionata: aggiungi e attiva almeno un endpoint prima di avviare.";
 }
 
 interface UpscalerVideoArtifact extends UpscalerVideoExportResult {
@@ -56,10 +62,40 @@ interface RemoteCheckpointPrompt {
   outputKey: string;
   saveWhenReady: boolean;
   sourceName: string;
+  preparedTargetPromise: ReturnType<typeof prepareUpscalerVideoSaveTarget> | null;
+}
+
+interface RemoteCheckpointCheck {
+  outputKey: string;
+  controller: AbortController;
+  promise: Promise<void>;
+}
+
+interface RemoteEndpointPrompt {
+  id: number;
+  outputKey: string;
+  preflight: RemoteVideoEndpointPreflight;
+  decide: (decision: RemoteVideoEndpointDecision) => void;
 }
 
 function remoteEndpointLabel(url: string): string {
   try { return new URL(url).host; } catch { return url; }
+}
+
+function formatEndpointDuration(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined || !Number.isFinite(seconds) || seconds < 0) return "—";
+  if (seconds < 60) return `${Math.ceil(seconds)} s`;
+  const minutes = Math.ceil(seconds / 60);
+  if (minutes < 60) return `${minutes} min`;
+  return `${Math.floor(minutes / 60)} h ${minutes % 60} min`;
+}
+
+function remoteSegmentPhaseLabel(phase: string | undefined): string {
+  if (phase === "awaiting_progress") return "In attesa telemetria endpoint";
+  if (phase === "loading_model") return "Caricamento modello";
+  if (phase === "finalizing") return "Finalizzazione MP4";
+  if (phase === "receiving") return "Ricezione segmento";
+  return "Upscaling frame";
 }
 
 export function UpscalerPreview({ settings, fullscreen = false }: { settings: Settings; fullscreen?: boolean }) {
@@ -67,8 +103,8 @@ export function UpscalerPreview({ settings, fullscreen = false }: { settings: Se
   const panStart = useRef<{ pointerId: number; x: number; y: number; left: number; top: number } | null>(null);
   const sourceToken = useRef(""); const latestSettings = useRef(settings);
   latestSettings.current = settings;
-  const aiPreview = useRef<{ key: string; canvas: HTMLCanvasElement } | null>(null); const previewController = useRef<AbortController | null>(null); const previewOperation = useRef<{ key: string; promise: Promise<boolean> } | null>(null); const exportController = useRef<AbortController | null>(null); const exportOperation = useRef<UpscalerExportOperation | null>(null); const exportAction = useRef<() => void>(() => undefined); const videoArtifactRef = useRef<UpscalerVideoArtifact | null>(null); const projectName = useProjectStore((state) => state.project.project.name); const update = useProjectStore((state) => state.updateUpscaler); const batchRunning = useUpscalerBatchStore((state) => state.running); const beginSingleOperation = useUpscalerBatchStore((state) => state.beginSingleOperation); const endSingleOperation = useUpscalerBatchStore((state) => state.endSingleOperation);
-  const [ready, setReady] = useState(false); const [playing, setPlaying] = useState(false); const [time, setTime] = useState(0); const [exporting, setExporting] = useState(false); const [videoProgress, setVideoProgress] = useState<UpscalerVideoExportProgress | null>(null); const [videoArtifact, setVideoArtifact] = useState<UpscalerVideoArtifact | null>(null); const [checkpointPrompt, setCheckpointPrompt] = useState<RemoteCheckpointPrompt | null>(null); const [savedDestination, setSavedDestination] = useState(""); const [error, setError] = useState(""); const [previewGenerated, setPreviewGenerated] = useState(false); const [generatingPreview, setGeneratingPreview] = useState(false); const [modelProgress, setModelProgress] = useState<ModelLoadProgress | null>(null); const [previewRevision, setPreviewRevision] = useState(0); const [detailZoom, setDetailZoom] = useState(1); const [panning, setPanning] = useState(false);
+  const aiPreview = useRef<{ key: string; canvas: HTMLCanvasElement } | null>(null); const previewController = useRef<AbortController | null>(null); const previewOperation = useRef<{ key: string; promise: Promise<boolean> } | null>(null); const exportController = useRef<AbortController | null>(null); const exportOperation = useRef<UpscalerExportOperation | null>(null); const checkpointCheck = useRef<RemoteCheckpointCheck | null>(null); const endpointPromptSequence = useRef(0); const exportAction = useRef<() => void>(() => undefined); const videoArtifactRef = useRef<UpscalerVideoArtifact | null>(null); const projectName = useProjectStore((state) => state.project.project.name); const update = useProjectStore((state) => state.updateUpscaler); const batchRunning = useUpscalerBatchStore((state) => state.running); const beginSingleOperation = useUpscalerBatchStore((state) => state.beginSingleOperation); const endSingleOperation = useUpscalerBatchStore((state) => state.endSingleOperation);
+  const [ready, setReady] = useState(false); const [playing, setPlaying] = useState(false); const [time, setTime] = useState(0); const [exporting, setExporting] = useState(false); const [checkingCheckpoint, setCheckingCheckpoint] = useState(false); const [videoProgress, setVideoProgress] = useState<UpscalerVideoExportProgress | null>(null); const [videoArtifact, setVideoArtifact] = useState<UpscalerVideoArtifact | null>(null); const [checkpointPrompt, setCheckpointPrompt] = useState<RemoteCheckpointPrompt | null>(null); const [endpointPrompt, setEndpointPrompt] = useState<RemoteEndpointPrompt | null>(null); const [savedDestination, setSavedDestination] = useState(""); const [error, setError] = useState(""); const [previewGenerated, setPreviewGenerated] = useState(false); const [generatingPreview, setGeneratingPreview] = useState(false); const [modelProgress, setModelProgress] = useState<ModelLoadProgress | null>(null); const [previewRevision, setPreviewRevision] = useState(0); const [detailZoom, setDetailZoom] = useState(1); const [panning, setPanning] = useState(false);
   const outputKey = useMemo(() => videoOutputKey(settings), [settings]);
   const displaySourceUrl = settings.sourceKind === "video" && videoArtifact?.key === outputKey ? videoArtifact.url : settings.sourceUrl;
   const previewSize = useMemo(() => resolveUpscalerPreviewSize(settings.finalWidth, settings.finalHeight), [settings.finalHeight, settings.finalWidth]);
@@ -98,6 +134,12 @@ export function UpscalerPreview({ settings, fullscreen = false }: { settings: Se
       setVideoProgress(null);
     }
     setCheckpointPrompt((current) => current?.outputKey === outputKey ? current : null);
+    const check = checkpointCheck.current;
+    if (check && check.outputKey !== outputKey) {
+      checkpointCheck.current = null;
+      check.controller.abort();
+      setCheckingCheckpoint(false);
+    }
   }, [outputKey, settings]);
   const handleVideoMetadata = useCallback((event: SyntheticEvent<HTMLVideoElement>) => {
     const item = event.currentTarget; const current = latestSettings.current;
@@ -136,6 +178,7 @@ export function UpscalerPreview({ settings, fullscreen = false }: { settings: Se
   }, [displaySourceUrl, settings.sourceKind, settings.sourceUrl]);
   const generatePreview = useCallback(async () => {
     const source = settings.sourceKind === "video" ? video.current : image.current; if (!settings.sourceUrl || !source || batchRunning) return false;
+    const remoteError = remoteModeConfigurationError(settings); if (remoteError) { setError(remoteError); return false; }
     const key = aiPreviewKey(settings); const existing = previewOperation.current;
     if (existing?.key === key) return existing.promise;
     const owner = beginSingleOperation(); if (!owner) return false;
@@ -169,6 +212,7 @@ export function UpscalerPreview({ settings, fullscreen = false }: { settings: Se
   const toggleVideo = () => { const item = video.current; if (!item) return; if (item.paused) void item.play().then(() => setPlaying(true)).catch(() => undefined); else { item.pause(); setPlaying(false); } };
   const exportImage = (): Promise<void> => {
     if (!image.current || batchRunning) return Promise.resolve();
+    const remoteError = remoteModeConfigurationError(settings); if (remoteError) { setError(remoteError); return Promise.resolve(); }
     const key = aiPreviewKey(settings); const operationKey = `image:${key}`;
     const existing = exportOperation.current;
     if (existing?.key === operationKey) return existing.promise;
@@ -203,7 +247,28 @@ export function UpscalerPreview({ settings, fullscreen = false }: { settings: Se
     setSavedDestination(target.kind === "download" ? `Download avviato · ${receipt.destination} · ${receipt.bytes.toLocaleString("it-IT")} byte` : `Salvato e verificato · ${receipt.destination} · ${receipt.bytes.toLocaleString("it-IT")} byte`);
     return true;
   };
-  const exportVideo = (saveWhenReady = false, checkpointPolicy?: RemoteVideoCheckpointPolicy): Promise<void> => {
+  const askRemoteEndpointDecision = (
+    preflight: RemoteVideoEndpointPreflight, signal: AbortSignal,
+  ): Promise<RemoteVideoEndpointDecision> => new Promise((resolve) => {
+    if (signal.aborted) { resolve("cancel"); return; }
+    const id = ++endpointPromptSequence.current;
+    let finished = false;
+    const decide = (decision: RemoteVideoEndpointDecision) => {
+      if (finished) return;
+      finished = true;
+      signal.removeEventListener("abort", abort);
+      setEndpointPrompt((current) => current?.id === id ? null : current);
+      resolve(decision);
+    };
+    const abort = () => decide("cancel");
+    signal.addEventListener("abort", abort, { once: true });
+    setEndpointPrompt({ id, outputKey, preflight, decide });
+  });
+  const exportVideo = (
+    saveWhenReady = false,
+    checkpointPolicy?: RemoteVideoCheckpointPolicy,
+    preparedTargetPromise?: ReturnType<typeof prepareUpscalerVideoSaveTarget> | null
+  ): Promise<void> => {
     if (!settings.sourceUrl || batchRunning) return Promise.resolve();
     const operationKey = `video:${outputKey}`;
     const existing = exportOperation.current;
@@ -231,17 +296,52 @@ export function UpscalerPreview({ settings, fullscreen = false }: { settings: Se
       operationOwner.promise = operation; exportOperation.current = operationOwner;
       return operation;
     }
+    const remoteError = remoteModeConfigurationError(settings);
+    if (remoteError) { setError(remoteError); return Promise.resolve(); }
     if (usesRemoteUpscaler(settings) && checkpointPolicy === undefined) {
-      // The choice is per operation and deliberately not persisted: automatic
-      // cache reuse made two different source-selection intents indistinguishable.
-      setCheckpointPrompt({ outputKey, saveWhenReady, sourceName: settings.sourceName });
-      return Promise.resolve();
+      const existingCheck = checkpointCheck.current;
+      if (existingCheck?.outputKey === outputKey) return existingCheck.promise;
+      if (existingCheck) { checkpointCheck.current = null; existingCheck.controller.abort(); }
+      const sourceFile = getUpscalerSourceFile(settings.sourceUrl);
+      // Reserve the native destination while this click still owns user
+      // activation. The same promise is carried through either cache choice.
+      const pendingTarget = preparedTargetPromise ?? (saveWhenReady
+        ? prepareUpscalerVideoSaveTarget(`${projectName.replace(/[^a-zA-Z0-9-_]+/g, "-") || "mlsm-studio"}-upscaled.mp4`)
+        : null);
+      // The cache check can take longer than the native picker. Attach a
+      // rejection observer immediately, while preserving the same promise for
+      // the export branch that will report the actual error to the user.
+      if (pendingTarget) void pendingTarget.catch(() => undefined);
+      const controller = new AbortController();
+      const checkOwner: RemoteCheckpointCheck = { outputKey, controller, promise: Promise.resolve() };
+      const isCurrent = () => checkpointCheck.current === checkOwner && !controller.signal.aborted && videoOutputKey(latestSettings.current) === outputKey;
+      setCheckingCheckpoint(true); setError("");
+      const promise = Promise.resolve().then(async () => {
+        const compatible = sourceFile
+          ? await hasCompatibleRemoteUpscalerCheckpoint(sourceFile, settings, controller.signal)
+          : false;
+        if (!isCurrent()) return;
+        if (compatible) {
+          setCheckpointPrompt({ outputKey, saveWhenReady, sourceName: settings.sourceName, preparedTargetPromise: pendingTarget });
+          return;
+        }
+        await exportVideo(saveWhenReady, "restart", pendingTarget);
+      }).catch(async (reason) => {
+        if (!isCurrent() || (reason instanceof DOMException && reason.name === "AbortError")) return;
+        // Discovery must never prevent processing. Restart is the safe policy:
+        // it cannot adopt frames belonging to another source.
+        await exportVideo(saveWhenReady, "restart", pendingTarget);
+      }).finally(() => {
+        if (checkpointCheck.current === checkOwner) { checkpointCheck.current = null; setCheckingCheckpoint(false); }
+      });
+      checkOwner.promise = promise; checkpointCheck.current = checkOwner;
+      return promise;
     }
     // This call happens before the first await, preserving transient activation
     // when the toolbar asks to process and export in one operation.
-    const saveTargetPromise = saveWhenReady
+    const saveTargetPromise = preparedTargetPromise ?? (saveWhenReady
       ? prepareUpscalerVideoSaveTarget(`${projectName.replace(/[^a-zA-Z0-9-_]+/g, "-") || "mlsm-studio"}-upscaled.mp4`)
-      : null;
+      : null);
     const owner = beginSingleOperation(); if (!owner) return Promise.resolve();
     video.current?.pause(); setPlaying(false); setExporting(true); setVideoProgress(null); setError(""); const controller = new AbortController(); exportController.current = controller;
     const sourceUrl = settings.sourceUrl; const sourceFile = getUpscalerSourceFile(sourceUrl);
@@ -253,7 +353,7 @@ export function UpscalerPreview({ settings, fullscreen = false }: { settings: Se
       try {
         const preparedTarget = saveTargetPromise ? await saveTargetPromise : undefined;
         if ((saveWhenReady && !preparedTarget) || !isCurrent()) return;
-        const result = await exportUpscaledVideo({ projectName, quality: "maximum", sourceVideoUrl: sourceUrl, sourceVideoFile: sourceFile, upscalerSettings: settings, suppressDownload: true, ...(checkpointPolicy ? { remoteCheckpointPolicy: checkpointPolicy } : {}) }, controller.signal, (progress) => { if (isCurrent()) setVideoProgress(progress); });
+        const result = await exportUpscaledVideo({ projectName, quality: "maximum", sourceVideoUrl: sourceUrl, sourceVideoFile: sourceFile, upscalerSettings: settings, suppressDownload: true, onRemoteEndpointDecision: askRemoteEndpointDecision, ...(checkpointPolicy ? { remoteCheckpointPolicy: checkpointPolicy } : {}) }, controller.signal, (progress) => { if (isCurrent()) setVideoProgress(progress); });
         if (!isCurrent() || !result?.blob) return;
         clearVideoArtifact();
         const artifact: UpscalerVideoArtifact = { ...result, key: outputKey, url: URL.createObjectURL(result.blob), blob: result.blob, remote: usesRemoteUpscaler(settings) };
@@ -270,7 +370,7 @@ export function UpscalerPreview({ settings, fullscreen = false }: { settings: Se
   exportAction.current = () => { if (settings.sourceKind === "image") void exportImage(); else void exportVideo(true); };
   useEffect(() => { const handleExport = () => exportAction.current(); window.addEventListener("upscaler:export", handleExport); return () => window.removeEventListener("upscaler:export", handleExport); }, []);
   useEffect(() => {
-    const cancelActiveOperations = () => { previewController.current?.abort(); exportController.current?.abort(); };
+    const cancelActiveOperations = () => { previewController.current?.abort(); exportController.current?.abort(); checkpointCheck.current?.controller.abort(); checkpointCheck.current = null; };
     window.addEventListener("pagehide", cancelActiveOperations);
     window.addEventListener("beforeunload", cancelActiveOperations);
     window.addEventListener(UPSCALER_PROJECT_REPLACED_EVENT, cancelActiveOperations);
@@ -291,9 +391,21 @@ export function UpscalerPreview({ settings, fullscreen = false }: { settings: Se
         <p><b>{checkpointPrompt.sourceName}</b></p>
         <p>Il backend confronterà SHA-256 e modello. “Riprendi” usa i frame solo se appartengono esattamente allo stesso video; “Riparti da zero” crea sempre un job nuovo.</p>
         <div className="upscaler-checkpoint-actions">
-          <button className="upscaler-video-primary-action" type="button" onClick={() => { const request = checkpointPrompt; setCheckpointPrompt(null); void exportVideo(request.saveWhenReady, "resume"); }}>Riprendi cache compatibile</button>
-          <button type="button" onClick={() => { const request = checkpointPrompt; setCheckpointPrompt(null); void exportVideo(request.saveWhenReady, "restart"); }}>Riparti da zero</button>
+          <button className="upscaler-video-primary-action" type="button" onClick={() => { const request = checkpointPrompt; setCheckpointPrompt(null); void exportVideo(request.saveWhenReady, "resume", request.preparedTargetPromise); }}>Riprendi cache compatibile</button>
+          <button type="button" onClick={() => { const request = checkpointPrompt; setCheckpointPrompt(null); void exportVideo(request.saveWhenReady, "restart", request.preparedTargetPromise); }}>Riparti da zero</button>
           <button type="button" onClick={() => setCheckpointPrompt(null)}>Annulla</button>
+        </div>
+      </section>
+    </div> : null}
+    {endpointPrompt?.outputKey === outputKey ? <div className="video-editor-tool-modal-backdrop upscaler-checkpoint-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) endpointPrompt.decide("cancel"); }}>
+      <section className="video-editor-tool-modal upscaler-checkpoint-dialog" role="dialog" aria-modal="true" aria-labelledby="upscaler-endpoint-title">
+        <strong id="upscaler-endpoint-title">Alcuni endpoint non rispondono</strong>
+        <p><b>{endpointPrompt.preflight.reachableEndpoints.length}</b> endpoint raggiungibili su <b>{endpointPrompt.preflight.reachableEndpoints.length + endpointPrompt.preflight.failures.length}</b>.</p>
+        <div className="upscaler-endpoint-failures">{endpointPrompt.preflight.failures.map((failure) => <div key={failure.url}><strong>{remoteEndpointLabel(failure.url)}</strong><span>{failure.error}</span></div>)}</div>
+        <p>{endpointPrompt.preflight.reachableEndpoints.length ? "Puoi continuare usando soltanto gli endpoint disponibili. Quelli offline resteranno configurati, ma verranno ignorati per questo job." : "Nessun endpoint è disponibile. Riavvia almeno un Colab prima di continuare."}</p>
+        <div className="upscaler-checkpoint-actions">
+          {endpointPrompt.preflight.reachableEndpoints.length ? <button className="upscaler-video-primary-action" type="button" onClick={() => endpointPrompt.decide("continue")}>Continua con {endpointPrompt.preflight.reachableEndpoints.length} endpoint</button> : null}
+          <button type="button" onClick={() => endpointPrompt.decide("cancel")}>Annulla</button>
         </div>
       </section>
     </div> : null}
@@ -301,8 +413,9 @@ export function UpscalerPreview({ settings, fullscreen = false }: { settings: Se
     {ready || videoArtifact?.key === outputKey ? <div className="upscaler-preview-badges"><span>{videoArtifact?.key === outputKey ? "RISULTATO UPSCALATO · PRONTO" : previewGenerated ? (settings.comparisonMode === "split" ? "ORIGINALE  |  MIGLIORATO" : settings.comparisonMode.toUpperCase()) : "ORIGINALE · ANTEPRIMA NON GENERATA"}</span><span>Originale {settings.sourceWidth || "—"} × {settings.sourceHeight || "—"}</span><span>Output {videoArtifact?.width ?? settings.finalWidth} × {videoArtifact?.height ?? settings.finalHeight}</span></div> : null}
     {(ready || videoArtifact?.key === outputKey) && settings.sourceKind === "video" && !exporting && !generatingPreview ? <div className={`upscaler-video-actions${videoArtifact?.key === outputKey ? " has-result" : ""}`} role="group" aria-label="Azioni upscaling video">
       <div className="upscaler-video-actions-copy"><strong>{videoArtifact?.key === outputKey ? "Video upscalato pronto" : "Upscaling video"}</strong><span>{videoArtifact?.key === outputKey ? `${videoArtifact.encodedFrameCount} frame ricomposti · audio ${videoArtifact.audioPacketCount > 0 ? "incluso" : "sorgente senza traccia"}. La preview mostra ora l’MP4 finale.` : "Elabora tutto il filmato oppure controlla prima il frame corrente."}</span></div>
-      {videoArtifact?.key === outputKey ? <><button className="upscaler-video-primary-action" type="button" disabled={batchRunning} onClick={() => void exportVideo()}>Esporta / salva MP4</button><button className="upscaler-video-test-action" type="button" onClick={clearVideoArtifact}>Torna all’originale</button></> : <><button className="upscaler-video-primary-action" type="button" disabled={batchRunning} onClick={() => void exportVideo()}>Avvia upscaling video completo</button><button className="upscaler-video-test-action" type="button" disabled={batchRunning} onClick={() => void generatePreview()}>Prova il frame corrente</button></>}
+      {videoArtifact?.key === outputKey ? <><button className="upscaler-video-primary-action" type="button" disabled={batchRunning || checkingCheckpoint} onClick={() => void exportVideo()}>Esporta / salva MP4</button><button className="upscaler-video-test-action" type="button" onClick={clearVideoArtifact}>Torna all’originale</button></> : <><button className="upscaler-video-primary-action" type="button" disabled={batchRunning || checkingCheckpoint} onClick={() => void exportVideo()}>{checkingCheckpoint ? "Controllo cache…" : "Avvia upscaling video completo"}</button><button className="upscaler-video-test-action" type="button" disabled={checkingCheckpoint} onClick={() => void generatePreview()}>Prova il frame corrente</button></>}
     </div> : null}
+    {checkingCheckpoint ? <div className="upscaler-model-progress" role="status"><strong>Controllo cache compatibile…</strong><progress /><span>Il video partirà automaticamente da zero se non esiste un checkpoint con lo stesso SHA-256, modello e segmentazione.</span></div> : null}
     {savedDestination ? <div className="upscaler-video-save-confirmation" role="status">{savedDestination}</div> : null}
     {ready && !previewGenerated && settings.sourceKind === "image" ? <button className="upscaler-preview-generate" type="button" disabled={generatingPreview || batchRunning} onClick={generatePreview}>{generatingPreview ? "Generazione anteprima…" : "Genera anteprima upscaling"}</button> : null}
     {generatingPreview ? <div className="upscaler-model-progress"><strong>{!modelProgress ? "Preparazione upscaling…" : modelProgress.phase === "download" ? "Download modello" : modelProgress.phase === "initializing" ? "Inizializzazione modello" : modelProgress.phase === "inference" ? "Upscaling AI a tile" : modelProgress.phase === "cache" ? "Modello trovato in cache" : "Completamento"}</strong><progress max="1" value={modelProgress?.progress || undefined} /><span>{modelProgress ? `${Math.round(modelProgress.progress * 100)}%${modelProgress.loadedBytes ? ` · ${(modelProgress.loadedBytes / 1024 / 1024).toFixed(1)} MB${modelProgress.totalBytes ? ` / ${(modelProgress.totalBytes / 1024 / 1024).toFixed(1)} MB` : ""}` : ""}` : "Caricamento runtime e preparazione immagine"}</span></div> : null}
@@ -313,17 +426,17 @@ export function UpscalerPreview({ settings, fullscreen = false }: { settings: Se
     {fullscreen ? <div className="upscaler-fullscreen-controls"><label>Modello<select value={settings.model} onChange={(event) => update({ model: event.target.value as Settings["model"] })}>{upscalerModels.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}</select></label><label>Vista<select value={settings.comparisonMode} onChange={(event) => update({ comparisonMode: event.target.value as Settings["comparisonMode"] })}><option value="split">Prima / dopo</option><option value="enhanced">Migliorato</option><option value="original">Originale</option><option value="blend">Fusione</option></select></label><label>Separatore<input type="range" min="0" max="1" step=".01" value={settings.comparisonPosition} onChange={(event) => update({ comparisonPosition: Number(event.target.value) })} /></label><label>Originale {Math.round(settings.originalBlend * 100)}%<input type="range" min="0" max="1" step=".01" value={settings.originalBlend} onChange={(event) => update({ originalBlend: Number(event.target.value) })} /></label><label>Contrasto {settings.adjustments.contrast}<input type="range" min="-100" max="100" value={settings.adjustments.contrast} onChange={(event) => update({ adjustments: { ...settings.adjustments, contrast: Number(event.target.value) } })} /></label><label>Saturazione {settings.adjustments.saturation}<input type="range" min="-100" max="100" value={settings.adjustments.saturation} onChange={(event) => update({ adjustments: { ...settings.adjustments, saturation: Number(event.target.value) } })} /></label><label>Nitidezza {settings.adjustments.sharpness}<input type="range" min="0" max="100" value={settings.adjustments.sharpness} onChange={(event) => update({ adjustments: { ...settings.adjustments, sharpness: Number(event.target.value) } })} /></label><button type="button" disabled={generatingPreview || batchRunning} onClick={generatePreview}>Rigenera</button></div> : null}
     {ready && settings.sourceKind === "image" ? <button className="upscaler-export-image" type="button" disabled={exporting || batchRunning} onClick={() => void exportImage()}>{exporting ? "Generazione ed esportazione…" : generatingPreview ? "Attendi anteprima e scarica PNG" : shouldGenerateUpscalerAi(settings) && !previewGenerated ? "Genera upscaling e scarica PNG" : "Scarica PNG alla risoluzione finale"}</button> : null}
     {exporting ? <div className="upscaler-video-frame-progress" role="status" aria-live="polite">
-      <header><strong>{videoProgress?.phaseLabel ?? "Preparazione job video locale"}</strong><span>{Math.round((videoProgress?.progress ?? 0) * 100)}%</span><button type="button" onClick={() => exportController.current?.abort()}>Annulla</button></header>
+      <header><strong>{videoProgress?.phaseLabel ?? "Preparazione job video locale"}</strong><span aria-label={`Avanzamento ${Math.round((videoProgress?.progress ?? 0) * 100)}%`}>Avanzamento {Math.round((videoProgress?.progress ?? 0) * 100)}%</span><button type="button" onClick={() => exportController.current?.abort()}>Annulla</button></header>
       <progress max="1" value={videoProgress?.progress ?? 0} />
-      <div className="upscaler-frame-counters"><span>Frame completati <b>{videoProgress?.currentFrame ?? 0}</b> / <b>{videoProgress?.totalFrames || "—"}</b></span><span>{videoProgress?.width && videoProgress?.height ? `Output ${videoProgress.width} × ${videoProgress.height} · ` : ""}{formatRemaining(videoProgress?.estimatedRemainingMs)}</span></div>
+      <div className="upscaler-frame-counters"><span>Frame completati <b>{videoProgress?.currentFrame ?? 0}</b> / <b>{videoProgress?.totalFrames || "—"}</b>{videoProgress?.totalSegments ? <> · Segmenti <b>{videoProgress.completedSegments ?? 0}</b> / <b>{videoProgress.totalSegments}</b></> : null}</span><span>{videoProgress?.width && videoProgress?.height ? `Output ${videoProgress.width} × ${videoProgress.height} · ` : ""}{formatRemaining(videoProgress?.estimatedRemainingMs)}</span></div>
       {videoProgress?.endpointActivity?.length ? <div className="upscaler-remote-workers" aria-label="Attività endpoint remoti">
         <div className="upscaler-remote-workers-summary"><strong>{videoProgress.endpointActivity.length} endpoint configurati</strong><span>{videoProgress.activeEndpoints?.length ?? 0} richieste contemporaneamente in volo</span></div>
         <div className="upscaler-remote-workers-list">{videoProgress.endpointActivity.map((endpoint) => <div className={`upscaler-remote-worker is-${endpoint.state}`} key={endpoint.url} title={endpoint.url}>
-          <i aria-hidden="true" /><div><strong>{remoteEndpointLabel(endpoint.url)}</strong><span>{endpoint.state === "busy" ? `Elabora ${endpoint.activeFrame ?? "un frame"}` : endpoint.state === "error" ? "Tentativo fallito · riassegnazione" : "Pronto per il prossimo frame"}</span></div><output>{endpoint.completed} completati{endpoint.failures ? ` · ${endpoint.failures} retry` : ""}</output>
+          <i aria-hidden="true" /><div><div className="upscaler-remote-worker-heading"><strong>{remoteEndpointLabel(endpoint.url)}</strong><output>{endpoint.completedSegments ?? endpoint.completed} segmenti{endpoint.completedFrames ? ` · ${endpoint.completedFrames} frame` : ""}{endpoint.failures ? ` · ${endpoint.failures} retry` : ""}</output></div><span>{endpoint.state === "busy" ? `${remoteSegmentPhaseLabel(endpoint.segmentPhase)} · ${endpoint.activeSegment ?? endpoint.activeFrame ?? "segmento"}` : endpoint.state === "error" ? "Tentativo fallito · riassegnazione" : "Pronto per il prossimo segmento"}</span>{endpoint.state === "busy" ? <div className="upscaler-remote-worker-progress"><progress aria-label={`Progresso ${remoteEndpointLabel(endpoint.url)}`} max="1" value={endpoint.segmentPhase === "awaiting_progress" ? undefined : endpoint.segmentProgress ?? 0} />{endpoint.segmentPhase === "awaiting_progress" ? <small>Il segmento è in esecuzione. Riavvia un endpoint aggiornato per ricevere il dettaglio frame.</small> : <small><b>{Math.round((endpoint.segmentProgress ?? 0) * 100)}%</b> · frame <b>{endpoint.segmentFrame ?? 0}</b>/<b>{endpoint.segmentTotalFrames || "—"}</b>{endpoint.secondsPerFrame ? ` · ${endpoint.secondsPerFrame.toFixed(2)} s/frame` : ""} · ETA <b>{formatEndpointDuration(endpoint.segmentEstimatedRemainingSeconds)}</b></small>}</div> : null}</div>
         </div>)}</div>
       </div> : null}
-      {videoProgress?.originalFramesDirectory ? <p><strong>Frame originali:</strong><code>{videoProgress.originalFramesDirectory}</code></p> : videoProgress?.tempDirectory ? <p><strong>Cartella temp:</strong><code>{videoProgress.tempDirectory}</code></p> : null}
-      <small>Ogni frame originale viene salvato prima dell’upscaling; il video viene ricomposto soltanto al termine del conteggio completo.</small>
+      {videoProgress?.upscaledSegmentsDirectory ? <p><strong>Checkpoint segmenti:</strong><code>{videoProgress.upscaledSegmentsDirectory}</code></p> : videoProgress?.originalFramesDirectory ? <p><strong>Frame originali:</strong><code>{videoProgress.originalFramesDirectory}</code></p> : videoProgress?.tempDirectory ? <p><strong>Cartella temp:</strong><code>{videoProgress.tempDirectory}</code></p> : null}
+      {usesRemoteUpscaler(settings) ? <small>I video vengono inviati come segmenti da {settings.remote.segmentFrames} frame, uno per endpoint in parallelo. Ogni MP4 ricevuto viene salvato prima del segmento successivo; al termine MLSM verifica l’ordine, ricostruisce tutti i frame e ripristina l’audio originale{settings.remote.outputFps === null ? " mantenendo gli FPS della sorgente" : ` a ${settings.remote.outputFps} FPS`}.</small> : null}
     </div> : null}
     {error ? <div className="upscaler-preview-error">{error}</div> : null}
   </div>;

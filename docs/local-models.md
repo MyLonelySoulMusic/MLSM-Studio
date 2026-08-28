@@ -7,10 +7,10 @@ I modelli vengono inizializzati su richiesta. Il primo uso può richiedere un do
 | Sottotitoli | Whisper selezionabile | cache modelli locale | modello più piccolo/CPU |
 | Revisione e assistente | Qwen locale | cache Transformers | WebGPU → WASM → knowledge base |
 | Upscaling | Real-ESRGAN/RealESRNet | `.upscaler-cache` | CUDA/MPS → CPU; Canvas Enhanced |
-| Interpolazione / Frame Booster | FFmpeg minterpolate (**Motion**), **Blend** o Practical-RIFE v4.26 | cache runtime/pesi verificata | nessun fallback silenzioso; il file base verificato resta disponibile se il job fallisce |
+| Frame Booster standalone | FFmpeg minterpolate (**Motion AOBMC**, **Motion OBMC bidirezionale** o **Blend**) | runtime FFmpeg locale | nessun fallback silenzioso; il file base verificato resta disponibile se il job fallisce |
+| Interpolazione Video Editor | FFmpeg minterpolate o Practical-RIFE v4.26 | cache runtime/pesi verificata | RIFE resta una scelta separata del Video Editor |
 | Circular Spectrum Auto Detector | `Xenova/detr-resnet-50` (Transformers.js), classi COCO | cache lazy del modello | WebGPU → WASM |
 | Cassette Desk · voce | Demucs `htdemucs` + pYIN | runtime isolato dell’app desktop o del servizio browser locale + cache pesi | nessun fallback dal mix; installazione automatica al primo uso |
-| LongCat Video | `meituan-longcat/LongCat-Video`, revisione fissata | `.longcat-video/weights` | nessun fallback: pipeline ufficiale Linux/NVIDIA CUDA |
 
 ## Regole
 
@@ -20,20 +20,23 @@ I modelli vengono inizializzati su richiesta. Il primo uso può richiedere un do
 - Cassette Desk crea e verifica automaticamente il runtime vocale al primo utilizzo sia nella shell desktop sia nel browser locale integrato; l’utente non deve eseguire comandi né riavviare l’app.
 - Un errore azzera la promise di bootstrap, così il nuovo tentativo può ripartire.
 - Su Apple Silicon il backend preferito è Metal/MPS quando il modello lo supporta; su NVIDIA è CUDA.
-- LongCat Video non viene simulato su browser, CPU o Metal: l’area controlla repository, checkpoint e CUDA e abilita **Genera** soltanto quando la pipeline ufficiale è pronta.
 
 ### RIFE verificato
 
 Il runtime RIFE standalone usa l’upstream ufficiale `hzwer/Practical-RIFE`,
-modello v4.26, con revision fissata nel manifest e verifica SHA-256 dell’archivio
-prima della pubblicazione in cache. La preparazione è on demand. Il self-test
+modello v4.26. Il manifest fissa e verifica separatamente sia l’archivio dei
+pesi sia il sorgente compatibile del package `model`; un trasferimento troncato
+viene eliminato e ritentato fino a tre volte, senza modificare o aggirare gli
+SHA-256 attesi. La preparazione è on demand. Il self-test
 esegue una mini inferenza reale e una capability non viene considerata pronta se
 questa verifica fallisce.
 
 La selezione automatica usa CUDA su NVIDIA e MPS su Apple Silicon; su MPS la
 precisione è FP32, mentre CUDA supporta FP16 o FP32. CPU è disponibile quando
-viene selezionata esplicitamente. Lo stesso runtime è richiamabile dal Video
-Editor e da Frame Booster in Photo & Video Studio.
+viene selezionata esplicitamente. Il runtime RIFE è richiamabile dal Video
+Editor. Frame Booster standalone usa esclusivamente FFmpeg Motion AOBMC, Motion
+OBMC bidirezionale o Blend e il
+suo health check resta indipendente da download, checksum e inizializzazione RIFE.
 
 Per controllare una macchina senza avviare l’interfaccia:
 

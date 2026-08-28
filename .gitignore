@@ -26,8 +26,6 @@ apps/desktop/public/upscaler-models/
 .venv-upscaler/
 .venv-ai-quantizer/
 .venv-song-player/
-.venv-longcat-video/
-.longcat-video/
 __pycache__/
 *.py[cod]
 

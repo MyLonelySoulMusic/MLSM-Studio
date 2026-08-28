@@ -5,8 +5,8 @@ export interface AnimationModeDefinition {
   id: string;
   label: string;
   description: string;
-  generator: "instrumentalFalling" | "newYorkStreets" | "coverSphere" | "stereoUnfold" | "walkingCube" | "portraitLandscape" | "teddyWalk" | "teddySing" | "proSubtitles" | "pixelsSub" | "backgroundAuto" | "staticWatermark" | "upscaler" | "frameBooster" | "videoEditor" | "songPlayer" | "cassetteDesk" | "aiQuantizer";
-  panel: "instrumentalObjects" | "newYorkStreets" | "coverSphere" | "stereoUnfold" | "walkingCube" | "portraitLandscape" | "teddyWalk" | "teddySing" | "proSubtitles" | "pixelsSub" | "backgroundAuto" | "staticWatermark" | "upscaler" | "frameBooster" | "videoEditor" | "songPlayer" | "cassetteDesk" | "aiQuantizer";
+  generator: "instrumentalFalling" | "newYorkStreets" | "coverSphere" | "stereoUnfold" | "walkingCube" | "portraitLandscape" | "commentsInvasion" | "teddyWalk" | "teddySing" | "proSubtitles" | "pixelsSub" | "backgroundAuto" | "staticWatermark" | "upscaler" | "frameBooster" | "videoEditor" | "songPlayer" | "cassetteDesk" | "aiQuantizer";
+  panel: "instrumentalObjects" | "newYorkStreets" | "coverSphere" | "stereoUnfold" | "walkingCube" | "portraitLandscape" | "commentsInvasion" | "teddyWalk" | "teddySing" | "proSubtitles" | "pixelsSub" | "backgroundAuto" | "staticWatermark" | "upscaler" | "frameBooster" | "videoEditor" | "songPlayer" | "cassetteDesk" | "aiQuantizer";
   objectTypes: readonly AnimationModeObjectType[];
   defaultBaseObjectTypes: readonly SceneObjectType[];
 }
@@ -65,6 +65,14 @@ export const animationModes: readonly AnimationModeDefinition[] = [{
   description: "Trasforma un video verticale in una composizione 16:9 con immagini laterali specchiate, spettrogramma stereo, cubo in vetro ed effetti multilivello sincronizzati al ritmo.",
   generator: "portraitLandscape",
   panel: "portraitLandscape",
+  objectTypes: [],
+  defaultBaseObjectTypes: ["platform"]
+}, {
+  id: "commentsInvasion",
+  label: "Comments Invasion",
+  description: "Invade il video con screenshot di commenti che entrano come timbri d’impatto, mantenendo automaticamente a schermo soltanto il numero scelto.",
+  generator: "commentsInvasion",
+  panel: "commentsInvasion",
   objectTypes: [],
   defaultBaseObjectTypes: ["platform"]
 }, {
@@ -177,7 +185,7 @@ export interface AnimationCategory { id: AnimationCategoryId; groups: readonly A
 export const animationCategories: readonly AnimationCategory[] = [{
   id: "soundAnimation",
   groups: [
-    { id: "visualizers", modeIds: ["instrumentalFalling", "coverSphere", "stereoUnfold", "walkingCube", "portraitLandscape", "backgroundAuto", "cassetteDesk", "songPlayer"] },
+    { id: "visualizers", modeIds: ["instrumentalFalling", "coverSphere", "stereoUnfold", "walkingCube", "portraitLandscape", "commentsInvasion", "backgroundAuto", "cassetteDesk", "songPlayer"] },
     { id: "stories", modeIds: ["teddyWalk", "teddySing"] },
     { id: "typography", modeIds: ["proSubtitles", "pixelsSub"] }
   ]

@@ -1,15 +1,20 @@
-import { describe, expect, it } from "vitest";
-import { createFrameInterpolationFormData } from "./frame-interpolation-client";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createFrameInterpolationFormData, frameInterpolationJob, normalizeFrameInterpolationMethod, waitForFrameInterpolationHealth } from "./frame-interpolation-client";
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("Frame Booster interpolation request", () => {
   it("sends only the multiplier so the server derives FPS from ffprobe", () => {
     const form = createFrameInterpolationFormData({
-      blob: new Blob(["video"]), fileName: "phone.mp4", method: "rife",
-      sourceFps: 30, targetFps: 60, targetMultiplier: 2, device: "mps", precision: "fp32",
+      blob: new Blob(["video"]), fileName: "phone.mp4", method: "motion",
+      sourceFps: 30, targetFps: 60, targetMultiplier: 2,
     }, "client-1");
     expect(form.get("target_multiplier")).toBe("2");
     expect(form.has("target_fps")).toBe(false);
     expect(form.has("source_fps")).toBe(false);
+    expect(form.has("rife_model")).toBe(false);
+    expect(form.has("device")).toBe(false);
+    expect(form.has("precision")).toBe(false);
   });
 
   it("sends direct target FPS when multiplier mode is not selected", () => {
@@ -20,5 +25,44 @@ describe("Frame Booster interpolation request", () => {
     expect(form.get("target_fps")).toBe("59.94");
     expect(form.get("source_fps")).toBe("29.97");
     expect(form.has("target_multiplier")).toBe(false);
+  });
+
+  it("migrates a stale RIFE value to Motion before creating a Frame Booster job", () => {
+    expect(normalizeFrameInterpolationMethod("rife")).toBe("motion");
+    const form = createFrameInterpolationFormData({
+      blob: new Blob(["video"]), fileName: "legacy.mp4",
+      method: "rife" as never, targetMultiplier: 2,
+    }, "legacy-client");
+    expect(form.get("method")).toBe("motion");
+    expect([...form.keys()]).not.toContain("rife_model");
+  });
+
+  it("preserves the standalone OBMC bidirectional method in the upload contract", () => {
+    expect(normalizeFrameInterpolationMethod("motion-obmc")).toBe("motion-obmc");
+    const form = createFrameInterpolationFormData({
+      blob: new Blob(["video"]), fileName: "obmc.mp4",
+      method: "motion-obmc", targetFps: 60,
+    }, "obmc-client");
+    expect(form.get("method")).toBe("motion-obmc");
+    expect(form.get("target_fps")).toBe("60");
+  });
+
+  it("does not start an upload when ownership was already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await expect(frameInterpolationJob({
+      blob: new Blob(["video"]), fileName: "stale.mp4", method: "motion", targetMultiplier: 2,
+      signal: controller.signal,
+    })).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("retries health while the automatically started backend is still booting", async () => {
+    const capabilities = { ffmpeg: true, jobs: true };
+    const fetch = vi.spyOn(globalThis, "fetch")
+      .mockRejectedValueOnce(new TypeError("connection refused"))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ interpolation: capabilities }), { status: 200 }));
+
+    await expect(waitForFrameInterpolationHealth({ timeoutMs: 2_000 })).resolves.toMatchObject({ ffmpeg: true });
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 });

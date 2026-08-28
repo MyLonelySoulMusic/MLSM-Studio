@@ -1,7 +1,7 @@
 import type { ExportProgress } from "@rbs/export-engine";
 import type { RhythmBallProject } from "@rbs/project-schema";
 import type { ExportQuality } from "./offline-video-exporter";
-import { generatePythonUpscaledVideo, type RemoteVideoCheckpointPolicy } from "./upscaler-python-client";
+import { generatePythonUpscaledVideo, type RemoteUpscalerEndpointActivity, type RemoteVideoCheckpointPolicy, type RemoteVideoEndpointDecision, type RemoteVideoEndpointPreflight } from "./upscaler-python-client";
 import { resolvedUpscalerDimensions } from "./upscaler-renderer";
 
 type UpscalerSettings = RhythmBallProject["animation"]["upscaler"];
@@ -16,6 +16,9 @@ export interface UpscalerVideoExportSettings {
   sourceStartSeconds?: number;
   sourceDurationSeconds?: number;
   remoteCheckpointPolicy?: RemoteVideoCheckpointPolicy;
+  onRemoteEndpointDecision?: (
+    preflight: RemoteVideoEndpointPreflight, signal: AbortSignal,
+  ) => Promise<RemoteVideoEndpointDecision>;
 }
 
 export interface UpscalerVideoExportResult {
@@ -35,10 +38,14 @@ export interface UpscalerVideoExportProgress extends ExportProgress {
   phaseLabel?: string;
   tempDirectory?: string;
   originalFramesDirectory?: string;
+  inputSegmentsDirectory?: string;
+  upscaledSegmentsDirectory?: string;
+  completedSegments?: number;
+  totalSegments?: number;
   width?: number;
   height?: number;
   activeEndpoints?: string[];
-  endpointActivity?: Array<{ url: string; state: "idle" | "busy" | "error"; activeFrame: string | null; completed: number; failures: number }>;
+  endpointActivity?: RemoteUpscalerEndpointActivity[];
 }
 
 function safeName(value: string): string {
@@ -83,6 +90,7 @@ export async function exportUpscaledVideo(
     },
     quality: settings.quality,
     ...(settings.remoteCheckpointPolicy ? { checkpointPolicy: settings.remoteCheckpointPolicy } : {}),
+    ...(settings.onRemoteEndpointDecision ? { onRemoteEndpointDecision: settings.onRemoteEndpointDecision } : {}),
     signal,
     onStatus: (status) => onProgress({
       currentFrame: status.currentFrame,
@@ -94,6 +102,10 @@ export async function exportUpscaledVideo(
       phaseLabel: status.phaseLabel,
       tempDirectory: status.tempDirectory,
       originalFramesDirectory: status.originalFramesDirectory,
+      ...(status.inputSegmentsDirectory ? { inputSegmentsDirectory: status.inputSegmentsDirectory } : {}),
+      ...(status.upscaledSegmentsDirectory ? { upscaledSegmentsDirectory: status.upscaledSegmentsDirectory } : {}),
+      ...(status.completedSegments !== undefined ? { completedSegments: status.completedSegments } : {}),
+      ...(status.totalSegments !== undefined ? { totalSegments: status.totalSegments } : {}),
       ...(status.effectiveWidth ? { width: status.effectiveWidth } : {}),
       ...(status.effectiveHeight ? { height: status.effectiveHeight } : {}),
       ...(status.activeEndpoints ? { activeEndpoints: status.activeEndpoints } : {}),

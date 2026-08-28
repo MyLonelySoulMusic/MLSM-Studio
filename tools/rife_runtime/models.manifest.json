@@ -9,6 +9,14 @@
       "sha256": "1fa9b9cda3d9b8c3e301359e2595960902f97bf926c08598b0e9957a3f3f760e",
       "size": 22869906,
       "artifact": "RIFEv4.26_0921.zip",
+      "source": {
+        "upstream": "hzwer/Practical-RIFE",
+        "revision": "ec6aba965312eb9fd08301436145c8ac47ec545a",
+        "url": "https://codeload.github.com/hzwer/Practical-RIFE/tar.gz/ec6aba965312eb9fd08301436145c8ac47ec545a",
+        "sha256": "03ec4a857bf9ad5bacffd51cbee3f9b1b9bd3c98c07a65e6e2f4ecd6a1f664ee",
+        "size": 3021711,
+        "artifact": "Practical-RIFE-ec6aba965312eb9fd08301436145c8ac47ec545a.tar.gz"
+      },
       "license": "MIT"
     }
   }

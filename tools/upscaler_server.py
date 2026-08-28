@@ -13,6 +13,7 @@ import io
 import math
 import queue
 import re
+import signal
 import shutil
 import subprocess
 import sys
@@ -25,10 +26,43 @@ import uuid
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
+
+def resolve_upscaler_cpu_threads(configured: str | None, logical_cpus: int | None) -> int:
+    """Keep video preparation responsive while allowing an explicit override."""
+    if configured:
+        try:
+            return max(1, min(16, int(configured)))
+        except ValueError:
+            pass
+    # Frame extraction is support work for remote GPUs, not the main workload.
+    # A quarter of the logical CPUs (maximum four) leaves the editor and OS
+    # responsive even while decoding long high-FPS sources.
+    return max(1, min(4, math.ceil(max(1, logical_cpus or 1) / 4)))
+
+
+UPSCALER_CPU_THREADS = resolve_upscaler_cpu_threads(
+    os.environ.get("MLSM_UPSCALER_CPU_THREADS"), os.cpu_count()
+)
+# These variables must be set before importing NumPy/OpenCV/Torch. This service
+# owns its process, so constraining their native pools cannot affect the UI.
+for _thread_variable in (
+    "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS",
+):
+    os.environ[_thread_variable] = str(UPSCALER_CPU_THREADS)
+
 import cv2
 import numpy as np
 import torch
 import uvicorn
+
+cv2.setNumThreads(UPSCALER_CPU_THREADS)
+torch.set_num_threads(UPSCALER_CPU_THREADS)
+try:
+    torch.set_num_interop_threads(1)
+except RuntimeError:
+    # Import reloads in diagnostics may happen after Torch initialized its pool.
+    pass
 
 # BasicSR 1.4.2 imports an alias removed from recent TorchVision releases.
 # Keep the upstream Real-ESRGAN stack while exposing only the compatible symbol.
@@ -47,15 +81,38 @@ from realesrgan import RealESRGANer
 from realesrgan.archs.srvgg_arch import SRVGGNetCompact
 from starlette.background import BackgroundTask
 try:
-    from remote_upscaler import RemoteUpscalerError, aggregate_catalog, distribute_frames, normalize_endpoint, upscale_image as remote_upscale_image
+    from remote_upscaler import (
+        RemoteUpscalerError, aggregate_catalog, distribute_frames, distribute_video_chunks,
+        inspect_video_chunk_endpoints, normalize_endpoint, upscale_image as remote_upscale_image,
+        validate_video_chunk_endpoints,
+    )
 except ModuleNotFoundError:
-    from tools.remote_upscaler import RemoteUpscalerError, aggregate_catalog, distribute_frames, normalize_endpoint, upscale_image as remote_upscale_image
+    from tools.remote_upscaler import (
+        RemoteUpscalerError, aggregate_catalog, distribute_frames, distribute_video_chunks,
+        inspect_video_chunk_endpoints, normalize_endpoint, upscale_image as remote_upscale_image,
+        validate_video_chunk_endpoints,
+    )
 try:
-    from rife_runtime.adapter import get_rife_capabilities, prepare_rife, validate_rife_request
-    from rife_runtime.engine import interpolate_file as practical_rife_interpolate_file
-except ModuleNotFoundError:  # imported as ``tools.upscaler_server`` in tests
-    from tools.rife_runtime.adapter import get_rife_capabilities, prepare_rife, validate_rife_request
-    from tools.rife_runtime.engine import interpolate_file as practical_rife_interpolate_file
+    try:
+        from rife_runtime.adapter import get_rife_capabilities, prepare_rife, validate_rife_request
+        from rife_runtime.engine import interpolate_file as practical_rife_interpolate_file
+    except ModuleNotFoundError:  # imported as ``tools.upscaler_server`` in tests
+        from tools.rife_runtime.adapter import get_rife_capabilities, prepare_rife, validate_rife_request
+        from tools.rife_runtime.engine import interpolate_file as practical_rife_interpolate_file
+except Exception as rife_import_error:  # RIFE is optional; FFmpeg must still boot.
+    _RIFE_IMPORT_ERROR = str(rife_import_error)
+
+    def get_rife_capabilities(*_args, **_kwargs):
+        return {"installed": False, "ready": False, "verified": False, "reason": f"Runtime RIFE non disponibile: {_RIFE_IMPORT_ERROR}"}
+
+    def prepare_rife(*_args, **_kwargs):
+        raise RuntimeError(f"Runtime RIFE non disponibile: {_RIFE_IMPORT_ERROR}")
+
+    def validate_rife_request(*_args, **_kwargs):
+        raise RuntimeError(f"Runtime RIFE non disponibile: {_RIFE_IMPORT_ERROR}")
+
+    def practical_rife_interpolate_file(*_args, **_kwargs):
+        raise RuntimeError(f"Runtime RIFE non disponibile: {_RIFE_IMPORT_ERROR}")
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = Path(os.environ.get("DSAS_UPSCALER_CACHE", ROOT / ".upscaler-cache" / "pytorch"))
@@ -64,6 +121,12 @@ VIDEO_TEMP_ROOT = Path(os.environ.get("MLSM_UPSCALER_TEMP", ROOT / "temp" / "ups
 VIDEO_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
 REMOTE_VIDEO_ROOT = Path(os.environ.get("MLSM_REMOTE_UPSCALER_JOBS", ROOT / ".upscaler-cache" / "remote-video-jobs"))
 REMOTE_VIDEO_ROOT.mkdir(parents=True, exist_ok=True)
+REMOTE_VIDEO_CHUNK_FRAMES = 100
+REMOTE_VIDEO_MAX_CHUNK_FRAMES = 5000
+CANVAS_MODEL_ID = "canvas"
+CANVAS_VIDEO_PROCESSING_MODE = "canvas-direct-ffmpeg"
+LOCAL_AI_VIDEO_PROCESSING_MODE = "local-ai-png-frames"
+REMOTE_VIDEO_PROCESSING_MODE = "remote-mp4-segments"
 MODELS = {
     "RealESRGAN_x4plus": (4, 23, "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth"),
     "RealESRGAN_x2plus": (2, 23, "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth"),
@@ -82,6 +145,8 @@ interpolation_job_lock = threading.Lock()
 interpolation_jobs: dict[str, dict[str, object]] = {}
 interpolation_processes: dict[str, subprocess.Popen[object]] = {}
 cancelled_interpolation_clients: dict[str, float] = {}
+service_process_lock = threading.Lock()
+service_processes: set[subprocess.Popen[object]] = set()
 event_log_lock = threading.Lock()
 remote_manifest_lock = threading.Lock()
 remote_manifest_last_write: dict[str, float] = {}
@@ -92,7 +157,7 @@ FAILED_JOB_RETENTION_SECONDS = int(os.environ.get("MLSM_UPSCALER_FAILED_TTL", 5 
 INTERPOLATION_READY_RETENTION_SECONDS = int(os.environ.get("MLSM_INTERPOLATION_READY_TTL", 30 * 60))
 INTERPOLATION_FAILED_RETENTION_SECONDS = int(os.environ.get("MLSM_INTERPOLATION_FAILED_TTL", 5 * 60))
 
-INTERPOLATION_METHODS = ("blend", "motion", "rife")
+INTERPOLATION_METHODS = ("blend", "motion", "motion-obmc", "rife")
 # Un montaggio esportato può essere lungo: il limite protegge dal riempire /tmp per errore,
 # non è una restrizione editoriale.
 INTERPOLATION_MAX_BYTES = int(os.environ.get("DSAS_INTERPOLATION_MAX_BYTES", 4 * 1024 ** 3))
@@ -103,6 +168,7 @@ INTERPOLATION_FPS_RELATIVE_TOLERANCE = .01
 INTERPOLATION_DURATION_TOLERANCE_SECONDS = .05
 REMOTE_VIDEO_TERMINAL_PHASES = frozenset(("ready", "error", "cancelled"))
 REMOTE_CHECKPOINT_POLICIES = frozenset(("restart", "resume"))
+MAX_CONCURRENT_VIDEO_JOBS = 1
 
 app = FastAPI(title="MLSM Studio Upscaler", docs_url=None, redoc_url=None)
 app.add_middleware(CORSMiddleware, allow_origin_regex=r"^(https?://(localhost|127\.0\.0\.1)(:\d+)?|tauri://localhost|https://tauri\.localhost)$", allow_methods=["GET", "POST", "DELETE"], allow_headers=["*"])
@@ -261,6 +327,93 @@ def cleanup_stale_upscaler_jobs() -> None:
     log_upscaler_event("backend", "temp-purged-on-startup", tempDirectory=VIDEO_TEMP_ROOT)
 
 
+def _stop_service_process(process: subprocess.Popen[object], grace_seconds: float = 2.0) -> None:
+    """Terminate and reap one process owned by the local service."""
+    try:
+        if process.poll() is not None:
+            return
+        process.terminate()
+        try:
+            process.wait(timeout=grace_seconds)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=max(1.0, grace_seconds))
+    except (OSError, ProcessLookupError, subprocess.TimeoutExpired):
+        try:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=1)
+        except (OSError, ProcessLookupError, subprocess.TimeoutExpired):
+            pass
+
+
+def _register_service_process(process: subprocess.Popen[object]) -> None:
+    with service_process_lock:
+        service_processes.add(process)
+
+
+def _unregister_service_process(process: subprocess.Popen[object]) -> None:
+    with service_process_lock:
+        service_processes.discard(process)
+
+
+def terminate_service_processes() -> None:
+    """Bounded shutdown for ffmpeg/worker children before the API exits."""
+    with service_process_lock:
+        processes = list(service_processes)
+        service_processes.clear()
+    with interpolation_job_lock:
+        processes.extend(
+            process for process in interpolation_processes.values()
+            if process not in processes
+        )
+        interpolation_processes.clear()
+    for process in processes:
+        _stop_service_process(process)
+
+
+@app.on_event("shutdown")
+def shutdown_upscaler_children() -> None:
+    terminate_service_processes()
+
+
+def configured_parent_pid() -> int | None:
+    try:
+        value = int(os.environ.get("MLSM_UPSCALER_PARENT_PID", ""))
+    except ValueError:
+        return None
+    return value if value > 0 and value != os.getpid() else None
+
+
+def process_is_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except PermissionError:
+        return True
+    except (OSError, ProcessLookupError):
+        return False
+
+
+def start_parent_watchdog(parent_pid: int | None) -> threading.Thread | None:
+    """Stop an app-owned backend when its Vite/Tauri parent disappears."""
+    if parent_pid is None:
+        return None
+
+    def watch() -> None:
+        while True:
+            time.sleep(.5)
+            if process_is_alive(parent_pid):
+                continue
+            terminate_service_processes()
+            os.kill(os.getpid(), signal.SIGTERM)
+            return
+
+    thread = threading.Thread(target=watch, name="upscaler-parent-watchdog", daemon=True)
+    thread.start()
+    return thread
+
+
 @app.post("/diagnostics/events")
 async def diagnostic_event(payload: dict[str, object]):
     source = str(payload.pop("source", "browser"))
@@ -320,6 +473,19 @@ def ffprobe_binary() -> str | None:
     binary = ffmpeg_binary()
     sibling = Path(binary).with_name("ffprobe") if binary else None
     return str(sibling) if sibling and sibling.exists() else shutil.which("ffprobe")
+
+
+def upscaler_ffmpeg_prefix(binary: str) -> list[str]:
+    """Common low-contention prefix for frame extraction/reconstruction."""
+    return [
+        binary, "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+        "-filter_threads", str(UPSCALER_CPU_THREADS),
+    ]
+
+
+def upscaler_ffmpeg_codec_threads() -> list[str]:
+    """Limit the next FFmpeg decoder/encoder instead of using every core."""
+    return ["-threads", str(UPSCALER_CPU_THREADS)]
 
 
 def _ratio_value(value: object) -> float:
@@ -465,9 +631,13 @@ def resolve_video_dimensions(requested_width: int, requested_height: int, geomet
     return width, height
 
 
-def _frame_extraction_filter() -> str:
-    """Square pixels using the decoded frame SAR after ffmpeg autorotation."""
-    return "scale=trunc(iw*sar/2)*2:ih,setsar=1"
+def _frame_extraction_filter(output_fps: float | None = None) -> str:
+    """Preserve every decoded frame unless an output cadence was explicitly requested."""
+    filters = []
+    if output_fps is not None:
+        filters.append(f"fps={output_fps:.12g}")
+    filters.extend(("scale=trunc(iw*sar/2)*2:ih", "setsar=1"))
+    return ",".join(filters)
 
 
 def probe_video_geometry(path: Path) -> dict[str, object]:
@@ -497,7 +667,12 @@ def rife_available() -> bool:
 
 def interpolation_capabilities() -> dict[str, object]:
     binary = ffmpeg_binary()
-    rife = get_rife_capabilities()
+    try:
+        rife = get_rife_capabilities()
+    except Exception as error:
+        # RIFE belongs to the optional Video Editor path. Its manifest, model or
+        # dependencies must never take down Frame Booster's FFmpeg methods.
+        rife = {"installed": False, "ready": False, "verified": False, "reason": str(error)}
     return {
         "ffmpeg": bool(binary),
         "ffmpegPath": binary or "",
@@ -511,14 +686,24 @@ def interpolation_capabilities() -> dict[str, object]:
 
 @app.get("/health")
 def health():
+    parent_pid = configured_parent_pid()
     return {
-        "ok": True, "apiVersion": 5, "capabilities": {
+        "ok": True, "apiVersion": 7, "capabilities": {
             "imageUpscale": True, "videoJobs": True, "remoteUpscale": True,
             "remoteVideoCheckpointPolicy": True, "remoteVideoCache": True,
+            "remoteVideoPartialEndpointPreflight": True,
+            "canvasVideoStreaming": True,
             "interpolationJobs": True,
         },
         **hardware(), "interpolation": interpolation_capabilities(), "videoTempDirectory": str(VIDEO_TEMP_ROOT),
         "remoteVideoDirectory": str(REMOTE_VIDEO_ROOT),
+        "pid": os.getpid(),
+        "parentPid": parent_pid,
+        "ownerKind": os.environ.get("MLSM_UPSCALER_OWNER_KIND", "external"),
+        "resourceLimits": {
+            "cpuThreads": UPSCALER_CPU_THREADS,
+            "maxConcurrentVideoJobs": MAX_CONCURRENT_VIDEO_JOBS,
+        },
     }
 
 
@@ -531,6 +716,33 @@ def remote_upscale_catalog(payload: dict[str, object] = Body(...)):
         return aggregate_catalog(endpoints)
     except RemoteUpscalerError as error:
         raise HTTPException(502, str(error)) from error
+
+
+@app.post("/upscale/remote/video/preflight")
+def remote_video_endpoint_preflight(payload: dict[str, object] = Body(...)):
+    endpoints = payload.get("endpoints")
+    model = payload.get("model")
+    chunk_frames = payload.get("segmentFrames", REMOTE_VIDEO_CHUNK_FRAMES)
+    output_fps = payload.get("outputFps")
+    if (
+        not isinstance(endpoints, list)
+        or not all(isinstance(item, str) for item in endpoints)
+        or not isinstance(model, str)
+        or not model.strip()
+    ):
+        raise HTTPException(400, "Configurazione verifica endpoint non valida")
+    try:
+        frames = int(chunk_frames)
+        fps = None if output_fps is None else float(output_fps)
+        if not 1 <= frames <= REMOTE_VIDEO_MAX_CHUNK_FRAMES:
+            raise ValueError
+        if fps is not None and (not math.isfinite(fps) or not 1 <= fps <= 480):
+            raise ValueError
+        return inspect_video_chunk_endpoints(
+            endpoints, model.strip(), chunk_frames=frames, output_fps=fps
+        )
+    except (RemoteUpscalerError, TypeError, ValueError) as error:
+        raise HTTPException(400, str(error)) from error
 
 
 @app.post("/upscale/remote/image")
@@ -569,7 +781,10 @@ async def remote_upscale_single_image(
 
 @app.get("/interpolation/health")
 def interpolation_health():
-    return {"ok": True, "interpolation": interpolation_capabilities()}
+    binary = ffmpeg_binary()
+    # Frame Booster uses only Motion and Blend. Keep this health endpoint fully
+    # independent from RIFE model discovery/checksums and GPU initialization.
+    return {"ok": True, "interpolation": {"ffmpeg": bool(binary), "ffmpegPath": binary or "", "jobs": True, "jobApi": True}}
 
 @app.get("/interpolation/rife/status")
 def interpolation_rife_status():
@@ -666,6 +881,8 @@ def update_video_job(job_id: str, **patch: object) -> None:
     with video_job_lock:
         current = video_jobs.get(job_id)
         if current is not None:
+            if current.get("remote") and current.get("phase") == "cancelled" and patch.get("phase") != "cancelled":
+                return
             current.update(patch)
             if current.get("remote"):
                 current["manifestRevision"] = int(current.get("manifestRevision", 0)) + 1
@@ -724,7 +941,14 @@ def restore_remote_video_jobs() -> None:
             if not isinstance(item, dict) or not item.get("remote") or workspace.parent != REMOTE_VIDEO_ROOT.resolve():
                 continue
             if item.get("phase") not in ("ready", "error", "cancelled"):
-                item.update({"phase": "error", "phaseLabel": "Servizio riavviato · job pronto per la ripresa", "error": "Il servizio locale è stato riavviato; i frame completati sono conservati.", "resumable": True})
+                item.update({
+                    "phase": "error", "phaseLabel": "Servizio riavviato · job pronto per la ripresa",
+                    "error": "Il servizio locale è stato riavviato; i frame completati sono conservati.",
+                    "resumable": True,
+                })
+            # No restored process owns a live Gradio request, even when a
+            # previous startup already converted the manifest to `error`.
+            item.update({"activeEndpoints": [], "activeEndpoint": None, "endpointActivity": []})
             with video_job_lock:
                 video_jobs[str(item["id"])] = item
             persist_remote_video_job(item)
@@ -745,7 +969,44 @@ def video_job_cancelled(job_id: str) -> bool:
         return bool(video_jobs.get(job_id, {}).get("cancelRequested"))
 
 
-def run_checked(command: list[str], timeout: int = INTERPOLATION_TIMEOUT_SECONDS) -> None:
+def active_video_job_ids_locked(exclude: str | None = None) -> list[str]:
+    """Return CPU-heavy video jobs while the caller owns ``video_job_lock``."""
+    return [
+        str(job_id) for job_id, item in video_jobs.items()
+        if job_id != exclude and item.get("phase") not in REMOTE_VIDEO_TERMINAL_PHASES
+    ]
+
+
+def run_checked(
+    command: list[str], timeout: int = INTERPOLATION_TIMEOUT_SECONDS,
+    *, cancelled: Callable[[], bool] | None = None,
+) -> None:
+    if cancelled is not None and cancelled():
+        raise InterruptedError("Job annullato prima dell'avvio di ffmpeg")
+    if cancelled is not None:
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        _register_service_process(process)
+        try:
+            started = time.monotonic()
+            while True:
+                try:
+                    _, stderr = process.communicate(timeout=.25)
+                    break
+                except subprocess.TimeoutExpired:
+                    if cancelled():
+                        _stop_service_process(process, 3)
+                        raise InterruptedError("Job annullato durante l'esecuzione di ffmpeg")
+                    if time.monotonic() - started >= timeout:
+                        _stop_service_process(process, 3)
+                        raise RuntimeError("ffmpeg non ha terminato entro il tempo massimo")
+            if process.returncode != 0:
+                detail = (stderr or b"").decode("utf-8", "replace").strip()[-900:]
+                raise RuntimeError(f"ffmpeg ha restituito un errore: {detail or 'nessun dettaglio disponibile'}")
+        finally:
+            if process.poll() is None:
+                _stop_service_process(process)
+            _unregister_service_process(process)
+        return
     try:
         result = subprocess.run(command, capture_output=True, timeout=timeout, check=False)
     except subprocess.TimeoutExpired as error:
@@ -822,7 +1083,7 @@ def source_frame_durations(source: Path, total: int, fallback_fps: float) -> lis
     if not probe:
         return [1 / fallback_fps] * total
     result = subprocess.run([
-        probe, "-v", "error", "-select_streams", "v:0", "-show_frames",
+        probe, *upscaler_ffmpeg_codec_threads(), "-v", "error", "-select_streams", "v:0", "-show_frames",
         "-show_entries", "frame=best_effort_timestamp_time,pkt_duration_time", "-of", "json", str(source)
     ], capture_output=True, check=False)
     if result.returncode != 0:
@@ -845,12 +1106,231 @@ def encoded_video_frame_count(path: Path) -> int:
     if not probe:
         raise RuntimeError("ffprobe non disponibile: impossibile verificare tutti i frame del video finale")
     result = subprocess.run([
-        probe, "-v", "error", "-select_streams", "v:0", "-count_frames",
+        probe, *upscaler_ffmpeg_codec_threads(), "-v", "error", "-select_streams", "v:0", "-count_frames",
         "-show_entries", "stream=nb_read_frames", "-of", "default=nokey=1:noprint_wrappers=1", str(path)
     ], capture_output=True, check=False)
     if result.returncode != 0:
         raise RuntimeError("ffprobe non riesce a verificare il video ricomposto")
     return int((result.stdout or b"0").decode("utf-8", "replace").strip() or 0)
+
+
+def _positive_rate(value: object) -> float:
+    """Parse an ffprobe frame-rate fraction without accepting invalid clocks."""
+    text = str(value or "0").strip()
+    try:
+        if "/" in text:
+            numerator, denominator = text.split("/", 1)
+            rate = float(numerator) / float(denominator)
+        else:
+            rate = float(text)
+    except (ValueError, ZeroDivisionError):
+        return 0.0
+    return rate if np.isfinite(rate) and rate > 0 else 0.0
+
+
+def probe_video_timeline(path: Path, output_fps: float | None = None) -> tuple[int, float, float]:
+    """Read frame count, cadence and duration without materialising image files.
+
+    MP4/MOV normally expose ``nb_frames`` directly, making this operation nearly
+    instantaneous. Containers without an index use ffprobe's packet/frame count
+    fallback, which still avoids PNG compression and disk I/O.
+    """
+    probe = ffprobe_binary()
+    if not probe:
+        raise RuntimeError("ffprobe non disponibile: impossibile analizzare la timeline video")
+
+    def read(count_frames: bool) -> dict[str, object]:
+        command = [
+            probe, "-v", "error", "-select_streams", "v:0",
+            *( ["-count_frames"] if count_frames else [] ),
+            "-show_entries", "stream=avg_frame_rate,r_frame_rate,nb_frames,nb_read_frames,duration:format=duration",
+            "-of", "json", str(path),
+        ]
+        result = subprocess.run(command, capture_output=True, check=False)
+        if result.returncode != 0:
+            detail = (result.stderr or b"").decode("utf-8", "replace").strip()[-500:]
+            raise RuntimeError(f"ffprobe non riesce a leggere la timeline: {detail or 'nessun dettaglio disponibile'}")
+        try:
+            return json.loads(result.stdout or b"{}")
+        except json.JSONDecodeError as error:
+            raise RuntimeError("ffprobe ha restituito una timeline non valida") from error
+
+    payload = read(False)
+    streams = payload.get("streams") if isinstance(payload, dict) else None
+    stream = streams[0] if isinstance(streams, list) and streams and isinstance(streams[0], dict) else {}
+    count = int(stream.get("nb_frames") or 0)
+    if count <= 0:
+        payload = read(True)
+        streams = payload.get("streams") if isinstance(payload, dict) else None
+        stream = streams[0] if isinstance(streams, list) and streams and isinstance(streams[0], dict) else {}
+        count = int(stream.get("nb_read_frames") or stream.get("nb_frames") or 0)
+    formats = payload.get("format") if isinstance(payload, dict) else None
+    duration = float(stream.get("duration") or (formats.get("duration") if isinstance(formats, dict) else 0) or 0)
+    source_fps = _positive_rate(stream.get("avg_frame_rate")) or _positive_rate(stream.get("r_frame_rate"))
+    if not np.isfinite(duration) or duration <= 0:
+        duration = count / source_fps if count > 0 and source_fps > 0 else 0.0
+    if count <= 0 or source_fps <= 0 or duration <= 0:
+        raise RuntimeError("Il video non espone un conteggio frame o una durata valida")
+    if output_fps is not None:
+        source_fps = output_fps
+        count = max(1, int(round(duration * output_fps)))
+    return count, source_fps, duration
+
+
+def valid_remote_video_segment(path: Path, expected_frames: int) -> bool:
+    """Validate a durable MP4 checkpoint before it is trusted or reused."""
+    try:
+        with path.open("rb") as source:
+            header = source.read(12)
+        return (
+            path.stat().st_size > 0
+            and len(header) >= 8
+            and header[4:8] == b"ftyp"
+            and encoded_video_frame_count(path) == expected_frames
+        )
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
+def build_remote_video_segments(
+    originals: list[Path], fps: float, workspace: Path, *, chunk_frames: int = REMOTE_VIDEO_CHUNK_FRAMES,
+    cancelled: Callable[[], bool] | None = None,
+) -> list[tuple[Path, int]]:
+    """Encode ordered source PNGs into independently retryable MP4 chunks."""
+    binary = ffmpeg_binary()
+    if not binary:
+        raise RuntimeError("ffmpeg non trovato: impossibile creare i segmenti remoti")
+    segment_dir = workspace / "input-segments"
+    segment_dir.mkdir(parents=True, exist_ok=True)
+    chunks: list[tuple[Path, int]] = []
+    for zero_start in range(0, len(originals), chunk_frames):
+        expected = min(chunk_frames, len(originals) - zero_start)
+        target = segment_dir / f"segment-{zero_start // chunk_frames + 1:06d}.mp4"
+        if not valid_remote_video_segment(target, expected):
+            target.unlink(missing_ok=True)
+            partial = segment_dir / f".{target.name}.partial.mp4"
+            partial.unlink(missing_ok=True)
+            run_checked([
+                *upscaler_ffmpeg_prefix(binary), *upscaler_ffmpeg_codec_threads(),
+                "-framerate", f"{fps:.12g}", "-start_number", str(zero_start + 1),
+                "-i", str(workspace / "original-frames" / "frame-%08d.png"),
+                "-frames:v", str(expected), "-an", "-c:v", "libx264", "-preset", "ultrafast",
+                "-crf", "12", "-pix_fmt", "yuv444p", "-movflags", "+faststart",
+                *upscaler_ffmpeg_codec_threads(), str(partial),
+            ], cancelled=cancelled)
+            if not valid_remote_video_segment(partial, expected):
+                partial.unlink(missing_ok=True)
+                raise RuntimeError(f"Segmento sorgente non valido: {target.name}")
+            partial.replace(target)
+        chunks.append((target, expected))
+    return chunks
+
+
+def build_remote_video_segments_from_source(
+    source: Path, total_frames: int, fps: float, workspace: Path, *,
+    chunk_frames: int = REMOTE_VIDEO_CHUNK_FRAMES,
+    output_fps: float | None = None,
+    cancelled: Callable[[], bool] | None = None,
+    on_progress: Callable[[int, int, int], None] = lambda *_: None,
+) -> list[tuple[Path, int]]:
+    """Create durable remote chunks in one streaming decode pass.
+
+    The legacy path first wrote every decoded frame as a compressed PNG and
+    immediately read those PNGs again to create MP4 chunks. For long videos that
+    produced tens of thousands of files and hours of avoidable CPU/disk work.
+    This path preserves every frame (unless an FPS conversion was explicitly
+    requested) and writes the resumable MP4 chunks directly.
+    """
+    if total_frames <= 0 or not np.isfinite(fps) or fps <= 0:
+        raise RuntimeError("Timeline non valida per la segmentazione remota")
+    binary = ffmpeg_binary()
+    if not binary:
+        raise RuntimeError("ffmpeg non trovato: impossibile creare i segmenti remoti")
+    segment_dir = workspace / "input-segments"
+    expected = [
+        (segment_dir / f"segment-{index + 1:06d}.mp4", min(chunk_frames, total_frames - index * chunk_frames))
+        for index in range(math.ceil(total_frames / chunk_frames))
+    ]
+    if expected and all(valid_remote_video_segment(path, count) for path, count in expected):
+        on_progress(len(expected), len(expected), total_frames)
+        return expected
+    shutil.rmtree(segment_dir, ignore_errors=True)
+    segment_dir.mkdir(parents=True, exist_ok=True)
+    filters = _frame_extraction_filter(output_fps)
+    # Force a constant timestamp grid without dropping frames. The explicit fps
+    # filter remains the only operation allowed to alter the source frame count.
+    filters = f"{filters},settb=AVTB,setpts=N/({fps:.12g}*TB)"
+    command = [
+        *upscaler_ffmpeg_prefix(binary), *upscaler_ffmpeg_codec_threads(), "-i", str(source),
+        "-map", "0:v:0", "-an", "-vf", filters, "-r", f"{fps:.12g}", "-fps_mode", "cfr",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "12", "-pix_fmt", "yuv444p",
+        "-g", str(chunk_frames), "-keyint_min", str(chunk_frames), "-sc_threshold", "0",
+        "-f", "segment", "-reset_timestamps", "1", "-segment_start_number", "1",
+        "-segment_time", f"{chunk_frames / fps:.12g}",
+    ]
+    command.extend((*upscaler_ffmpeg_codec_threads(), str(segment_dir / "segment-%06d.mp4")))
+    monitor_done = threading.Event()
+
+    def monitor_segments() -> None:
+        reported = -1
+        while not monitor_done.wait(.25):
+            # The last visible path is the file FFmpeg is still writing. Every
+            # preceding segment has already been closed by the segment muxer.
+            closed = max(0, len(list(segment_dir.glob("segment-*.mp4"))) - 1)
+            if closed != reported:
+                reported = closed
+                on_progress(closed, len(expected), min(total_frames, closed * chunk_frames))
+
+    monitor = threading.Thread(target=monitor_segments, name="upscaler-segment-progress", daemon=True)
+    monitor.start()
+    try:
+        run_checked(command, cancelled=cancelled)
+    finally:
+        monitor_done.set()
+        monitor.join(timeout=1)
+    generated = sorted(segment_dir.glob("segment-*.mp4"))
+    if len(generated) != len(expected):
+        raise RuntimeError(f"Segmentazione incompleta: ottenuti {len(generated)}/{len(expected)} segmenti")
+    for path, count in expected:
+        if not valid_remote_video_segment(path, count):
+            raise RuntimeError(f"Segmento sorgente non valido: {path.name}")
+    on_progress(len(expected), len(expected), total_frames)
+    return expected
+
+
+def materialize_remote_video_segments(
+    chunks: list[tuple[Path, int]], enhanced: Path, workspace: Path,
+    *, on_progress: Callable[[int, int, int], None] = lambda *_: None,
+    cancelled: Callable[[], bool] | None = None,
+) -> int:
+    """Decode checkpointed output chunks back into the canonical ordered frame set."""
+    binary = ffmpeg_binary()
+    if not binary:
+        raise RuntimeError("ffmpeg non trovato: impossibile ricostruire i segmenti remoti")
+    decoded_root = workspace / "decoded-segments"
+    enhanced.mkdir(parents=True, exist_ok=True)
+    global_index = 1
+    for segment_index, (chunk, expected) in enumerate(chunks, start=1):
+        if not valid_remote_video_segment(chunk, expected):
+            raise RuntimeError(f"Checkpoint segmento non valido: {chunk.name}")
+        decoded = decoded_root / f"segment-{segment_index:06d}"
+        shutil.rmtree(decoded, ignore_errors=True)
+        decoded.mkdir(parents=True, exist_ok=True)
+        run_checked([
+            *upscaler_ffmpeg_prefix(binary), *upscaler_ffmpeg_codec_threads(), "-i", str(chunk),
+            "-vsync", "0", *upscaler_ffmpeg_codec_threads(), str(decoded / "frame-%08d.png"),
+        ], cancelled=cancelled)
+        frames = sorted(decoded.glob("frame-*.png"))
+        if len(frames) != expected:
+            raise RuntimeError(f"Segmento {chunk.name}: decodificati {len(frames)}/{expected} frame")
+        for frame in frames:
+            destination = enhanced / f"frame-{global_index:08d}.png"
+            frame.replace(destination)
+            global_index += 1
+        shutil.rmtree(decoded, ignore_errors=True)
+        on_progress(segment_index, len(chunks), global_index - 1)
+    shutil.rmtree(decoded_root, ignore_errors=True)
+    return global_index - 1
 
 
 def encoded_video_duration(path: Path) -> float:
@@ -888,6 +1368,242 @@ def audio_packet_count(path: Path) -> int:
         return 0
 
 
+def video_adjustment_filter(
+    width: int, height: int, adjustments: dict[str, float], *, canvas_enhancement: bool = False,
+) -> str:
+    """Build a streaming scale/colour filter equivalent to frame rendering.
+
+    Canvas adds its deterministic base sharpening. Remote AI segments already
+    contain their enhancement and only need final sizing and user adjustments.
+    """
+    item = adjustments
+    brightness = 2 ** item["exposure"] * (
+        1 + (item["whites"] + item["highlights"] * .35 + item["shadows"] * .15 + item["blacks"] * .1) / 500
+    )
+    contrast = 1 + item["contrast"] / 100 + (item["whites"] - item["blacks"]) / 600
+    saturation = max(0.0, 1 + (item["saturation"] + item["vibrance"] * .65) / 100)
+    gain = max(.05, brightness) * max(.05, contrast)
+    offset = (.5 - .5 * max(.05, contrast)) * 255
+
+    def affine(channel_offset: float = 0.0) -> str:
+        constant = offset + channel_offset * 255
+        return f"val*{gain:.8g}{constant:+.8g}"
+
+    red_shift = item["temperature"] / 100 * .12 - item["tint"] / 100 * .035
+    green_shift = item["tint"] / 100 * .10
+    blue_shift = -item["temperature"] / 100 * .12 - item["tint"] / 100 * .035
+    filters = [f"scale={width}:{height}:flags=lanczos"]
+    if canvas_enhancement:
+        filters.append("unsharp=5:5:0.16:5:5:0")
+    filters.extend([
+        f"lutrgb=r={affine()}:g={affine()}:b={affine()}",
+        f"hue=s={saturation:.8g}",
+        f"lutrgb=r=val{red_shift * 255:+.8g}:g=val{green_shift * 255:+.8g}:b=val{blue_shift * 255:+.8g}",
+    ])
+    if item["denoise"] > 0:
+        filters.append(f"gblur=sigma={min(1.2, item['denoise'] / 90):.8g}")
+    if item["sharpness"] > 0:
+        filters.append(f"unsharp=5:5:{min(.42, item['sharpness'] / 240):.8g}:5:5:0")
+    filters.append("setsar=1")
+    return ",".join(filters)
+
+
+def canvas_video_filter(width: int, height: int, adjustments: dict[str, float]) -> str:
+    """Streaming equivalent of Canvas enhancement and adjustments."""
+    return video_adjustment_filter(width, height, adjustments, canvas_enhancement=True)
+
+
+def video_job_is_remote(job: dict[str, object]) -> bool:
+    """Read persisted remote flags without treating the string ``false`` as true."""
+    value = job.get("remote", False)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value == 1
+    return str(value).strip().casefold() in {"1", "true", "yes", "on"}
+
+
+def canonical_local_video_model(value: object) -> str:
+    """Canonicalise the sole non-AI model while preserving exact AI identifiers."""
+    model = str(value).strip()
+    return CANVAS_MODEL_ID if model.casefold() == CANVAS_MODEL_ID else model
+
+
+def video_processing_mode(job: dict[str, object]) -> str:
+    if video_job_is_remote(job):
+        return REMOTE_VIDEO_PROCESSING_MODE
+    if canonical_local_video_model(job.get("model", "")) == CANVAS_MODEL_ID:
+        return CANVAS_VIDEO_PROCESSING_MODE
+    return LOCAL_AI_VIDEO_PROCESSING_MODE
+
+
+def process_canvas_video_job(
+    job_id: str, job: dict[str, object], source: Path, result_path: Path, binary: str, started: float,
+) -> None:
+    """Render Canvas video in one bounded-thread FFmpeg pass with audio."""
+    total, fps, expected_duration = probe_video_timeline(source)
+    width = int(job["width"])
+    height = int(job["height"])
+    adjustments = parse_upscaler_adjustments(json.dumps(job.get("adjustments", {})))
+    quality = str(job.get("quality", "maximum"))
+    crf = "14" if quality == "maximum" else "17"
+    update_video_job(
+        job_id, phase="encoding", phaseLabel="Canvas rapido · elaborazione video diretta",
+        progress=.05, currentFrame=0, totalFrames=total, fps=fps,
+        processingMode=CANVAS_VIDEO_PROCESSING_MODE, frameStorageMode="none",
+        originalFramesDirectory="", upscaledFramesDirectory="",
+        inputSegmentsDirectory=None, upscaledSegmentsDirectory=None,
+        completedSegments=0, totalSegments=0,
+    )
+    try:
+        run_checked([
+            *upscaler_ffmpeg_prefix(binary), *upscaler_ffmpeg_codec_threads(), "-i", str(source),
+            "-map", "0:v:0", "-map", "0:a?", "-map_metadata", "-1",
+            "-vf", canvas_video_filter(width, height, adjustments),
+            "-metadata:s:v:0", "rotate=0", "-c:v", "libx264", "-preset", "fast",
+            "-crf", crf, "-pix_fmt", "yuv420p", "-fps_mode", "passthrough",
+            "-c:a", "aac", "-b:a", "320k", "-t", f"{expected_duration:.9f}",
+            "-movflags", "+faststart", *upscaler_ffmpeg_codec_threads(), str(result_path),
+        ], cancelled=lambda: video_job_cancelled(job_id))
+    except InterruptedError:
+        update_video_job(job_id, phase="cancelled", phaseLabel="Job annullato", cancelled=True)
+        cleanup_video_job(job_id, "cancelled")
+        return
+    if not result_path.exists() or result_path.stat().st_size <= 0:
+        raise RuntimeError("Canvas rapido non ha prodotto un video valido")
+    encoded_frames = encoded_video_frame_count(result_path)
+    if encoded_frames != total:
+        result_path.unlink(missing_ok=True)
+        raise RuntimeError(f"Controllo anti-drop Canvas fallito: {encoded_frames}/{total} frame")
+    encoded_duration = encoded_video_duration(result_path)
+    duration_tolerance = max(.05, 1.5 / fps)
+    if abs(encoded_duration - expected_duration) > duration_tolerance:
+        result_path.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"Controllo durata Canvas fallito: ottenuti {encoded_duration:.3f}/{expected_duration:.3f} secondi"
+        )
+    geometry = probe_video_geometry(result_path)
+    source_audio_packets = audio_packet_count(source)
+    output_audio_packets = audio_packet_count(result_path)
+    if source_audio_packets > 0 and output_audio_packets <= 0:
+        result_path.unlink(missing_ok=True)
+        raise RuntimeError("Controllo audio Canvas fallito: il video finale non contiene l'audio sorgente")
+    if (
+        int(geometry["width"]) != width or int(geometry["height"]) != height
+        or not np.isclose(float(geometry["sample_aspect_ratio_value"]), 1.0, atol=1e-6)
+        or int(geometry["rotation"]) % 360 != 0
+    ):
+        result_path.unlink(missing_ok=True)
+        raise RuntimeError("Controllo geometria Canvas fallito")
+    update_video_job(
+        job_id, phase="ready", phaseLabel="Canvas video completato", error=None, progress=1,
+        currentFrame=total, completedFrames=total, totalFrames=total,
+        resultPath=str(result_path), resultBytes=result_path.stat().st_size,
+        encodedFrameCount=encoded_frames, durationSeconds=encoded_duration,
+        effectiveWidth=width, effectiveHeight=height,
+        sampleAspectRatio=geometry["sample_aspect_ratio"], rotation=geometry["rotation"],
+        elapsedSeconds=time.monotonic() - started, sourceAudioPackets=source_audio_packets,
+        audioPacketCount=output_audio_packets,
+        audioRestored=source_audio_packets == 0 or output_audio_packets > 0,
+        sourceFps=fps, outputFps=fps,
+        processingMode=CANVAS_VIDEO_PROCESSING_MODE, frameStorageMode="none",
+    )
+    log_upscaler_event(
+        "backend", "canvas-video-ready", jobId=job_id, totalFrames=total,
+        resultBytes=result_path.stat().st_size, elapsedSeconds=time.monotonic() - started,
+    )
+    schedule_video_job_cleanup(job_id, READY_JOB_RETENTION_SECONDS, "ready-expired")
+
+
+def process_remote_segment_video_job(
+    job_id: str, job: dict[str, object], source: Path, chunks: list[tuple[Path, int]],
+    result_path: Path, binary: str, total: int, fps: float, expected_duration: float, started: float,
+) -> None:
+    """Join checkpointed remote MP4 chunks without decoding them to PNG files."""
+    if not chunks or sum(count for _, count in chunks) != total:
+        raise RuntimeError("Checkpoint segmenti remoti incompleti")
+    for path, count in chunks:
+        if not valid_remote_video_segment(path, count):
+            raise RuntimeError(f"Checkpoint segmento remoto non valido: {path.name}")
+    width = int(job["width"])
+    height = int(job["height"])
+    adjustments = parse_upscaler_adjustments(json.dumps(job.get("adjustments", {})))
+    quality = str(job.get("quality", "maximum"))
+    crf = "14" if quality == "maximum" else "17"
+    manifest = Path(str(job["tempDirectory"])) / "upscaled-segments.ffconcat"
+    manifest.write_text(
+        "ffconcat version 1.0\n" + "\n".join(f"file '{path.as_posix()}'" for path, _ in chunks) + "\n",
+        encoding="utf-8",
+    )
+    update_video_job(
+        job_id, phase="encoding", phaseLabel="Unione rapida dei segmenti e ripristino audio",
+        progress=.95, currentFrame=total, completedFrames=total, totalFrames=total,
+        completedSegments=len(chunks), totalSegments=len(chunks),
+    )
+    try:
+        run_checked([
+            *upscaler_ffmpeg_prefix(binary), *upscaler_ffmpeg_codec_threads(),
+            "-safe", "0", "-f", "concat", "-i", str(manifest),
+            *upscaler_ffmpeg_codec_threads(), "-i", str(source),
+            "-map", "0:v:0", "-map", "1:a?", "-map_metadata", "-1",
+            "-vf", video_adjustment_filter(width, height, adjustments),
+            "-metadata:s:v:0", "rotate=0", "-c:v", "libx264", "-preset", "fast",
+            "-crf", crf, "-pix_fmt", "yuv420p", "-fps_mode", "passthrough",
+            "-c:a", "aac", "-b:a", "320k", "-t", f"{expected_duration:.9f}",
+            "-movflags", "+faststart", *upscaler_ffmpeg_codec_threads(), str(result_path),
+        ], cancelled=lambda: video_job_cancelled(job_id))
+    except InterruptedError:
+        update_video_job(
+            job_id, phase="cancelled", phaseLabel="Job remoto annullato · segmenti conservati",
+            cancelled=True, resumable=True,
+        )
+        return
+    if not result_path.exists() or result_path.stat().st_size <= 0:
+        raise RuntimeError("La ricostruzione diretta dei segmenti non ha prodotto un video valido")
+    encoded_frames = encoded_video_frame_count(result_path)
+    if encoded_frames != total:
+        result_path.unlink(missing_ok=True)
+        raise RuntimeError(f"Controllo anti-drop segmenti fallito: {encoded_frames}/{total} frame")
+    encoded_duration = encoded_video_duration(result_path)
+    if abs(encoded_duration - expected_duration) > max(.05, 1.5 / fps):
+        result_path.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"Controllo durata segmenti fallito: ottenuti {encoded_duration:.3f}/{expected_duration:.3f} secondi"
+        )
+    geometry = probe_video_geometry(result_path)
+    source_audio_packets = audio_packet_count(source)
+    output_audio_packets = audio_packet_count(result_path)
+    if source_audio_packets > 0 and output_audio_packets <= 0:
+        result_path.unlink(missing_ok=True)
+        raise RuntimeError("Controllo audio fallito: il video ricostruito non contiene l'audio sorgente")
+    if (
+        int(geometry["width"]) != width or int(geometry["height"]) != height
+        or not np.isclose(float(geometry["sample_aspect_ratio_value"]), 1.0, atol=1e-6)
+        or int(geometry["rotation"]) % 360 != 0
+    ):
+        result_path.unlink(missing_ok=True)
+        raise RuntimeError("Controllo geometria segmenti fallito")
+    update_video_job(
+        job_id, phase="ready", phaseLabel="Upscaling video completato", error=None, progress=1,
+        currentFrame=total, completedFrames=total, totalFrames=total,
+        completedSegments=len(chunks), totalSegments=len(chunks),
+        resultPath=str(result_path), resultBytes=result_path.stat().st_size,
+        encodedFrameCount=encoded_frames, durationSeconds=encoded_duration,
+        effectiveWidth=width, effectiveHeight=height,
+        sampleAspectRatio=geometry["sample_aspect_ratio"], rotation=geometry["rotation"],
+        elapsedSeconds=time.monotonic() - started, sourceAudioPackets=source_audio_packets,
+        audioPacketCount=output_audio_packets,
+        audioRestored=source_audio_packets == 0 or output_audio_packets > 0,
+        sourceFps=fps, outputFps=fps, segmentFrames=int(job.get("remoteChunkFrames", REMOTE_VIDEO_CHUNK_FRAMES)),
+        activeEndpoints=[],
+    )
+    log_upscaler_event(
+        "backend", "remote-segments-ready", jobId=job_id, totalFrames=total,
+        totalSegments=len(chunks), resultBytes=result_path.stat().st_size,
+        elapsedSeconds=time.monotonic() - started,
+    )
+
+
 def process_video_upscale_job(job_id: str) -> None:
     with video_job_lock:
         job = dict(video_jobs[job_id])
@@ -897,89 +1613,309 @@ def process_video_upscale_job(job_id: str) -> None:
     enhanced = workspace / "upscaled-frames"
     rendered = workspace / "rendered-frames"
     result_path = workspace / "upscaled-video.mp4"
-    originals.mkdir(parents=True, exist_ok=True)
-    enhanced.mkdir(parents=True, exist_ok=True)
+    remote_job = video_job_is_remote(job)
+    model_name = (
+        str(job.get("model", "")).strip()
+        if remote_job
+        else canonical_local_video_model(job.get("model", ""))
+    )
+    processing_mode = video_processing_mode(job)
     started = time.monotonic()
     try:
-        log_upscaler_event("backend", "job-start", jobId=job_id, sourcePath=source, model=job.get("model"), backend=job.get("backend"), target=f'{job.get("width")}x{job.get("height")}')
+        update_video_job(job_id, model=model_name, processingMode=processing_mode)
+        log_upscaler_event(
+            "backend", "job-start", jobId=job_id, sourcePath=source,
+            model=model_name, backend=job.get("backend"), processingMode=processing_mode,
+            target=f'{job.get("width")}x{job.get("height")}',
+        )
         binary = ffmpeg_binary()
         if not binary:
             raise RuntimeError("ffmpeg non trovato nel PATH. Installalo con `brew install ffmpeg` e riavvia il servizio.")
-        existing_originals = sorted(originals.glob("frame-*.png")) if job.get("remote") else []
-        update_video_job(job_id, phase="extracting", phaseLabel="Verifica checkpoint frame locali" if existing_originals else "Estrazione di tutti i frame originali", progress=0.01)
-        if not existing_originals:
+        if processing_mode == CANVAS_VIDEO_PROCESSING_MODE:
+            process_canvas_video_job(job_id, job, source, result_path, binary, started)
+            return
+        # Canvas returned above, before these directories can exist. The
+        # remaining pipelines retain their checkpoint directories for local AI
+        # frames and backwards-compatible remote recovery.
+        originals.mkdir(parents=True, exist_ok=True)
+        enhanced.mkdir(parents=True, exist_ok=True)
+        remote_chunk_frames = int(job.get("remoteChunkFrames", REMOTE_VIDEO_CHUNK_FRAMES))
+        remote_output_fps_value = job.get("remoteOutputFps")
+        remote_output_fps = float(remote_output_fps_value) if remote_output_fps_value is not None else None
+        existing_originals = sorted(originals.glob("frame-*.png")) if remote_job else []
+        validated_remote_endpoints: list[str] | None = None
+        input_chunks: list[tuple[Path, int]] = []
+        output_chunks: list[tuple[Path, int]] = []
+        if remote_job:
+            total, fps, source_duration = probe_video_timeline(source, remote_output_fps)
+            source_fps = fps
+            durations = [1 / fps] * total
+            input_chunks = [
+                (workspace / "input-segments" / f"segment-{zero_start // remote_chunk_frames + 1:06d}.mp4", min(remote_chunk_frames, total - zero_start))
+                for zero_start in range(0, total, remote_chunk_frames)
+            ]
+            output_segment_dir = workspace / "upscaled-segments"
+            output_chunks = [(output_segment_dir / chunk.name, count) for chunk, count in input_chunks]
+            configured_endpoints = [str(item) for item in job.get("remoteEndpoints", [])]
+            cached_frames_complete = len(list(enhanced.glob("frame-*.png"))) == total
+            cached_segments_complete = bool(output_chunks) and all(
+                valid_remote_video_segment(path, count) for path, count in output_chunks
+            )
+            if not cached_frames_complete and not cached_segments_complete:
+                update_video_job(job_id, phase="upscaling", phaseLabel=f"Verifica {len(configured_endpoints)} endpoint remoti…", progress=.005)
+                validated_remote_endpoints = validate_video_chunk_endpoints(
+                    configured_endpoints, str(job["model"]),
+                    chunk_frames=remote_chunk_frames, output_fps=remote_output_fps,
+                )
+            update_video_job(
+                job_id, phase="extracting", phaseLabel="Segmentazione rapida del video sorgente",
+                progress=.01, totalFrames=total, fps=fps, totalSegments=len(input_chunks),
+                inputSegmentsDirectory=str(workspace / "input-segments"),
+            )
+            if not cached_segments_complete and not cached_frames_complete:
+                input_chunks = build_remote_video_segments_from_source(
+                    source, total, fps, workspace, chunk_frames=remote_chunk_frames,
+                    output_fps=remote_output_fps,
+                    cancelled=lambda: video_job_cancelled(job_id),
+                    on_progress=lambda completed, segment_total, frames: update_video_job(
+                        job_id,
+                        phaseLabel=f"Segmentazione sorgente {completed}/{segment_total}",
+                        completedSegments=completed,
+                        currentFrame=frames,
+                        progress=.01 + .03 * frames / total,
+                    ),
+                )
+            original_frames: list[Path] = []
+            log_upscaler_event(
+                "backend", "source-segmented", jobId=job_id, totalFrames=total,
+                fps=fps, segments=len(input_chunks), durationSeconds=source_duration,
+            )
+        else:
+            if model_name == CANVAS_MODEL_ID:
+                raise RuntimeError(
+                    "Errore interno: Canvas locale non può usare l'estrazione PNG frame-per-frame"
+                )
+            update_video_job(job_id, phase="extracting", phaseLabel="Estrazione di tutti i frame originali", progress=0.01)
             run_checked([
-                binary, "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", str(source),
-                "-vf", _frame_extraction_filter(), "-vsync", "0", str(originals / "frame-%08d.png")
-            ])
-        original_frames = sorted(originals.glob("frame-*.png"))
-        if not original_frames:
-            raise RuntimeError("Il decoder non ha estratto alcun fotogramma dal video.")
-        capture = cv2.VideoCapture(str(source))
-        fps = float(capture.get(cv2.CAP_PROP_FPS) or 0)
-        capture.release()
-        if not np.isfinite(fps) or fps <= 0:
-            fps = 30.0
-        total = len(original_frames)
-        log_upscaler_event("backend", "frames-extracted", jobId=job_id, totalFrames=total, fps=fps, originals=originals)
-        durations = source_frame_durations(source, total, fps)
-        model_name = str(job["model"])
+                *upscaler_ffmpeg_prefix(binary), *upscaler_ffmpeg_codec_threads(), "-i", str(source),
+                "-vf", _frame_extraction_filter(), "-vsync", "0",
+                "-compression_level", "1", *upscaler_ffmpeg_codec_threads(), str(originals / "frame-%08d.png")
+            ], cancelled=lambda: video_job_cancelled(job_id))
+            original_frames = sorted(originals.glob("frame-*.png"))
+            if not original_frames:
+                raise RuntimeError("Il decoder non ha estratto alcun fotogramma dal video.")
+            capture = cv2.VideoCapture(str(source))
+            source_fps = float(capture.get(cv2.CAP_PROP_FPS) or 0)
+            capture.release()
+            if not np.isfinite(source_fps) or source_fps <= 0:
+                source_fps = 30.0
+            fps = source_fps
+            total = len(original_frames)
+            durations = source_frame_durations(source, total, fps)
+            log_upscaler_event("backend", "frames-extracted", jobId=job_id, totalFrames=total, fps=fps, originals=originals)
         backend = str(job["backend"])
         tile = int(job["tile"])
         width = int(job["width"])
         height = int(job["height"])
         tta = bool(job["tta"])
-        if job.get("remote"):
+        if remote_job:
             remote_endpoints = [str(item) for item in job.get("remoteEndpoints", [])]
-            already_done = sum(1 for frame in original_frames if (enhanced / frame.name).exists() and (enhanced / frame.name).stat().st_size > 0)
-            endpoint_activity_lock = threading.Lock()
-            endpoint_activity: dict[str, dict[str, object]] = {
-                endpoint: {"url": endpoint, "state": "idle", "activeFrame": None, "completed": 0, "failures": 0}
-                for endpoint in remote_endpoints
-            }
-            update_video_job(
-                job_id, phase="upscaling", phaseLabel=f"Upscaling remoto · {len(remote_endpoints)} endpoint attivi",
-                totalFrames=total, currentFrame=already_done, fps=fps, progress=.04 + .9 * already_done / total,
-                resumable=True, completedFrames=already_done, endpointActivity=list(endpoint_activity.values()), activeEndpoints=[],
-            )
-
-            def remote_endpoint_state(endpoint: str, state: str, frame: Path) -> None:
-                with endpoint_activity_lock:
-                    item = endpoint_activity[endpoint]
-                    item["state"] = state
-                    item["activeFrame"] = frame.name if state == "busy" else None
-                    if state == "error":
-                        item["failures"] = int(item["failures"]) + 1
-                    snapshot = [dict(endpoint_activity[url]) for url in remote_endpoints]
-                    busy = [str(value["url"]) for value in snapshot if value["state"] == "busy"]
+            existing_enhanced = sorted(enhanced.glob("frame-*.png"))
+            failures: list[dict[str, str]] = []
+            if len(existing_enhanced) == total:
                 update_video_job(
-                    job_id, endpointActivity=snapshot, activeEndpoints=busy,
-                    phaseLabel=f"Upscaling remoto · {len(busy)}/{len(remote_endpoints)} endpoint al lavoro",
+                    job_id, phase="upscaling", phaseLabel="Checkpoint frame completi · ricostruzione locale",
+                    totalFrames=total, currentFrame=total, completedFrames=total, fps=fps,
+                    progress=.94, resumable=True, completedSegments=0, totalSegments=0,
+                )
+            else:
+                completed_segments = sum(1 for path, count in output_chunks if valid_remote_video_segment(path, count))
+                completed_segment_frames = sum(count for path, count in output_chunks if valid_remote_video_segment(path, count))
+                if completed_segments < len(input_chunks):
+                    update_video_job(
+                        job_id, phase="upscaling", phaseLabel=f"Verifica {len(remote_endpoints)} endpoint remoti…",
+                        totalFrames=total, currentFrame=completed_segment_frames, completedFrames=completed_segment_frames,
+                        totalSegments=len(input_chunks), completedSegments=completed_segments,
+                        inputSegmentsDirectory=str(workspace / "input-segments"),
+                        upscaledSegmentsDirectory=str(output_segment_dir), fps=fps,
+                        progress=.04 + .86 * completed_segment_frames / total, resumable=True,
+                    )
+                    # The frontend already obtained explicit approval for the
+                    # reachable subset. Revalidate that subset immediately
+                    # before dispatch so a dead endpoint cannot receive work.
+                    remote_endpoints = validated_remote_endpoints or validate_video_chunk_endpoints(
+                        remote_endpoints, model_name,
+                        chunk_frames=remote_chunk_frames, output_fps=remote_output_fps,
+                    )
+                endpoint_activity_lock = threading.Lock()
+                segment_frame_counts = {path.name: count for path, count in input_chunks}
+                endpoint_activity: dict[str, dict[str, object]] = {
+                    endpoint: {
+                        "url": endpoint, "state": "idle", "activeFrame": None,
+                        "activeSegment": None, "completed": 0, "completedSegments": 0,
+                        "completedFrames": 0, "failures": 0,
+                        "segmentFrame": 0, "segmentTotalFrames": 0,
+                        "segmentProgress": 0.0, "segmentPhase": "idle",
+                        "segmentElapsedSeconds": 0.0,
+                        "segmentEstimatedRemainingSeconds": None,
+                        "secondsPerFrame": None, "updatedAtMs": None,
+                    }
+                    for endpoint in remote_endpoints
+                }
+                update_video_job(
+                    job_id, phase="upscaling", phaseLabel=f"Segmenti remoti · {len(remote_endpoints)} endpoint pronti",
+                    totalFrames=total, currentFrame=completed_segment_frames, completedFrames=completed_segment_frames,
+                    totalSegments=len(input_chunks), completedSegments=completed_segments,
+                    inputSegmentsDirectory=str(workspace / "input-segments"),
+                    upscaledSegmentsDirectory=str(output_segment_dir), fps=fps,
+                    progress=.04 + .86 * completed_segment_frames / total, resumable=True,
+                    endpointActivity=list(endpoint_activity.values()), activeEndpoints=[],
                 )
 
-            def remote_progress(completed: int, frame_total: int, endpoint: str, destination: Path) -> None:
-                elapsed = time.monotonic() - started
-                with endpoint_activity_lock:
-                    endpoint_activity[endpoint]["completed"] = int(endpoint_activity[endpoint]["completed"]) + 1
-                    snapshot = [dict(endpoint_activity[url]) for url in remote_endpoints]
-                    busy = [str(value["url"]) for value in snapshot if value["state"] == "busy"]
-                update_video_job(
-                    job_id, phaseLabel=f"Upscaling remoto · {len(busy)}/{len(remote_endpoints)} endpoint al lavoro",
-                    currentFrame=completed, completedFrames=completed, totalFrames=frame_total,
-                    progress=.04 + .9 * completed / frame_total, elapsedSeconds=elapsed,
-                    estimatedRemainingSeconds=(elapsed / completed * (frame_total - completed)) if completed else None,
-                    currentUpscaledFrame=str(destination), activeEndpoint=endpoint,
-                    endpointActivity=snapshot, activeEndpoints=busy,
-                )
+                def remote_endpoint_state(endpoint: str, state: str, segment: Path) -> None:
+                    with endpoint_activity_lock:
+                        item = endpoint_activity[endpoint]
+                        item["state"] = state
+                        item["activeFrame"] = None
+                        item["activeSegment"] = segment.name if state == "busy" else None
+                        if state == "busy":
+                            item.update({
+                                "segmentFrame": 0,
+                                "segmentTotalFrames": segment_frame_counts.get(segment.name, 0),
+                                "segmentProgress": 0.0,
+                                "segmentPhase": "awaiting_progress",
+                                "segmentElapsedSeconds": 0.0,
+                                "segmentEstimatedRemainingSeconds": None,
+                                "secondsPerFrame": None,
+                                "updatedAtMs": int(time.time() * 1000),
+                            })
+                        elif state == "idle":
+                            item.update({
+                                "segmentFrame": item.get("segmentTotalFrames", 0),
+                                "segmentProgress": 1.0,
+                                "segmentPhase": "ready",
+                                "segmentEstimatedRemainingSeconds": 0.0,
+                                "updatedAtMs": int(time.time() * 1000),
+                            })
+                        else:
+                            item.update({
+                                "segmentPhase": "error",
+                                "updatedAtMs": int(time.time() * 1000),
+                            })
+                        if state == "error":
+                            item["failures"] = int(item["failures"]) + 1
+                        snapshot = [dict(endpoint_activity[url]) for url in remote_endpoints]
+                        busy = [str(value["url"]) for value in snapshot if value["state"] == "busy"]
+                    update_video_job(
+                        job_id, endpointActivity=snapshot, activeEndpoints=busy,
+                        phaseLabel=f"Segmenti remoti · {len(busy)}/{len(remote_endpoints)} endpoint al lavoro",
+                    )
 
-            completed, failures = distribute_frames(
-                original_frames, remote_endpoints, model_name, enhanced,
-                retries=int(job.get("remoteRetries", 2)), cancelled=lambda: video_job_cancelled(job_id),
-                on_progress=remote_progress, on_endpoint=remote_endpoint_state,
-            )
-            update_video_job(job_id, currentFrame=completed, completedFrames=completed, endpointFailures=failures[-100:])
+                def remote_endpoint_progress(
+                    endpoint: str, segment: Path, progress_item: dict[str, object],
+                ) -> None:
+                    expected = segment_frame_counts.get(segment.name, 0)
+
+                    def finite_number(key: str) -> float | None:
+                        try:
+                            value = float(progress_item.get(key))
+                        except (TypeError, ValueError):
+                            return None
+                        return value if math.isfinite(value) and value >= 0 else None
+
+                    completed_value = finite_number("completed_frames")
+                    total_value = finite_number("total_frames")
+                    fraction_value = finite_number("progress")
+                    elapsed_value = finite_number("elapsed_seconds")
+                    remaining_value = finite_number("estimated_remaining_seconds")
+                    seconds_per_frame = finite_number("seconds_per_frame")
+                    completed_in_segment = max(0, min(expected, int(completed_value or 0)))
+                    total_in_segment = max(1, int(total_value or expected or 1))
+                    fraction = max(0.0, min(1.0, fraction_value if fraction_value is not None else completed_in_segment / total_in_segment))
+                    with endpoint_activity_lock:
+                        item = endpoint_activity.get(endpoint)
+                        # A late streamed update from a retried segment must not
+                        # overwrite the endpoint's newly assigned segment.
+                        if item is None or item.get("activeSegment") != segment.name or item.get("state") != "busy":
+                            return
+                        item.update({
+                            "segmentFrame": completed_in_segment,
+                            "segmentTotalFrames": total_in_segment,
+                            "segmentProgress": fraction,
+                            "segmentPhase": str(progress_item.get("state") or "upscaling"),
+                            "segmentElapsedSeconds": elapsed_value or 0.0,
+                            "segmentEstimatedRemainingSeconds": remaining_value,
+                            "secondsPerFrame": seconds_per_frame,
+                            "updatedAtMs": int(time.time() * 1000),
+                        })
+                        snapshot = [dict(endpoint_activity[url]) for url in remote_endpoints]
+                        busy = [str(value["url"]) for value in snapshot if value["state"] == "busy"]
+                    update_video_job(
+                        job_id,
+                        endpointActivity=snapshot,
+                        activeEndpoints=busy,
+                        phaseLabel=f"Segmenti remoti · {len(busy)}/{len(remote_endpoints)} endpoint al lavoro",
+                    )
+
+                def remote_progress(
+                    segments_done: int, segment_total: int, frames_done: int, frame_total: int,
+                    endpoint: str, destination: Path,
+                ) -> None:
+                    elapsed = time.monotonic() - started
+                    segment_frames = next((count for path, count in input_chunks if path.name == destination.name), 0)
+                    with endpoint_activity_lock:
+                        item = endpoint_activity[endpoint]
+                        item["completed"] = int(item["completed"]) + 1
+                        item["completedSegments"] = int(item["completedSegments"]) + 1
+                        item["completedFrames"] = int(item["completedFrames"]) + segment_frames
+                        snapshot = [dict(endpoint_activity[url]) for url in remote_endpoints]
+                        busy = [str(value["url"]) for value in snapshot if value["state"] == "busy"]
+                    update_video_job(
+                        job_id, phaseLabel=f"Segmenti remoti · {len(busy)}/{len(remote_endpoints)} endpoint al lavoro",
+                        currentFrame=frames_done, completedFrames=frames_done, totalFrames=frame_total,
+                        completedSegments=segments_done, totalSegments=segment_total,
+                        progress=.04 + .86 * frames_done / frame_total, elapsedSeconds=elapsed,
+                        estimatedRemainingSeconds=(elapsed / frames_done * (frame_total - frames_done)) if frames_done else None,
+                        currentUpscaledFrame=str(destination), activeEndpoint=endpoint,
+                        endpointActivity=snapshot, activeEndpoints=busy,
+                    )
+
+                completed_segments, completed, failures = distribute_video_chunks(
+                    input_chunks, remote_endpoints, model_name, output_segment_dir,
+                    retries=int(job.get("remoteRetries", 2)), cancelled=lambda: video_job_cancelled(job_id),
+                    output_fps=remote_output_fps,
+                    validate_checkpoint=valid_remote_video_segment,
+                    on_progress=remote_progress, on_endpoint=remote_endpoint_state,
+                    on_endpoint_progress=remote_endpoint_progress,
+                )
+                update_video_job(
+                    job_id, phaseLabel="Ricostruzione locale dei segmenti ricevuti", progress=.91,
+                    currentFrame=completed, completedFrames=completed,
+                    completedSegments=completed_segments, totalSegments=len(input_chunks),
+                    endpointFailures=failures[-100:], activeEndpoints=[],
+                )
+                if output_chunks and all(valid_remote_video_segment(path, count) for path, count in output_chunks):
+                    process_remote_segment_video_job(
+                        job_id, job, source, output_chunks, result_path, binary,
+                        total, fps, source_duration, started,
+                    )
+                    return
+                materialized = materialize_remote_video_segments(
+                    output_chunks, enhanced, workspace,
+                    cancelled=lambda: video_job_cancelled(job_id),
+                    on_progress=lambda segment, segment_total, frames: update_video_job(
+                        job_id,
+                        phaseLabel=f"Ricostruzione segmento {segment}/{segment_total}",
+                        completedSegments=segment,
+                        currentFrame=frames,
+                        progress=.91 + .03 * frames / total,
+                    ),
+                )
+                if materialized != total:
+                    raise RuntimeError(f"Controllo anti-drop segmenti fallito: {materialized}/{total} frame")
+                update_video_job(job_id, currentFrame=materialized, completedFrames=materialized, progress=.94)
         else:
-            runner = None if model_name == "canvas" else upsampler(model_name, backend, max(0, min(1024, tile)))
+            runner = upsampler(model_name, backend, max(0, min(1024, tile)))
             update_video_job(job_id, phase="upscaling", phaseLabel="Upscaling frame per frame", totalFrames=total, currentFrame=0, fps=fps, progress=0.04)
             for index, frame_path in enumerate(original_frames, start=1):
                 if video_job_cancelled(job_id):
@@ -992,18 +1928,15 @@ def process_video_upscale_job(job_id: str) -> None:
                 completed = index - 1
                 elapsed_before = time.monotonic() - started
                 estimated_before = (elapsed_before / completed * (total - completed)) if completed else None
-                passes = 2 if tta and runner is not None else 1
+                passes = 2 if tta else 1
                 update_video_job(job_id, phaseLabel=f"Frame {index}/{total} · passaggio 1/{passes}", currentFrame=completed, progress=.04 + .9 * completed / total, elapsedSeconds=elapsed_before, estimatedRemainingSeconds=estimated_before, activeFrame=index, inferencePass=1, inferencePasses=passes)
-                if runner is None:
-                    output = canvas_enhance(frame, width, height)
-                else:
-                    output, _ = quiet_enhance(runner, frame, MODELS[model_name][0])
-                    if tta:
-                        update_video_job(job_id, phaseLabel=f"Frame {index}/{total} · passaggio TTA 2/2", activeFrame=index, inferencePass=2, inferencePasses=2)
-                        mirrored, _ = quiet_enhance(runner, cv2.flip(frame, 1), MODELS[model_name][0])
-                        output = cv2.addWeighted(output, .5, cv2.flip(mirrored, 1), .5, 0)
-                    if output.shape[1] != width or output.shape[0] != height:
-                        output = cv2.resize(output, (width, height), interpolation=cv2.INTER_LANCZOS4)
+                output, _ = quiet_enhance(runner, frame, MODELS[model_name][0])
+                if tta:
+                    update_video_job(job_id, phaseLabel=f"Frame {index}/{total} · passaggio TTA 2/2", activeFrame=index, inferencePass=2, inferencePasses=2)
+                    mirrored, _ = quiet_enhance(runner, cv2.flip(frame, 1), MODELS[model_name][0])
+                    output = cv2.addWeighted(output, .5, cv2.flip(mirrored, 1), .5, 0)
+                if output.shape[1] != width or output.shape[0] != height:
+                    output = cv2.resize(output, (width, height), interpolation=cv2.INTER_LANCZOS4)
                 destination = enhanced / frame_path.name
                 if not cv2.imwrite(str(destination), output, [cv2.IMWRITE_PNG_COMPRESSION, 2]):
                     raise RuntimeError(f"Impossibile salvare {destination.name}")
@@ -1060,13 +1993,14 @@ def process_video_upscale_job(job_id: str) -> None:
             manifest_lines.extend((f"file '{frame_path.as_posix()}'", f"duration {duration:.9f}"))
         manifest.write_text("\n".join(manifest_lines) + "\n", encoding="utf-8")
         run_checked([
-            binary, "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+            *upscaler_ffmpeg_prefix(binary), *upscaler_ffmpeg_codec_threads(),
             "-r", f"{recomposition_fps:.12g}", "-safe", "0", "-f", "concat", "-i", str(manifest),
-            "-i", str(source), "-map", "0:v:0", "-map", "1:a?", "-map_metadata", "-1",
-            "-vf", "setsar=1", "-metadata:s:v:0", "rotate=0", "-c:v", "libx264", "-preset", "slow", "-crf", crf, "-pix_fmt", "yuv420p",
+            *upscaler_ffmpeg_codec_threads(), "-i", str(source), "-map", "0:v:0", "-map", "1:a?", "-map_metadata", "-1",
+            "-vf", "setsar=1", "-metadata:s:v:0", "rotate=0", "-c:v", "libx264", "-preset", "fast" if job.get("remote") else "slow", "-crf", crf, "-pix_fmt", "yuv420p",
             "-fps_mode", "passthrough", "-c:a", "aac", "-b:a", "320k",
-            "-t", f"{expected_duration:.9f}", "-movflags", "+faststart", str(result_path)
-        ])
+            "-t", f"{expected_duration:.9f}", "-movflags", "+faststart",
+            *upscaler_ffmpeg_codec_threads(), str(result_path)
+        ], cancelled=lambda: video_job_cancelled(job_id))
         if video_job_cancelled(job_id):
             update_video_job(job_id, phase="cancelled", phaseLabel="Job annullato", cancelled=True)
             if not job.get("remote"):
@@ -1120,6 +2054,9 @@ def process_video_upscale_job(job_id: str) -> None:
             sourceAudioPackets=source_audio_packets,
             audioPacketCount=output_audio_packets,
             audioRestored=source_audio_packets == 0 or output_audio_packets > 0,
+            sourceFps=source_fps,
+            outputFps=fps,
+            segmentFrames=remote_chunk_frames if job.get("remote") else None,
         )
         log_upscaler_event("backend", "job-ready", jobId=job_id, totalFrames=total, resultBytes=result_path.stat().st_size, elapsedSeconds=time.monotonic() - started)
         if not job.get("remote"):
@@ -1149,13 +2086,20 @@ def remote_video_job_reuse_rank(item: dict[str, object]) -> tuple[int, int, int]
 
 
 def remote_video_job_checkpoint_matches(
-    item: dict[str, object], *, source_hash: str, model: str
+    item: dict[str, object], *, source_hash: str, model: str, processing_key: str | None = None
 ) -> bool:
     """Return whether remote AI checkpoints can be reused for this source/model."""
+    stored_processing_key = item.get("remoteProcessingKey")
+    if stored_processing_key is None:
+        stored_processing_key = json.dumps({
+            "segmentFrames": int(item.get("remoteChunkFrames", REMOTE_VIDEO_CHUNK_FRAMES)),
+            "outputFps": item.get("remoteOutputFps"),
+        }, sort_keys=True, separators=(",", ":"))
     return bool(
         item.get("remote")
         and item.get("sourceHash") == source_hash
         and item.get("model") == model
+        and (processing_key is None or stored_processing_key == processing_key)
         and item.get("phase") in ("ready", "error", "cancelled")
     )
 
@@ -1188,6 +2132,7 @@ def select_remote_video_job_candidate(
     model: str,
     render_settings: dict[str, object],
     checkpoint_policy: str,
+    processing_key: str | None = None,
 ) -> dict[str, object] | None:
     """Select reusable checkpoints only after an explicit resume decision."""
     if normalize_remote_checkpoint_policy(checkpoint_policy) != "resume":
@@ -1195,7 +2140,7 @@ def select_remote_video_job_candidate(
     candidates = [
         item for item in items
         if remote_video_job_checkpoint_matches(
-            item, source_hash=source_hash, model=model
+            item, source_hash=source_hash, model=model, processing_key=processing_key
         )
     ]
     return max(
@@ -1243,6 +2188,9 @@ def prepare_remote_video_job_reuse(
         "error": None,
         "resultPath": None,
         "resultBytes": None,
+        "activeEndpoints": [],
+        "activeEndpoint": None,
+        "endpointActivity": [],
     })
     return True
 
@@ -1276,13 +2224,22 @@ async def create_video_upscale_job(
                 "endpoints": list(dict.fromkeys(normalize_endpoint(item) for item in endpoints)),
                 "model": remote_model.strip(),
                 "retries": max(0, min(6, int(value.get("retries", 2)))),
+                "segmentFrames": int(value.get("segmentFrames", REMOTE_VIDEO_CHUNK_FRAMES)),
+                "outputFps": None if value.get("outputFps") is None else float(value["outputFps"]),
             }
+            if not 1 <= int(remote["segmentFrames"]) <= REMOTE_VIDEO_MAX_CHUNK_FRAMES:
+                raise ValueError
+            output_fps = remote["outputFps"]
+            if output_fps is not None and (not math.isfinite(float(output_fps)) or not 1 <= float(output_fps) <= 480):
+                raise ValueError
         except (ValueError, TypeError, json.JSONDecodeError, RemoteUpscalerError) as error:
             raise HTTPException(400, "Configurazione Upscaler remoto non valida") from error
+    if remote is None:
+        model = canonical_local_video_model(model)
     log_upscaler_event("backend", "upload-received", fileName=file.filename, model=model, backend=backend, target=f"{width}x{height}", quality=quality, preserveAspectRatio=preserve_aspect_ratio, checkpointPolicy=checkpoint_policy)
-    if remote is None and model != "canvas" and model not in MODELS:
+    if remote is None and model != CANVAS_MODEL_ID and model not in MODELS:
         raise HTTPException(400, "Modello video sconosciuto")
-    if remote is None and model != "canvas" and not target(model).exists():
+    if remote is None and model != CANVAS_MODEL_ID and not target(model).exists():
         raise HTTPException(409, "Modello non ancora scaricato")
     if not ffmpeg_binary():
         raise HTTPException(503, "ffmpeg non disponibile nel servizio locale")
@@ -1312,8 +2269,17 @@ async def create_video_upscale_job(
         # bulk cache DELETE. The cache can therefore never observe an upload
         # directory without also observing its active placeholder.
         with video_job_lock:
-            workspace.mkdir(parents=True, exist_ok=False)
-            video_jobs[job_id] = upload_placeholder
+            active_jobs = active_video_job_ids_locked()
+            if not active_jobs:
+                workspace.mkdir(parents=True, exist_ok=False)
+                video_jobs[job_id] = upload_placeholder
+        if active_jobs:
+            await file.close()
+            log_upscaler_event("backend", "video-job-admission-refused", activeJobIds=active_jobs, sourceName=file.filename)
+            raise HTTPException(
+                409,
+                "È già attivo un job video Upscaler. Attendi il completamento o annullalo prima di avviare un altro video.",
+            )
     else:
         workspace.mkdir(parents=True, exist_ok=False)
     suffix = Path(file.filename or "source.mp4").suffix.lower()
@@ -1373,6 +2339,10 @@ async def create_video_upscale_job(
         checkpointPolicy=checkpoint_policy,
     )
     if remote:
+        remote_processing_key = json.dumps({
+            "segmentFrames": int(remote["segmentFrames"]),
+            "outputFps": remote["outputFps"],
+        }, sort_keys=True, separators=(",", ":"))
         render_settings: dict[str, object] = {
             "requestedWidth": width,
             "requestedHeight": height,
@@ -1402,6 +2372,7 @@ async def create_video_upscale_job(
                 model=str(remote["model"]),
                 render_settings=render_settings,
                 checkpoint_policy=checkpoint_policy,
+                processing_key=remote_processing_key,
             )
             if candidate is not None:
                 if upload_placeholder is None or not _discard_remote_video_upload_locked(
@@ -1427,11 +2398,24 @@ async def create_video_upscale_job(
                 threading.Thread(target=process_video_upscale_job, args=(str(snapshot["id"]),), daemon=True).start()
             log_upscaler_event("backend", "remote-job-reused", jobId=snapshot["id"], sourceHash=digest, completedFrames=snapshot.get("currentFrame", 0))
             return snapshot
+    record_processing_mode = (
+        REMOTE_VIDEO_PROCESSING_MODE
+        if remote
+        else CANVAS_VIDEO_PROCESSING_MODE if model == CANVAS_MODEL_ID else LOCAL_AI_VIDEO_PROCESSING_MODE
+    )
+    stores_png_frames = record_processing_mode != CANVAS_VIDEO_PROCESSING_MODE
+    frame_storage_mode = (
+        "none" if record_processing_mode == CANVAS_VIDEO_PROCESSING_MODE
+        else "mp4-segments" if record_processing_mode == REMOTE_VIDEO_PROCESSING_MODE
+        else "png-checkpoints"
+    )
     record: dict[str, object] = {
         "id": job_id, "phase": "queued", "phaseLabel": "Job in coda", "progress": 0,
         "currentFrame": 0, "totalFrames": 0, "tempDirectory": str(workspace),
-        "originalFramesDirectory": str(workspace / "original-frames"),
-        "upscaledFramesDirectory": str(workspace / "upscaled-frames"),
+        "processingMode": record_processing_mode,
+        "frameStorageMode": frame_storage_mode,
+        "originalFramesDirectory": str(workspace / "original-frames") if stores_png_frames else "",
+        "upscaledFramesDirectory": str(workspace / "upscaled-frames") if stores_png_frames else "",
         "sourcePath": str(source), "model": str(remote["model"]) if remote else model, "backend": backend, "tile": tile,
         "sourceName": file.filename or "source.mp4", "sourceBytes": source.stat().st_size, "sourceHash": digest,
         "requestedWidth": width, "requestedHeight": height,
@@ -1443,7 +2427,11 @@ async def create_video_upscale_job(
         "remote": bool(remote), "resumable": bool(remote),
         "checkpointPolicy": checkpoint_policy,
         "remoteEndpoints": remote["endpoints"] if remote else [], "remoteRetries": remote["retries"] if remote else 0,
+        "remoteChunkFrames": remote["segmentFrames"] if remote else REMOTE_VIDEO_CHUNK_FRAMES,
+        "remoteOutputFps": remote["outputFps"] if remote else None,
+        "remoteProcessingKey": remote_processing_key if remote else None,
     }
+    blocked_by: list[str] = []
     with video_job_lock:
         if upload_placeholder is not None:
             if (
@@ -1455,7 +2443,15 @@ async def create_video_upscale_job(
                 raise HTTPException(409, "La pagina che ha creato il job non è più attiva")
             video_jobs[job_id] = record
         else:
-            video_jobs[job_id] = record
+            blocked_by = active_video_job_ids_locked()
+            if not blocked_by:
+                video_jobs[job_id] = record
+    if blocked_by:
+        shutil.rmtree(workspace, ignore_errors=True)
+        raise HTTPException(
+            409,
+            "È già attivo un job video Upscaler. Attendi il completamento o annullalo prima di avviare un altro video.",
+        )
     if remote:
         persist_remote_video_job(record)
     log_upscaler_event("backend", "job-created", jobId=job_id, sourceBytes=source.stat().st_size, sourceHash=digest, checkpointPolicy=checkpoint_policy, tempDirectory=workspace)
@@ -1471,6 +2467,8 @@ def resume_video_upscale_job(job_id: str, payload: dict[str, object] = Body(defa
             raise HTTPException(404, "Job remoto riprendibile non trovato")
         if item.get("phase") not in ("error", "cancelled"):
             raise HTTPException(409, "Il job non è in uno stato riprendibile")
+        if active_video_job_ids_locked(exclude=job_id):
+            raise HTTPException(409, "È già attivo un altro job video Upscaler")
         endpoints = payload.get("endpoints")
         if endpoints is not None:
             if not isinstance(endpoints, list) or not endpoints or not all(isinstance(value, str) for value in endpoints):
@@ -1490,6 +2488,26 @@ def resume_video_upscale_job(job_id: str, payload: dict[str, object] = Body(defa
 def recoverable_remote_video_jobs():
     with video_job_lock:
         return {"jobs": [dict(item) for item in video_jobs.values() if item.get("remote") and item.get("phase") in ("error", "cancelled", "ready")]}
+
+
+@app.get("/upscale/video/jobs/active")
+def active_video_upscale_jobs():
+    """Lightweight admission probe; unlike cache status it never walks disk."""
+    with video_job_lock:
+        return {
+            "jobs": [
+                {
+                    "id": str(item.get("id", "")),
+                    "phase": str(item.get("phase", "queued")),
+                    "phaseLabel": str(item.get("phaseLabel", "Job video attivo")),
+                    "sourceName": str(item.get("sourceName", "")),
+                    "remote": bool(item.get("remote")),
+                    "cancelRequested": bool(item.get("cancelRequested")),
+                }
+                for item in video_jobs.values()
+                if item.get("phase") not in REMOTE_VIDEO_TERMINAL_PHASES
+            ]
+        }
 
 
 @app.get("/upscale/remote/video/cache")
@@ -1610,13 +2628,23 @@ def clear_remote_video_cache():
 @app.delete("/upscale/video/clients/{client_id}")
 def release_video_upscale_client(client_id: str):
     """Segna la pagina come chiusa anche se l'upload non ha ancora restituito il job ID."""
+    snapshots: list[dict[str, object]] = []
     with video_job_lock:
         cancelled_video_clients[client_id] = time.time()
         released = []
         for job_id, item in video_jobs.items():
             if item.get("clientId") == client_id:
                 item["cancelRequested"] = True
+                if item.get("remote") and item.get("phase") not in REMOTE_VIDEO_TERMINAL_PHASES:
+                    item.update({
+                        "phase": "cancelled", "phaseLabel": "Job remoto annullato",
+                        "cancelled": True, "activeEndpoints": [],
+                    })
+                    item["manifestRevision"] = int(item.get("manifestRevision", 0)) + 1
+                    snapshots.append(dict(item))
                 released.append(job_id)
+    for snapshot in snapshots:
+        persist_remote_video_job(snapshot)
     return {"released": released}
 
 
@@ -1636,6 +2664,12 @@ def cancel_video_upscale_job(job_id: str):
         if item is None:
             raise HTTPException(404, "Job video non trovato")
         item["cancelRequested"] = True
+        if item.get("remote") and item.get("phase") not in REMOTE_VIDEO_TERMINAL_PHASES:
+            item.update({
+                "phase": "cancelled", "phaseLabel": "Job remoto annullato",
+                "cancelled": True, "activeEndpoints": [],
+            })
+            item["manifestRevision"] = int(item.get("manifestRevision", 0)) + 1
         snapshot = dict(item)
     if snapshot.get("remote"):
         persist_remote_video_job(snapshot)
@@ -1666,14 +2700,25 @@ def minterpolate_filter(target_fps: float, method: str) -> str:
 
     `motion` runs bidirectional motion estimation and compensation: ffmpeg synthesises
     genuinely new intermediate frames instead of repeating or cross-dissolving the
-    existing ones. `blend` keeps the cheaper frame-mixing mode for long exports.
+    existing ones. `motion-obmc` exposes the requested plain OBMC bidirectional
+    profile, while `blend` keeps the cheaper frame-mixing mode for long exports.
     """
     if method == "blend":
         return f"minterpolate=fps={target_fps:g}:mi_mode=blend"
+    if method == "motion-obmc":
+        return f"minterpolate=fps={target_fps:g}:mi_mode=mci:mc_mode=obmc:me_mode=bidir"
     return (
         f"minterpolate=fps={target_fps:g}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir"
         ":me=epzs:vsbmc=1:search_param=32:scd=fdiff:scd_threshold=8"
     )
+
+
+def complete_minterpolate_filter(target_fps: float, method: str, source_fps: float) -> str:
+    """Pad minterpolate's two-frame look-ahead without extending the source timeline."""
+    if not math.isfinite(source_fps) or source_fps <= 0:
+        raise ValueError("Frame rate sorgente non valido")
+    tail_seconds = 2 / source_fps
+    return f"tpad=stop_mode=clone:stop_duration={tail_seconds:.12g},{minterpolate_filter(target_fps, method)}"
 
 
 def expected_minterpolate_frame_count(source_frames: int, source_fps: float, target_fps: float) -> int:
@@ -1688,6 +2733,16 @@ def expected_minterpolate_frame_count(source_frames: int, source_fps: float, tar
     if not math.isfinite(source_fps) or source_fps <= 0 or not math.isfinite(target_fps) or target_fps <= source_fps:
         raise ValueError("Frame rate non validi per la verifica dell'interpolazione")
     return math.floor((source_frames - 2) * target_fps / source_fps) + 1
+
+
+def complete_interpolation_frame_count(
+    source_frames: int, source_fps: float, source_duration: float, target_fps: float,
+) -> int:
+    """Progress target for the padded, duration-preserving Frame Booster output."""
+    minimum = expected_minterpolate_frame_count(source_frames, source_fps, target_fps)
+    if not math.isfinite(source_duration) or source_duration <= 0:
+        raise ValueError("Durata sorgente non valida")
+    return max(minimum, int(round(source_duration * target_fps)))
 
 
 def validate_interpolation_audit(
@@ -1705,14 +2760,13 @@ def validate_interpolation_audit(
         raise RuntimeError(f"Conteggio interpolato incompleto: ottenuti {output_frames} frame, attesi almeno {expected_frames - INTERPOLATION_FRAME_TOLERANCE}")
     if not math.isfinite(output_duration) or output_duration <= 0:
         raise RuntimeError("Durata del risultato interpolato non valida")
-    # `minterpolate` legitimately loses the two-frame look-ahead tail.  Accept
-    # that explicit tail and at most two target-frame/timebase rounding units.
+    # Frame Booster pads the look-ahead tail before minterpolate, therefore the
+    # delivered video must preserve the complete source timeline.
     expected_duration = expected_frames / target_fps
     duration_tolerance = max(INTERPOLATION_DURATION_TOLERANCE_SECONDS, 2 / target_fps)
     if output_duration + duration_tolerance < expected_duration:
         raise RuntimeError(f"Durata interpolata troncata: ottenuti {output_duration:g} s, attesi circa {expected_duration:g} s")
-    minimum_from_source = max(0.0, source_duration - 2 / source_fps)
-    if output_duration + duration_tolerance < minimum_from_source:
+    if output_duration + duration_tolerance < source_duration:
         raise RuntimeError(f"Durata interpolata troncata rispetto alla sorgente: ottenuti {output_duration:g} s, sorgente {source_duration:g} s")
     if source_width is not None and output_width is not None and (source_width != output_width or source_height != output_height):
         raise RuntimeError("Geometria del risultato interpolato diversa dalla sorgente")
@@ -2011,14 +3065,18 @@ def _resolve_interpolation_rates(
     return source, float(target_fps or 0)
 
 
-def _run_ffmpeg_interpolation_job(job_id: str, source: Path, destination: Path, target_fps: float, method: str, expected_frames: int) -> str:
+def _run_ffmpeg_interpolation_job(
+    job_id: str, source: Path, destination: Path, target_fps: float, method: str,
+    expected_frames: int, source_fps: float, source_duration: float,
+) -> str:
     """Run ffmpeg with machine-readable progress and cooperative cancellation."""
     binary = ffmpeg_binary()
     if not binary:
         raise RuntimeError("ffmpeg non trovato nel PATH. Installalo con `brew install ffmpeg` e riavvia il servizio.")
     command = [
         binary, "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", str(source),
-        "-filter:v", minterpolate_filter(target_fps, method), "-r", f"{target_fps:g}",
+        "-filter:v", complete_minterpolate_filter(target_fps, method, source_fps),
+        "-r", f"{target_fps:g}", "-t", f"{source_duration:.12g}",
         "-c:v", "libx264", "-preset", "slow", "-crf", "16", "-pix_fmt", "yuv420p",
         "-movflags", "+faststart", "-c:a", "copy", "-progress", "pipe:1", str(destination)
     ]
@@ -2159,7 +3217,7 @@ def process_interpolation_job(job_id: str) -> None:
         if abs(probed_source_fps - source_fps) > max(.05, source_fps * INTERPOLATION_FPS_RELATIVE_TOLERANCE):
             raise RuntimeError(f"Frame rate sorgente non coerente: dichiarati {source_fps:g} fps, rilevati {probed_source_fps:g} fps")
         _update_interpolation_job(job_id, sourceFps=source_fps, targetFps=target_fps)
-        expected = expected_minterpolate_frame_count(source_frames, source_fps, target_fps)
+        expected = complete_interpolation_frame_count(source_frames, source_fps, source_duration, target_fps)
         _update_interpolation_job(job_id, sourceFrames=source_frames, totalFrames=expected, stageTotalFrames=expected, phase="interpolating", phaseLabel="Interpolazione dei fotogrammi", progress=0.0, stageProgress=0.0)
         if _interpolation_job_cancelled(job_id):
             raise InterruptedError("Interpolazione annullata")
@@ -2173,7 +3231,10 @@ def process_interpolation_job(job_id: str) -> None:
                 _update_interpolation_job(job_id, phase="remuxing", phaseLabel="Ripristino audio originale", indeterminate=True)
                 _remux_interpolation_audio(source, destination, job_id)
         else:
-            backend = _run_ffmpeg_interpolation_job(job_id, source, destination, target_fps, method, expected)
+            backend = _run_ffmpeg_interpolation_job(
+                job_id, source, destination, target_fps, method, expected,
+                source_fps, source_duration,
+            )
         if _interpolation_job_cancelled(job_id):
             raise InterruptedError("Interpolazione annullata")
         _update_interpolation_job(job_id, phase="verifying", phaseLabel="Verifica del file interpolato", progress=1.0, stageProgress=1.0, indeterminate=False)
@@ -2331,7 +3392,10 @@ def interpolation_job_result(job_id: str):
     path = Path(str(item.get("resultPath", "")))
     if not path.exists():
         raise HTTPException(410, "Il risultato dell'interpolazione non è più disponibile")
-    return FileResponse(path, media_type="video/mp4", filename="mlsm-interpolated-video.mp4", background=BackgroundTask(cleanup_interpolation_job, job_id, "download-complete"))
+    # Keep the verified artifact until the existing ready-job retention timer
+    # expires. The desktop client downloads it for preview first and may copy
+    # the same audited file to a user-selected destination afterwards.
+    return FileResponse(path, media_type="video/mp4", filename="mlsm-interpolated-video.mp4")
 
 
 @app.post("/interpolate")
@@ -2387,4 +3451,5 @@ if __name__ == "__main__":
             print(str(error), file=sys.stderr, flush=True)
             raise SystemExit(1) from error
         raise SystemExit(0)
+    start_parent_watchdog(configured_parent_pid())
     uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("DSAS_UPSCALER_PORT", "8765")), log_level="info")

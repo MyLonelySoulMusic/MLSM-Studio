@@ -5,7 +5,10 @@ import json
 import os
 import shutil
 import tempfile
+import tarfile
 import threading
+import time
+import urllib.error
 import urllib.request
 import uuid
 import zipfile
@@ -18,6 +21,7 @@ MANIFEST_PATH = Path(os.environ.get("MLSM_RIFE_MANIFEST", ROOT / "models.manifes
 CACHE_ROOT = Path(os.environ.get("MLSM_RIFE_CACHE", ROOT.parent.parent / ".upscaler-cache" / "rife")).resolve()
 MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
 MAX_UNPACKED_BYTES = 1024 * 1024 * 1024
+DOWNLOAD_ATTEMPTS = 3
 _prepare_locks_guard = threading.Lock()
 _prepare_locks: dict[str, threading.Lock] = {}
 
@@ -120,9 +124,11 @@ def _runtime_tree_sha256(runtime: Path) -> str:
 def _runtime_dir(root: Path) -> Path | None:
     candidates = []
     for weights in root.rglob("flownet.pkl"):
-        directory = weights.parent
-        if (directory / "RIFE_HDv3.py").is_file():
-            candidates.append(directory)
+        model_directory = weights.parent
+        if not (model_directory / "RIFE_HDv3.py").is_file():
+            continue
+        runtime = model_directory.parent if model_directory.name == "train_log" and (model_directory.parent / "model").is_dir() else model_directory
+        candidates.append(runtime)
     return min(candidates, key=lambda path: len(path.parts)) if candidates else None
 
 
@@ -143,18 +149,100 @@ def _safe_extract(archive: Path, destination: Path) -> None:
         package.extractall(destination)
 
 
-def _download(item: dict[str, Any], destination: Path) -> None:
+def _safe_extract_tar(archive: Path, destination: Path) -> None:
+    try:
+        package = tarfile.open(archive, "r:gz")
+    except (OSError, tarfile.TarError) as error:
+        raise RuntimeError("Il sorgente Practical-RIFE ufficiale non è un archivio TAR valido.") from error
+    with package:
+        members = package.getmembers()
+        if len(members) > 4096 or sum(member.size for member in members if member.isfile()) > MAX_UNPACKED_BYTES:
+            raise RuntimeError("Il sorgente Practical-RIFE supera i limiti di sicurezza.")
+        for member in members:
+            relative = Path(member.name)
+            if relative.is_absolute() or ".." in relative.parts or member.issym() or member.islnk() or not (member.isdir() or member.isfile()):
+                raise RuntimeError("Il sorgente Practical-RIFE contiene un percorso non sicuro.")
+        package.extractall(destination, members=members)
+
+
+def _source_dir(root: Path) -> Path | None:
+    candidates = [
+        path.parent.parent for path in root.rglob("model/warplayer.py")
+        if (path.parent / "loss.py").is_file()
+    ]
+    return min(candidates, key=lambda path: len(path.parts)) if candidates else None
+
+
+def _assemble_runtime(weights: Path, source: Path, destination: Path) -> None:
+    source_root = _source_dir(source)
+    if source_root is None:
+        raise RuntimeError("Il sorgente Practical-RIFE non contiene il package model ufficiale.")
+    destination.mkdir(parents=True, exist_ok=False)
+    shutil.copytree(source_root / "model", destination / "model")
+    license_path = source_root / "LICENSE"
+    if license_path.is_file():
+        shutil.copy2(license_path, destination / "LICENSE")
+    train_log = destination / "train_log"
+    train_log.mkdir()
+    for path in weights.iterdir():
+        if path.is_file() and path.name != ".DS_Store" and path.suffix.lower() not in {".pyc"}:
+            shutil.copy2(path, train_log / path.name)
+
+
+def _download(item: dict[str, Any], destination: Path, attempt: int = 1) -> None:
     url = str(item.get("url", ""))
-    if not url.startswith("https://huggingface.co/hzwer/RIFE/resolve/"):
+    if not (
+        url.startswith("https://huggingface.co/hzwer/RIFE/resolve/")
+        or url.startswith("https://codeload.github.com/hzwer/Practical-RIFE/tar.gz/")
+    ):
         raise RuntimeError("Il manifest RIFE non punta all'upstream ufficiale hzwer.")
-    request = urllib.request.Request(url, headers={"User-Agent": "MLSM-Studio-RIFE/1"})
+    separator = "&" if "?" in url else "?"
+    request_url = f"{url}{separator}download=true&mlsm_attempt={attempt}"
+    request = urllib.request.Request(request_url, headers={
+        "User-Agent": "MLSM-Studio-RIFE/1",
+        "Accept-Encoding": "identity",
+        "Cache-Control": "no-cache",
+    })
+    expected_size = item.get("size")
+    expected_size = expected_size if isinstance(expected_size, int) and expected_size > 0 else None
     written = 0
     with urllib.request.urlopen(request, timeout=60) as response, destination.open("wb") as output:
+        content_length = response.headers.get("Content-Length")
+        if content_length and content_length.isdigit() and int(content_length) > MAX_ARCHIVE_BYTES:
+            raise RuntimeError("Il download RIFE supera il limite previsto.")
         while chunk := response.read(1024 * 1024):
             written += len(chunk)
             if written > MAX_ARCHIVE_BYTES:
                 raise RuntimeError("Il download RIFE supera il limite previsto.")
             output.write(chunk)
+        output.flush()
+        os.fsync(output.fileno())
+    if expected_size is not None and written != expected_size:
+        raise RuntimeError(f"Download RIFE incompleto: attesi {expected_size} byte, ricevuti {written}.")
+
+
+def _download_verified(item: dict[str, Any], destination: Path, expected_sha: str) -> str:
+    """Download an immutable upstream artifact, retrying only transport corruption.
+
+    The manifest checksum remains authoritative. A retry receives a cache-busting
+    query and the partial file is removed before another attempt, so a truncated
+    CDN response can never be published or reused.
+    """
+    last_detail = "download non avviato"
+    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        destination.unlink(missing_ok=True)
+        try:
+            _download(item, destination, attempt)
+            actual_sha = _sha256(destination)
+            if actual_sha == expected_sha:
+                return actual_sha
+            last_detail = f"Checksum RIFE non valido: {actual_sha} ({destination.stat().st_size} byte)."
+        except (OSError, RuntimeError, urllib.error.URLError) as error:
+            last_detail = str(error)
+        destination.unlink(missing_ok=True)
+        if attempt < DOWNLOAD_ATTEMPTS:
+            time.sleep(0.25 * attempt)
+    raise RuntimeError(f"Download RIFE non verificabile dopo {DOWNLOAD_ATTEMPTS} tentativi. {last_detail}")
 
 
 def prepare_model(model_id: str = "rife-v4.26", local_artifact: Path | None = None) -> dict[str, Any]:
@@ -171,6 +259,9 @@ def prepare_model(model_id: str = "rife-v4.26", local_artifact: Path | None = No
         raise RuntimeError("Manifest RIFE privo di artifact o SHA-256 valido.")
     base, archive, runtime = paths
     expected_sha = str(item["sha256"]).lower()
+    source_item = item.get("source")
+    if source_item is not None and not isinstance(source_item, dict):
+        raise RuntimeError("Manifest RIFE con sorgente non valido.")
     with _model_prepare_lock(model_id):
         # Another thread/process may have completed while this caller waited.
         status = manifest_status(model_id)
@@ -180,6 +271,8 @@ def prepare_model(model_id: str = "rife-v4.26", local_artifact: Path | None = No
         token = f"{os.getpid()}-{threading.get_ident()}-{uuid.uuid4().hex}"
         temporary = base / f".{archive.name}.{token}.partial"
         extracted = Path(tempfile.mkdtemp(prefix=f"rife-extract-{token}-", dir=base))
+        source_temporary = base / f".source.{token}.partial"
+        source_extracted = Path(tempfile.mkdtemp(prefix=f"rife-source-{token}-", dir=base))
         staged_runtime = base / f".runtime.{token}.partial"
         staged_receipt = base / f".receipt.{token}.partial"
         retired_runtime = base / f".runtime.{token}.retired"
@@ -190,20 +283,30 @@ def prepare_model(model_id: str = "rife-v4.26", local_artifact: Path | None = No
                 if not candidate.is_file():
                     raise RuntimeError("Artifact RIFE locale non trovato.")
                 shutil.copyfile(candidate, temporary)
+                actual_sha = _sha256(temporary)
+                if actual_sha != expected_sha:
+                    raise RuntimeError(f"Checksum RIFE non valido: {actual_sha}.")
             else:
-                _download(item, temporary)
-            actual_sha = _sha256(temporary)
-            if actual_sha != expected_sha:
-                raise RuntimeError(f"Checksum RIFE non valido: {actual_sha}.")
+                actual_sha = _download_verified(item, temporary, expected_sha)
             _safe_extract(temporary, extracted)
             source_runtime = _runtime_dir(extracted)
             if source_runtime is None:
                 raise RuntimeError("L'artifact non contiene RIFE_HDv3.py e flownet.pkl.")
-            shutil.copytree(source_runtime, staged_runtime)
+            source_sha = None
+            if source_item is not None:
+                source_sha = str(source_item.get("sha256", "")).lower()
+                if len(source_sha) != 64 or any(character not in "0123456789abcdef" for character in source_sha):
+                    raise RuntimeError("Manifest RIFE con checksum sorgente non valido.")
+                _download_verified(source_item, source_temporary, source_sha)
+                _safe_extract_tar(source_temporary, source_extracted)
+                _assemble_runtime(source_runtime, source_extracted, staged_runtime)
+            else:
+                shutil.copytree(source_runtime, staged_runtime)
             tree_sha = _runtime_tree_sha256(staged_runtime)
             staged_receipt.write_text(json.dumps({
                 "modelId": model_id,
                 "artifactSha256": actual_sha,
+                "sourceSha256": source_sha,
                 "runtimeTreeSha256": tree_sha,
                 "upstream": item.get("upstream"),
                 "revision": item.get("revision"),
@@ -233,8 +336,10 @@ def prepare_model(model_id: str = "rife-v4.26", local_artifact: Path | None = No
             # Every transient name is unique to this caller. Cleanup therefore
             # cannot delete a concurrent install's download or runtime tree.
             temporary.unlink(missing_ok=True)
+            source_temporary.unlink(missing_ok=True)
             staged_receipt.unlink(missing_ok=True)
             shutil.rmtree(extracted, ignore_errors=True)
+            shutil.rmtree(source_extracted, ignore_errors=True)
             shutil.rmtree(staged_runtime, ignore_errors=True)
             shutil.rmtree(retired_runtime, ignore_errors=True)
 
@@ -265,9 +370,12 @@ def manifest_status(model_id: str = "rife-v4.26") -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         return {**base_status, "installed": True, "reason": "installazione RIFE illeggibile"}
     expected = str(item.get("sha256", "")).lower()
+    source_item = item.get("source") if isinstance(item.get("source"), dict) else None
+    expected_source = str(source_item.get("sha256", "")).lower() if source_item else None
     verified = (
         artifact_sha == expected
         and receipt.get("artifactSha256") == expected
+        and receipt.get("sourceSha256") == expected_source
         and receipt.get("runtimeTreeSha256") == tree_sha
         and _runtime_dir(runtime) == runtime
     )

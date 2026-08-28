@@ -1,15 +1,55 @@
 import type { RhythmBallProject } from "@rbs/project-schema";
 import type { ModelLoadProgress } from "./upscaler-ai";
 import { canvasImageSourceSize } from "./canvas-image-source";
-import { activeRemoteUpscalerEndpoints, usesRemoteUpscaler } from "./remote-upscaler-client";
+import { activeRemoteUpscalerEndpoints, normalizeRemoteUpscalerEndpoint, usesRemoteUpscaler } from "./remote-upscaler-client";
 
 type Settings = RhythmBallProject["animation"]["upscaler"];
 export type RemoteVideoCheckpointPolicy = "resume" | "restart";
 export const pythonUpscalerBaseUrl = "http://127.0.0.1:8765";
 export const UPSCALER_REMOTE_CACHE_CLEARED_EVENT = "upscaler:remote-cache-cleared";
-export interface PythonUpscalerHealth { ok: boolean; apiVersion?: number; capabilities?: { imageUpscale?: boolean; videoJobs?: boolean; remoteUpscale?: boolean }; mps: boolean; cuda: boolean; recommendedBackend: "metal" | "cuda" | "cpu"; gpuName: string; videoTempDirectory?: string; remoteVideoDirectory?: string; interpolation?: { ffmpeg?: boolean; ffmpegPath?: string } }
+export interface PythonUpscalerHealth {
+  ok: boolean;
+  apiVersion?: number;
+  capabilities?: { imageUpscale?: boolean; videoJobs?: boolean; remoteUpscale?: boolean; remoteVideoPartialEndpointPreflight?: boolean; canvasVideoStreaming?: boolean };
+  mps: boolean;
+  cuda: boolean;
+  recommendedBackend: "metal" | "cuda" | "cpu";
+  gpuName: string;
+  videoTempDirectory?: string;
+  remoteVideoDirectory?: string;
+  ownerKind?: "vite" | "tauri" | "cli" | "external";
+  parentPid?: number | null;
+  pid?: number;
+  interpolation?: { ffmpeg?: boolean; ffmpegPath?: string };
+}
 export interface RemoteUpscalerVideoCacheInfo { jobs: number; bytes: number; activeJobs: number }
 export interface RemoteUpscalerVideoCacheClearResult { removedJobs: number; removedBytes: number }
+export interface ActiveUpscalerVideoJob { id: string; phase: string; phaseLabel: string; sourceName: string; remote: boolean; cancelRequested: boolean }
+export interface RemoteVideoEndpointFailure { url: string; error: string }
+export interface RemoteVideoEndpointPreflight {
+  ok: boolean;
+  reachableEndpoints: string[];
+  failures: RemoteVideoEndpointFailure[];
+}
+export type RemoteVideoEndpointDecision = "continue" | "cancel";
+export interface RemoteUpscalerEndpointActivity {
+  url: string;
+  state: "idle" | "busy" | "error";
+  activeFrame: string | null;
+  activeSegment?: string | null;
+  completed: number;
+  completedSegments?: number;
+  completedFrames?: number;
+  failures: number;
+  segmentFrame?: number;
+  segmentTotalFrames?: number;
+  segmentProgress?: number;
+  segmentPhase?: string;
+  segmentElapsedSeconds?: number;
+  segmentEstimatedRemainingSeconds?: number | null;
+  secondsPerFrame?: number | null;
+  updatedAtMs?: number | null;
+}
 export interface PythonVideoUpscaleStatus {
   id: string;
   phase: "queued" | "extracting" | "upscaling" | "encoding" | "ready" | "error" | "cancelled";
@@ -20,6 +60,10 @@ export interface PythonVideoUpscaleStatus {
   tempDirectory: string;
   originalFramesDirectory: string;
   upscaledFramesDirectory: string;
+  inputSegmentsDirectory?: string;
+  upscaledSegmentsDirectory?: string;
+  completedSegments?: number;
+  totalSegments?: number;
   requestedWidth?: number;
   requestedHeight?: number;
   effectiveWidth?: number;
@@ -38,19 +82,55 @@ export interface PythonVideoUpscaleStatus {
   width?: number;
   height?: number;
   activeEndpoint?: string;
-  endpointFailures?: Array<{ endpoint: string; frame: string; error: string }>;
+  endpointFailures?: Array<{ endpoint: string; frame?: string; segment?: string; error: string }>;
   sourceAudioPackets?: number;
   audioPacketCount?: number;
   audioRestored?: boolean;
   encodedFrameCount?: number;
   durationSeconds?: number;
+  sourceFps?: number;
+  outputFps?: number;
+  segmentFrames?: number;
+  remoteChunkFrames?: number;
+  remoteOutputFps?: number | null;
+  remoteProcessingKey?: string;
   resultPath?: string;
   resultBytes?: number;
   activeEndpoints?: string[];
-  endpointActivity?: Array<{ url: string; state: "idle" | "busy" | "error"; activeFrame: string | null; completed: number; failures: number }>;
+  endpointActivity?: RemoteUpscalerEndpointActivity[];
 }
 let healthPromise: Promise<PythonUpscalerHealth | null> | null = null;
 let healthCheckedAt = 0;
+
+async function probePythonUpscalerHealth(timeoutMs = 2_500): Promise<PythonUpscalerHealth | null> {
+  try {
+    const response = await fetch(`${pythonUpscalerBaseUrl}/health`, { signal: AbortSignal.timeout(timeoutMs) });
+    return response.ok ? response.json() as Promise<PythonUpscalerHealth> : null;
+  } catch { return null; }
+}
+
+async function requestNativeUpscalerStart(): Promise<boolean> {
+  if (!("__TAURI_INTERNALS__" in globalThis)) return false;
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("ensure_upscaler_service");
+    return true;
+  } catch { return false; }
+}
+
+async function probeOrStartPythonUpscaler(): Promise<PythonUpscalerHealth | null> {
+  const current = await probePythonUpscalerHealth();
+  if (current) return current;
+  if (!await requestNativeUpscalerStart()) return null;
+  // Importing Torch/OpenCV can take a few seconds. Keep this wait inside the
+  // shared health promise so repeated clicks cannot spawn duplicate services.
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const health = await probePythonUpscalerHealth(800);
+    if (health) return health;
+  }
+  return null;
+}
 
 export function reportUpscalerDiagnostic(event: string, details: Record<string, unknown> = {}): void {
   const entry = { source: "browser", event, at: new Date().toISOString(), ...details };
@@ -64,7 +144,7 @@ export function pythonUpscalerHealth(refresh = false): Promise<PythonUpscalerHea
   const stale = Date.now() - healthCheckedAt > 3_000;
   if (refresh || !healthPromise || stale) {
     healthCheckedAt = Date.now();
-    healthPromise = fetch(`${pythonUpscalerBaseUrl}/health`, { signal: AbortSignal.timeout(2500) }).then((response) => response.ok ? response.json() as Promise<PythonUpscalerHealth> : null).catch(() => null);
+    healthPromise = probeOrStartPythonUpscaler();
   }
   return healthPromise;
 }
@@ -74,7 +154,12 @@ export function shouldUsePythonUpscaler(webExecutable: boolean, backend: Setting
 }
 
 export function pythonUpscalerSupportsVideoJobs(health: PythonUpscalerHealth | null | undefined): boolean {
-  return Boolean(health && (health.apiVersion ?? 0) >= 2 && health.capabilities?.videoJobs);
+  return Boolean(
+    health
+    && (health.apiVersion ?? 0) >= 7
+    && health.capabilities?.videoJobs === true
+    && health.capabilities?.canvasVideoStreaming === true
+  );
 }
 
 async function upscalerResponseError(response: Response, fallback: string): Promise<Error> {
@@ -97,6 +182,47 @@ export async function clearRemoteUpscalerVideoCache(signal?: AbortSignal): Promi
   return response.json() as Promise<RemoteUpscalerVideoCacheClearResult>;
 }
 
+export async function activeUpscalerVideoJobs(signal?: AbortSignal): Promise<ActiveUpscalerVideoJob[]> {
+  const response = await fetch(`${pythonUpscalerBaseUrl}/upscale/video/jobs/active`, signal ? { signal } : undefined);
+  if (!response.ok) throw await upscalerResponseError(response, `Controllo job video attivi fallito: HTTP ${response.status}.`);
+  const payload = await response.json() as { jobs?: ActiveUpscalerVideoJob[] };
+  return Array.isArray(payload.jobs) ? payload.jobs : [];
+}
+
+export async function preflightRemoteUpscalerVideo(
+  settings: Settings, signal?: AbortSignal,
+): Promise<RemoteVideoEndpointPreflight> {
+  const response = await fetch(`${pythonUpscalerBaseUrl}/upscale/remote/video/preflight`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      endpoints: activeRemoteUpscalerEndpoints(settings),
+      model: settings.remote.model,
+      segmentFrames: settings.remote.segmentFrames,
+      ...(settings.remote.outputFps === null ? {} : { outputFps: settings.remote.outputFps }),
+    }),
+    ...(signal ? { signal } : {}),
+  });
+  if (!response.ok) throw await upscalerResponseError(response, `Verifica endpoint fallita: HTTP ${response.status}.`);
+  return response.json() as Promise<RemoteVideoEndpointPreflight>;
+}
+
+export function settingsWithReachableRemoteEndpoints(
+  settings: Settings, reachableEndpoints: readonly string[],
+): Settings {
+  const reachable = new Set(reachableEndpoints.map(normalizeRemoteUpscalerEndpoint));
+  return {
+    ...settings,
+    remote: {
+      ...settings.remote,
+      endpoints: settings.remote.endpoints.map((endpoint) => ({
+        ...endpoint,
+        enabled: endpoint.enabled && reachable.has(normalizeRemoteUpscalerEndpoint(endpoint.url)),
+      })),
+    },
+  };
+}
+
 export function buildUpscalerVideoForm(source: Blob, sourceName: string, settings: Settings, quality: "draft" | "high" | "maximum", clientId: string, checkpointPolicy: RemoteVideoCheckpointPolicy = "restart"): FormData {
   const form = new FormData();
   form.set("file", source, sourceName || "source.mp4");
@@ -112,7 +238,11 @@ export function buildUpscalerVideoForm(source: Blob, sourceName: string, setting
   form.set("adjustments", JSON.stringify(settings.adjustments));
   if (usesRemoteUpscaler(settings)) {
     form.set("remote_config", JSON.stringify({
-      endpoints: activeRemoteUpscalerEndpoints(settings), model: settings.remote.model, retries: settings.remote.frameRetries
+      endpoints: activeRemoteUpscalerEndpoints(settings),
+      model: settings.remote.model,
+      retries: settings.remote.frameRetries,
+      segmentFrames: settings.remote.segmentFrames,
+      ...(settings.remote.outputFps === null ? {} : { outputFps: settings.remote.outputFps })
     }));
     // The backend default is intentionally restart as well: cache reuse must
     // always be an explicit choice made for this export operation.
@@ -175,6 +305,9 @@ export async function generatePythonUpscaledVideo(options: {
   checkpointPolicy?: RemoteVideoCheckpointPolicy;
   signal: AbortSignal;
   onStatus: (status: PythonVideoUpscaleStatus & { uploadProgress?: number }) => void;
+  onRemoteEndpointDecision?: (
+    preflight: RemoteVideoEndpointPreflight, signal: AbortSignal,
+  ) => Promise<RemoteVideoEndpointDecision>;
 }): Promise<{ blob: Blob; status: PythonVideoUpscaleStatus }> {
   const throwIfAborted = () => { if (options.signal.aborted) throw new DOMException("Operazione annullata", "AbortError"); };
   throwIfAborted();
@@ -187,9 +320,43 @@ export async function generatePythonUpscaledVideo(options: {
   throwIfAborted();
   reportUpscalerDiagnostic("health-check", { available: Boolean(health), apiVersion: health?.apiVersion, videoJobs: health?.capabilities?.videoJobs, ffmpeg: health?.interpolation?.ffmpeg, gpuName: health?.gpuName });
   if (!health) throw new Error("Servizio locale non disponibile: il video deve essere elaborato frame per frame dal backend PyTorch/ffmpeg.");
-  if (!pythonUpscalerSupportsVideoJobs(health)) throw new Error("Il servizio Upscaler attualmente in esecuzione è una versione precedente e supporta soltanto immagini/frame di anteprima. Arrestalo e riavvialo una volta: il nuovo backend esporrà /upscale/video/jobs.");
+  if (!pythonUpscalerSupportsVideoJobs(health)) throw new Error("Il servizio Upscaler in ascolto è obsoleto o non espone Canvas video diretto. Chiudi il vecchio processo e riavvia MLSM Studio: serve API 7 con canvasVideoStreaming.");
   if (!health.interpolation?.ffmpeg) throw new Error("ffmpeg non è disponibile nel servizio locale: installalo con `brew install ffmpeg`, poi riavvia l’app.");
-  if (!usesRemoteUpscaler(options.settings) && options.settings.model !== "canvas") await prepareModel(options.settings.model, (model) => options.onStatus({
+  let effectiveSettings = options.settings;
+  if (usesRemoteUpscaler(effectiveSettings)) {
+    if (!effectiveSettings.remote.model.trim()) {
+      throw new Error("Upscaling remoto attivo, ma nessun modello remoto è selezionato. Verifica gli endpoint e scegli un modello: il job locale non verrà avviato al suo posto.");
+    }
+    if (health.capabilities?.remoteVideoPartialEndpointPreflight !== true) {
+      throw new Error("Il servizio Upscaler locale è precedente al controllo parziale degli endpoint. Riavvia MLSM Studio una volta e riprova.");
+    }
+    const preflight = await preflightRemoteUpscalerVideo(effectiveSettings, options.signal);
+    throwIfAborted();
+    if (preflight.failures.length) {
+      const decision = options.onRemoteEndpointDecision
+        ? await options.onRemoteEndpointDecision(preflight, options.signal)
+        : "cancel";
+      throwIfAborted();
+      if (decision !== "continue") throw new DOMException("Avvio Upscaler remoto annullato", "AbortError");
+      if (!preflight.reachableEndpoints.length) {
+        throw new Error("Nessun endpoint remoto è raggiungibile: riavvia almeno un Colab e riprova.");
+      }
+      effectiveSettings = settingsWithReachableRemoteEndpoints(
+        effectiveSettings, preflight.reachableEndpoints,
+      );
+      reportUpscalerDiagnostic("remote-endpoints-skipped", {
+        reachable: preflight.reachableEndpoints,
+        skipped: preflight.failures.map((failure) => failure.url),
+      });
+    }
+  }
+  const activeJobs = await activeUpscalerVideoJobs(options.signal);
+  throwIfAborted();
+  if (activeJobs.length) {
+    const active = activeJobs[0]!;
+    throw new Error(`È già attivo il job ${active.id}${active.sourceName ? ` (${active.sourceName})` : ""}: ${active.phaseLabel}. Annullalo oppure attendi il completamento; il video non è stato copiato nuovamente.`);
+  }
+  if (!usesRemoteUpscaler(effectiveSettings) && effectiveSettings.model !== "canvas") await prepareModel(effectiveSettings.model, (model) => options.onStatus({
     id: "model", phase: "queued", phaseLabel: model.phase === "download" ? `Download modello · ${Math.round(model.progress * 100)}%` : "Preparazione modello AI",
     progress: Math.min(.015, model.progress * .015), currentFrame: 0, totalFrames: 0,
     tempDirectory: health.videoTempDirectory ?? "temp/upscaler", originalFramesDirectory: "", upscaledFramesDirectory: ""
@@ -206,7 +373,7 @@ export async function generatePythonUpscaledVideo(options: {
   throwIfAborted();
   if (!source.size) throw new Error("Il file video sorgente è vuoto o non è più disponibile. Ricaricalo e riprova.");
   reportUpscalerDiagnostic("source-ready", { sourceName: options.sourceName, bytes: source.size, mimeType: source.type, directFile: Boolean(options.sourceBlob) });
-  const form = buildUpscalerVideoForm(source, options.sourceName, options.settings, options.quality, clientId, options.checkpointPolicy ?? "restart");
+  const form = buildUpscalerVideoForm(source, options.sourceName, effectiveSettings, options.quality, clientId, options.checkpointPolicy ?? "restart");
   throwIfAborted();
   reportUpscalerDiagnostic("upload-start", { bytes: source.size, endpoint: "/upscale/video/jobs" });
   let status: PythonVideoUpscaleStatus | undefined;
@@ -217,8 +384,8 @@ export async function generatePythonUpscaledVideo(options: {
   options.signal.addEventListener("abort", cancelRemote, { once: true });
   try {
     status = await uploadVideoJob(form, options.signal, (uploadProgress) => options.onStatus({
-      id: "upload", phase: "queued", phaseLabel: usesRemoteUpscaler(options.settings) ? "Verifica sorgente e checkpoint remoti" : "Copia del video nel job locale", progress: uploadProgress * .02,
-      currentFrame: 0, totalFrames: 0, tempDirectory: usesRemoteUpscaler(options.settings) ? health.remoteVideoDirectory ?? ".upscaler-cache/remote-video-jobs" : health.videoTempDirectory ?? "temp/upscaler",
+      id: "upload", phase: "queued", phaseLabel: usesRemoteUpscaler(effectiveSettings) ? "Verifica sorgente e checkpoint remoti" : "Copia del video nel job locale", progress: uploadProgress * .02,
+      currentFrame: 0, totalFrames: 0, tempDirectory: usesRemoteUpscaler(effectiveSettings) ? health.remoteVideoDirectory ?? ".upscaler-cache/remote-video-jobs" : health.videoTempDirectory ?? "temp/upscaler",
       originalFramesDirectory: "", upscaledFramesDirectory: "", uploadProgress
     }));
     reportUpscalerDiagnostic(status.remote && status.currentFrame > 0 ? "remote-job-resumed" : "job-created", { jobId: status.id, phase: status.phase, tempDirectory: status.tempDirectory, completedFrames: status.currentFrame });

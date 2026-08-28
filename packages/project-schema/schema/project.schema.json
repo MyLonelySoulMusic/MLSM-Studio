@@ -12,7 +12,7 @@
     "canvas": { "$ref": "#/$defs/canvas" },
     "analysis": { "$ref": "#/$defs/analysis" },
     "events": { "type": "array", "items": { "$ref": "#/$defs/musicEvent" } },
-    "animation": { "type": "object", "additionalProperties": true, "required": ["modeId", "baseObjectTypes"], "properties": { "modeId": { "type": "string", "minLength": 1 }, "baseObjectTypes": { "type": "array", "minItems": 1, "items": { "enum": ["drum", "kick", "snare", "cymbal", "piano", "guitar", "strings", "peg", "platform", "block", "spring", "pebble"] } }, "newYorkStreets": { "type": "object", "additionalProperties": true }, "portraitLandscape": { "$ref": "#/$defs/portraitLandscape" }, "backgroundAuto": { "$ref": "#/$defs/backgroundAuto" }, "upscaler": { "$ref": "#/$defs/upscaler" }, "frameBooster": { "$ref": "#/$defs/frameBooster" }, "songPlayer": { "$ref": "#/$defs/songPlayer" }, "cassetteDesk": { "$ref": "#/$defs/cassetteDesk" } } },
+    "animation": { "type": "object", "additionalProperties": true, "required": ["modeId", "baseObjectTypes"], "properties": { "modeId": { "type": "string", "minLength": 1 }, "baseObjectTypes": { "type": "array", "minItems": 1, "items": { "enum": ["drum", "kick", "snare", "cymbal", "piano", "guitar", "strings", "peg", "platform", "block", "spring", "pebble"] } }, "newYorkStreets": { "type": "object", "additionalProperties": true }, "portraitLandscape": { "$ref": "#/$defs/portraitLandscape" }, "commentsInvasion": { "$ref": "#/$defs/commentsInvasion" }, "backgroundAuto": { "$ref": "#/$defs/backgroundAuto" }, "upscaler": { "$ref": "#/$defs/upscaler" }, "frameBooster": { "$ref": "#/$defs/frameBooster" }, "songPlayer": { "$ref": "#/$defs/songPlayer" }, "cassetteDesk": { "$ref": "#/$defs/cassetteDesk" } } },
     "ball": { "$ref": "#/$defs/ball" },
     "objects": { "type": "array", "items": { "$ref": "#/$defs/sceneObject" } },
     "trajectorySegments": { "type": "array", "items": { "$ref": "#/$defs/trajectorySegment" } },
@@ -179,10 +179,12 @@
       "properties": { "remote": { "$ref": "#/$defs/upscalerRemote" } }
     },
     "upscalerRemote": {
-      "type": "object", "additionalProperties": false, "required": ["enabled", "endpoints", "model", "frameRetries"],
+      "type": "object", "additionalProperties": false, "required": ["enabled", "endpoints", "model", "frameRetries", "segmentFrames", "outputFps"],
       "properties": {
         "enabled": { "type": "boolean" }, "model": { "type": "string", "maxLength": 200 },
         "frameRetries": { "type": "integer", "minimum": 0, "maximum": 6 },
+        "segmentFrames": { "type": "integer", "minimum": 1, "maximum": 5000 },
+        "outputFps": { "type": ["number", "null"], "minimum": 1, "maximum": 480 },
         "endpoints": { "type": "array", "maxItems": 16, "items": { "$ref": "#/$defs/upscalerRemoteEndpoint" } }
       }
     },
@@ -190,11 +192,26 @@
       "type": "object", "additionalProperties": false, "required": ["id", "label", "url", "enabled"],
       "properties": { "id": { "$ref": "#/$defs/nonEmptyString" }, "label": { "type": "string", "maxLength": 100 }, "url": { "type": "string", "format": "uri", "maxLength": 2048 }, "enabled": { "type": "boolean" } }
     },
+    "commentsInvasion": {
+      "type": "object", "additionalProperties": false,
+      "required": ["videoUrl", "videoName", "videoWidth", "videoHeight", "videoHasAudio", "maxVisible", "commentScale", "intervalSeconds", "initialDelaySeconds", "impactDurationSeconds", "impactIntensity", "rotationDegrees", "holdDurationSeconds", "exitDurationSeconds", "exitAnimation", "videoFit", "backgroundColor", "safeArea"],
+      "properties": {
+        "videoUrl": { "type": ["string", "null"] }, "videoName": { "type": "string", "maxLength": 500 },
+        "videoWidth": { "type": "integer", "minimum": 0 }, "videoHeight": { "type": "integer", "minimum": 0 }, "videoHasAudio": { "type": "boolean" },
+        "maxVisible": { "type": "integer", "minimum": 1, "maximum": 20 }, "commentScale": { "type": "number", "minimum": 0.1, "maximum": 0.8 },
+        "intervalSeconds": { "type": "number", "minimum": 0.15, "maximum": 30 }, "initialDelaySeconds": { "type": "number", "minimum": 0, "maximum": 60 },
+        "impactDurationSeconds": { "type": "number", "minimum": 0.08, "maximum": 2 }, "impactIntensity": { "type": "number", "minimum": 0.25, "maximum": 2 },
+        "holdDurationSeconds": { "type": "number", "minimum": 0.25, "maximum": 30 }, "exitDurationSeconds": { "type": "number", "minimum": 0.08, "maximum": 3 },
+        "exitAnimation": { "enum": ["fade", "shrink", "slide-up", "slide-side", "spin"] },
+        "rotationDegrees": { "type": "number", "minimum": 0, "maximum": 20 }, "videoFit": { "enum": ["contain", "cover"] },
+        "backgroundColor": { "type": "string" }, "safeArea": { "type": "number", "minimum": 0, "maximum": 0.15 }
+      }
+    },
     "frameBooster": {
       "type": "object", "additionalProperties": false,
       "properties": {
         "sourceUrl": { "type": ["string", "null"] }, "sourceName": { "type": "string", "maxLength": 500 }, "sourceWidth": { "type": "integer", "minimum": 0 }, "sourceHeight": { "type": "integer", "minimum": 0 }, "sourceDurationSeconds": { "type": "number", "minimum": 0 }, "sourceFps": { "type": ["number", "null"], "exclusiveMinimum": 0 }, "sourceFrameCount": { "type": ["integer", "null"], "minimum": 0 }, "sourceHasAudio": { "type": "boolean" },
-        "method": { "enum": ["rife", "motion", "blend"] }, "targetMode": { "enum": ["multiplier", "fps"] }, "targetMultiplier": { "enum": [2, 3, 4, 5] }, "targetFps": { "type": "number", "exclusiveMinimum": 0, "maximum": 480 }, "device": { "enum": ["auto", "mps", "cuda", "cpu"] }, "rifeModel": { "enum": ["rife-v4.25", "rife-v4.26"] }, "scale": { "enum": [0.5, 1, 2] }, "precision": { "enum": ["auto", "fp32", "fp16"] }, "sceneCut": { "type": "boolean" }, "quality": { "enum": ["balanced", "high"] }, "lastOutput": { "type": ["object", "null"] }
+        "method": { "enum": ["motion", "motion-obmc", "blend"] }, "targetMode": { "enum": ["multiplier", "fps"] }, "targetMultiplier": { "enum": [2, 3, 4, 5] }, "targetFps": { "type": "number", "exclusiveMinimum": 0, "maximum": 480 }, "scale": { "enum": [0.5, 1, 2] }, "sceneCut": { "type": "boolean" }, "quality": { "enum": ["balanced", "high"] }, "lastOutput": { "type": ["object", "null"] }
       }
     },
     "cassetteDesk": {

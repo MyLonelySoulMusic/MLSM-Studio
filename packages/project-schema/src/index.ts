@@ -104,6 +104,33 @@ const portraitLandscapeSchema = z.object({
   sideImageAdjustments: z.object({ brightness: z.number().min(.2).max(2), exposure: z.number().min(-1).max(1), contrast: z.number().min(.2).max(2), saturation: z.number().min(0).max(2.5), temperature: z.number().min(-1).max(1), blur: z.number().min(0).max(12) }).strict().default(defaultPortraitLandscape.sideImageAdjustments),
   effectIntensity: z.number().min(.1).max(2.5).default(defaultPortraitLandscape.effectIntensity)
 }).strict();
+const defaultCommentsInvasion = {
+  videoUrl: null, videoName: "", videoWidth: 0, videoHeight: 0, videoHasAudio: false,
+  maxVisible: 5, commentScale: .34, intervalSeconds: 1.25, initialDelaySeconds: .6,
+  impactDurationSeconds: .34, impactIntensity: 1, rotationDegrees: 6,
+  holdDurationSeconds: 5, exitDurationSeconds: .45, exitAnimation: "fade" as const,
+  videoFit: "contain" as const, backgroundColor: "#050507", safeArea: .045
+};
+const commentsInvasionSchema = z.object({
+  videoUrl: z.string().nullable().default(defaultCommentsInvasion.videoUrl),
+  videoName: z.string().max(500).default(defaultCommentsInvasion.videoName),
+  videoWidth: z.number().int().nonnegative().default(defaultCommentsInvasion.videoWidth),
+  videoHeight: z.number().int().nonnegative().default(defaultCommentsInvasion.videoHeight),
+  videoHasAudio: z.boolean().default(defaultCommentsInvasion.videoHasAudio),
+  maxVisible: z.number().int().min(1).max(20).default(defaultCommentsInvasion.maxVisible),
+  commentScale: z.number().min(.1).max(.8).default(defaultCommentsInvasion.commentScale),
+  intervalSeconds: z.number().min(.15).max(30).default(defaultCommentsInvasion.intervalSeconds),
+  initialDelaySeconds: z.number().min(0).max(60).default(defaultCommentsInvasion.initialDelaySeconds),
+  impactDurationSeconds: z.number().min(.08).max(2).default(defaultCommentsInvasion.impactDurationSeconds),
+  impactIntensity: z.number().min(.25).max(2).default(defaultCommentsInvasion.impactIntensity),
+  rotationDegrees: z.number().min(0).max(20).default(defaultCommentsInvasion.rotationDegrees),
+  holdDurationSeconds: z.number().min(.25).max(30).default(defaultCommentsInvasion.holdDurationSeconds),
+  exitDurationSeconds: z.number().min(.08).max(3).default(defaultCommentsInvasion.exitDurationSeconds),
+  exitAnimation: z.enum(["fade", "shrink", "slide-up", "slide-side", "spin"]).default(defaultCommentsInvasion.exitAnimation),
+  videoFit: z.enum(["contain", "cover"]).default(defaultCommentsInvasion.videoFit),
+  backgroundColor: z.string().default(defaultCommentsInvasion.backgroundColor),
+  safeArea: z.number().min(0).max(.15).default(defaultCommentsInvasion.safeArea)
+}).strict();
 const teddyWalkSchema = z.object({
   coverImageUrl: z.string().nullable(), furColor: z.string(), patchColor: z.string(), accentColor: z.string(), roadColor: z.string(),
   walkIntensity: z.number().min(.1).max(3), pulseIntensity: z.number().min(0).max(2), danceEnabled: z.boolean().default(false)
@@ -316,7 +343,14 @@ const staticWatermarkSchema = z.object({
 const defaultUpscaler = {
   sourceUrl: null, sourceName: "", sourceKind: "image" as const, sourceWidth: 0, sourceHeight: 0, durationSeconds: 0,
   model: "canvas" as const, backend: "auto" as const, tileSize: 256, tta: false,
-  remote: { enabled: false, endpoints: [] as Array<{ id: string; label: string; url: string; enabled: boolean }>, model: "", frameRetries: 2 },
+  remote: {
+    enabled: false,
+    endpoints: [] as Array<{ id: string; label: string; url: string; enabled: boolean }>,
+    model: "",
+    frameRetries: 2,
+    segmentFrames: 100,
+    outputFps: null as number | null
+  },
   scale: 4, finalWidth: 3840, finalHeight: 2160, lockAspectRatio: true,
   comparisonMode: "split" as const, comparisonPosition: .5, originalBlend: 0,
   adjustments: { exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, saturation: 0, vibrance: 0, temperature: 0, tint: 0, sharpness: 12, denoise: 0 }
@@ -338,7 +372,9 @@ const upscalerSchema = z.object({
       id: z.string().min(1).max(100), label: z.string().max(100), url: z.string().url().max(2048), enabled: z.boolean()
     }).strict()).max(16).default(defaultUpscaler.remote.endpoints),
     model: z.string().max(200).default(defaultUpscaler.remote.model),
-    frameRetries: z.number().int().min(0).max(6).default(defaultUpscaler.remote.frameRetries)
+    frameRetries: z.number().int().min(0).max(6).default(defaultUpscaler.remote.frameRetries),
+    segmentFrames: z.number().int().min(1).max(5000).default(defaultUpscaler.remote.segmentFrames),
+    outputFps: z.number().min(1).max(480).nullable().default(defaultUpscaler.remote.outputFps)
   }).strict().default(defaultUpscaler.remote),
   scale: z.number().min(1).max(4).default(defaultUpscaler.scale),
   finalWidth: z.number().int().min(64).max(16384).default(defaultUpscaler.finalWidth),
@@ -362,19 +398,24 @@ const defaultFrameBooster = {
   sourceFps: null,
   sourceFrameCount: null,
   sourceHasAudio: false,
-  method: "rife" as const,
+  // Frame Booster standalone uses only deterministic FFmpeg paths.
+  method: "motion" as const,
   targetMode: "multiplier" as const,
   targetMultiplier: 2 as const,
   targetFps: 60,
-  device: "auto" as const,
-  rifeModel: "rife-v4.26" as const,
   scale: 1 as const,
-  precision: "auto" as const,
   sceneCut: true,
   quality: "balanced" as const,
   lastOutput: null
 };
-const frameBoosterSchema = z.object({
+const frameBoosterSchema = z.preprocess((value) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const legacy = { ...(value as Record<string, unknown>) };
+  delete legacy.device;
+  delete legacy.rifeModel;
+  delete legacy.precision;
+  return { ...legacy, method: legacy.method === "rife" ? "motion" : legacy.method };
+}, z.object({
   sourceUrl: z.string().nullable().default(defaultFrameBooster.sourceUrl),
   sourceName: z.string().max(500).default(defaultFrameBooster.sourceName),
   sourceWidth: z.number().int().nonnegative().default(defaultFrameBooster.sourceWidth),
@@ -383,16 +424,11 @@ const frameBoosterSchema = z.object({
   sourceFps: z.number().positive().nullable().default(defaultFrameBooster.sourceFps),
   sourceFrameCount: z.number().int().nonnegative().nullable().default(defaultFrameBooster.sourceFrameCount),
   sourceHasAudio: z.boolean().default(defaultFrameBooster.sourceHasAudio),
-  method: z.enum(["rife", "motion", "blend"]).default(defaultFrameBooster.method),
+  method: z.enum(["motion", "motion-obmc", "blend"]).default(defaultFrameBooster.method),
   targetMode: z.enum(["multiplier", "fps"]).default(defaultFrameBooster.targetMode),
   targetMultiplier: z.union([z.literal(2), z.literal(3), z.literal(4), z.literal(5)]).default(defaultFrameBooster.targetMultiplier),
   targetFps: z.number().positive().max(480).default(defaultFrameBooster.targetFps),
-  device: z.enum(["auto", "mps", "cuda", "cpu"]).default(defaultFrameBooster.device),
-  // Accept the short-lived pre-release value, but always migrate it to the
-  // first model backed by a pinned, checksummed upstream artifact.
-  rifeModel: z.enum(["rife-v4.25", "rife-v4.26"]).transform(() => "rife-v4.26" as const).default(defaultFrameBooster.rifeModel),
   scale: z.union([z.literal(.5), z.literal(1), z.literal(2)]).default(defaultFrameBooster.scale),
-  precision: z.enum(["auto", "fp32", "fp16"]).default(defaultFrameBooster.precision),
   sceneCut: z.boolean().default(defaultFrameBooster.sceneCut),
   quality: z.enum(["balanced", "high"]).default(defaultFrameBooster.quality),
   lastOutput: z.object({
@@ -400,7 +436,7 @@ const frameBoosterSchema = z.object({
     durationSeconds: z.number().nonnegative(), width: z.number().int().nonnegative(), height: z.number().int().nonnegative(),
     hasAudio: z.boolean(), backend: z.string().max(200)
   }).strict().nullable().default(defaultFrameBooster.lastOutput)
-}).strict();
+}).strict());
 // Le modalità di fusione corrispondono uno a uno a `globalCompositeOperation`.
 // L’export offline le compone esattamente; la preview DOM conserva la stessa
 // semantica e privilegia la fluidità dei decoder hardware durante il montaggio.
@@ -726,7 +762,7 @@ export const projectSchema = z.object({
   canvas: z.object({ aspectRatio: z.enum(["9:16", "16:9", "1:1", "4:5", "custom"]), previewWidth: z.number().int().positive(), previewHeight: z.number().int().positive(), previewFps: fpsSchema, exportWidth: z.number().int().positive(), exportHeight: z.number().int().positive(), exportFps: fpsSchema }).strict(),
   analysis: z.object({ analyzerVersion: z.string(), cacheKey: z.string(), globalBpm: z.number().positive().nullable(), latencyCompensationMs: z.number(), waveform: z.array(z.number().min(-1).max(1)), localTempo: z.array(z.unknown()).default([]), segments: z.array(z.unknown()).default([]) }).strict(),
   events: z.array(musicEventSchema),
-  animation: z.object({ modeId: z.string().min(1), baseObjectTypes: z.array(z.enum(["drum", "kick", "snare", "cymbal", "piano", "guitar", "strings", "peg", "platform", "block", "spring", "pebble"])).min(1), newYorkStreets: newYorkStreetsSchema.default(defaultNewYorkStreets), coverSphere: coverSphereSchema.default(defaultCoverSphere), stereoUnfold: stereoUnfoldSchema.default(defaultStereoUnfold), walkingCube: walkingCubeSchema.default(defaultWalkingCube), portraitLandscape: portraitLandscapeSchema.default(defaultPortraitLandscape), teddyWalk: teddyWalkSchema.default(defaultTeddyWalk), teddySing: teddySingSchema.default(defaultTeddySing), proSubtitles: proSubtitlesSchema.default(defaultProSubtitles), pixelsSub: pixelsSubSchema.default(defaultPixelsSub), backgroundAuto: backgroundAutoSchema.default(defaultBackgroundAuto), staticWatermark: staticWatermarkSchema.default(defaultStaticWatermark), upscaler: upscalerSchema.default(defaultUpscaler), frameBooster: frameBoosterSchema.default(defaultFrameBooster), videoEditor: videoEditorSchema.default(defaultVideoEditor), songPlayer: songPlayerSchema.default(defaultSongPlayer), cassetteDesk: cassetteDeskSchema.default(defaultCassetteDesk) }).default({ modeId: "instrumentalFalling", baseObjectTypes: ["kick", "snare", "drum", "cymbal"], newYorkStreets: defaultNewYorkStreets, coverSphere: defaultCoverSphere, stereoUnfold: defaultStereoUnfold, walkingCube: defaultWalkingCube, portraitLandscape: defaultPortraitLandscape, teddyWalk: defaultTeddyWalk, teddySing: defaultTeddySing, proSubtitles: defaultProSubtitles, pixelsSub: defaultPixelsSub, backgroundAuto: defaultBackgroundAuto, staticWatermark: defaultStaticWatermark, upscaler: defaultUpscaler, frameBooster: defaultFrameBooster, videoEditor: defaultVideoEditor, songPlayer: defaultSongPlayer, cassetteDesk: defaultCassetteDesk }),
+  animation: z.object({ modeId: z.string().min(1), baseObjectTypes: z.array(z.enum(["drum", "kick", "snare", "cymbal", "piano", "guitar", "strings", "peg", "platform", "block", "spring", "pebble"])).min(1), newYorkStreets: newYorkStreetsSchema.default(defaultNewYorkStreets), coverSphere: coverSphereSchema.default(defaultCoverSphere), stereoUnfold: stereoUnfoldSchema.default(defaultStereoUnfold), walkingCube: walkingCubeSchema.default(defaultWalkingCube), portraitLandscape: portraitLandscapeSchema.default(defaultPortraitLandscape), commentsInvasion: commentsInvasionSchema.default(defaultCommentsInvasion), teddyWalk: teddyWalkSchema.default(defaultTeddyWalk), teddySing: teddySingSchema.default(defaultTeddySing), proSubtitles: proSubtitlesSchema.default(defaultProSubtitles), pixelsSub: pixelsSubSchema.default(defaultPixelsSub), backgroundAuto: backgroundAutoSchema.default(defaultBackgroundAuto), staticWatermark: staticWatermarkSchema.default(defaultStaticWatermark), upscaler: upscalerSchema.default(defaultUpscaler), frameBooster: frameBoosterSchema.default(defaultFrameBooster), videoEditor: videoEditorSchema.default(defaultVideoEditor), songPlayer: songPlayerSchema.default(defaultSongPlayer), cassetteDesk: cassetteDeskSchema.default(defaultCassetteDesk) }).default({ modeId: "instrumentalFalling", baseObjectTypes: ["kick", "snare", "drum", "cymbal"], newYorkStreets: defaultNewYorkStreets, coverSphere: defaultCoverSphere, stereoUnfold: defaultStereoUnfold, walkingCube: defaultWalkingCube, portraitLandscape: defaultPortraitLandscape, commentsInvasion: defaultCommentsInvasion, teddyWalk: defaultTeddyWalk, teddySing: defaultTeddySing, proSubtitles: defaultProSubtitles, pixelsSub: defaultPixelsSub, backgroundAuto: defaultBackgroundAuto, staticWatermark: defaultStaticWatermark, upscaler: defaultUpscaler, frameBooster: defaultFrameBooster, videoEditor: defaultVideoEditor, songPlayer: defaultSongPlayer, cassetteDesk: defaultCassetteDesk }),
   ball: z.object({ radius: z.number().positive(), visualMass: z.number().positive(), material: materialSchema, spinRate: z.number(), impactDeformation: z.number().min(0).max(1), trailEnabled: z.boolean(), innerColor: z.string().default("#63f0d1"), innerShape: z.enum(["orb", "icosahedron", "torusKnot"]).default("icosahedron"), innerImageUrl: z.string().nullable().default(null), endRevealEnabled: z.boolean().default(false), revealMode: z.enum(["end", "time"]).default("end"), revealTimeSeconds: z.number().nonnegative().default(0), revealHoldSeconds: z.number().min(0).max(30).default(2) }).strict(),
   objects: z.array(sceneObjectSchema), trajectorySegments: z.array(trajectorySegmentSchema),
   camera: z.object({ mode: z.enum(["fixed", "verticalTracking", "fullTracking", "smoothFollow", "cinematic", "keyframed", "autoFraming", "spline"]), position: vector3Schema, target: vector3Schema, fieldOfView: z.number().positive().max(179), damping: z.number().min(0).max(1), lookAhead: z.number().nonnegative() }).strict(),
@@ -804,6 +840,7 @@ export type SongPlayerAsset = SongPlayerSettings["assets"][number];
 export type SongPlayerMatch = SongPlayerSettings["match"];
 export type CassetteDeskSettings = RhythmBallProject["animation"]["cassetteDesk"];
 export type CassetteDeskWindowEnvironment = CassetteDeskSettings["windowEnvironment"];
+export type CommentsInvasionSettings = RhythmBallProject["animation"]["commentsInvasion"];
 
 export function parseProject(input: unknown): RhythmBallProject {
   if (!input || typeof input !== "object" || Array.isArray(input)) return projectSchema.parse(input);
@@ -899,7 +936,7 @@ export function parseProject(input: unknown): RhythmBallProject {
     : migratedProSubtitles;
   const currentAnimation = { ...legacyAnimation }; delete currentAnimation.addSubtitles; delete currentAnimation.pixelArt;
   const migratedBaseObjectTypes = legacyAnimation.modeId === "pixelArt" ? ["kick", "snare", "drum", "cymbal"] : currentAnimation.baseObjectTypes;
-  return projectSchema.parse({ ...candidate, animation: { ...currentAnimation, modeId: migratedModeId, baseObjectTypes: migratedBaseObjectTypes, teddyWalk: migratedTeddy, proSubtitles: migratedLegacySubtitleSource, pixelsSub: legacyAnimation.pixelsSub ?? defaultPixelsSub, staticWatermark: migratedStaticWatermark, videoEditor: migratedVideoEditor, songPlayer: legacyAnimation.songPlayer ?? defaultSongPlayer, cassetteDesk: legacyAnimation.cassetteDesk ?? defaultCassetteDesk } });
+  return projectSchema.parse({ ...candidate, animation: { ...currentAnimation, modeId: migratedModeId, baseObjectTypes: migratedBaseObjectTypes, teddyWalk: migratedTeddy, proSubtitles: migratedLegacySubtitleSource, pixelsSub: legacyAnimation.pixelsSub ?? defaultPixelsSub, staticWatermark: migratedStaticWatermark, videoEditor: migratedVideoEditor, songPlayer: legacyAnimation.songPlayer ?? defaultSongPlayer, cassetteDesk: legacyAnimation.cassetteDesk ?? defaultCassetteDesk, commentsInvasion: legacyAnimation.commentsInvasion ?? defaultCommentsInvasion } });
 }
 
 export function createProject(name = "Progetto senza titolo", now = new Date()): RhythmBallProject {
@@ -911,7 +948,7 @@ export function createProject(name = "Progetto senza titolo", now = new Date()):
     canvas: { aspectRatio: "9:16", previewWidth: 540, previewHeight: 960, previewFps: { numerator: 30, denominator: 1 }, exportWidth: 1080, exportHeight: 1920, exportFps: { numerator: 60, denominator: 1 } },
     analysis: { analyzerVersion: "", cacheKey: "", globalBpm: null, latencyCompensationMs: 0, waveform: [], localTempo: [], segments: [] },
     events: [],
-    animation: { modeId: "instrumentalFalling", baseObjectTypes: ["kick", "snare", "drum", "cymbal"], newYorkStreets: defaultNewYorkStreets, coverSphere: defaultCoverSphere, stereoUnfold: defaultStereoUnfold, walkingCube: defaultWalkingCube, portraitLandscape: defaultPortraitLandscape, teddyWalk: defaultTeddyWalk, teddySing: defaultTeddySing, proSubtitles: defaultProSubtitles, pixelsSub: defaultPixelsSub, backgroundAuto: defaultBackgroundAuto, staticWatermark: defaultStaticWatermark, upscaler: defaultUpscaler, frameBooster: defaultFrameBooster, videoEditor: defaultVideoEditor, songPlayer: defaultSongPlayer, cassetteDesk: defaultCassetteDesk },
+    animation: { modeId: "instrumentalFalling", baseObjectTypes: ["kick", "snare", "drum", "cymbal"], newYorkStreets: defaultNewYorkStreets, coverSphere: defaultCoverSphere, stereoUnfold: defaultStereoUnfold, walkingCube: defaultWalkingCube, portraitLandscape: defaultPortraitLandscape, commentsInvasion: defaultCommentsInvasion, teddyWalk: defaultTeddyWalk, teddySing: defaultTeddySing, proSubtitles: defaultProSubtitles, pixelsSub: defaultPixelsSub, backgroundAuto: defaultBackgroundAuto, staticWatermark: defaultStaticWatermark, upscaler: defaultUpscaler, frameBooster: defaultFrameBooster, videoEditor: defaultVideoEditor, songPlayer: defaultSongPlayer, cassetteDesk: defaultCassetteDesk },
     ball: { radius: 0.45, visualMass: 1, material: { color: "#dffeff", palette: ["#63f0d1", "#7857ff"], roughness: 0.05, metalness: 0, emission: 0.2, opacity: .32, textureAssetId: null }, spinRate: 1, impactDeformation: 0.2, trailEnabled: true, innerColor: "#63f0d1", innerShape: "icosahedron", innerImageUrl: null, endRevealEnabled: false, revealMode: "end", revealTimeSeconds: 0, revealHoldSeconds: 2 },
     objects: [], trajectorySegments: [],
     camera: { mode: "smoothFollow", position: { x: 0, y: 2, z: 10 }, target: { x: 0, y: 2, z: 0 }, fieldOfView: 45, damping: 0.12, lookAhead: 1.5 },

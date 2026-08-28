@@ -9,19 +9,18 @@ export interface RemoteUpscalerModel { name: string; scale: number; description:
 export interface RemoteUpscalerEndpointStatus { url: string; ok: boolean; models: RemoteUpscalerModel[]; error?: string }
 export interface RemoteUpscalerCatalog { ok: boolean; endpoints: RemoteUpscalerEndpointStatus[]; models: RemoteUpscalerModel[]; defaultModel: string; transport?: "coordinator" | "direct" }
 
-interface GradioCatalogEnvelope {
-  data?: Array<{
-    ok?: boolean;
-    default_model?: string;
-    models?: RemoteUpscalerModel[];
-  }>;
+interface GradioCatalog {
+  ok?: boolean;
+  default_model?: string;
+  models?: RemoteUpscalerModel[];
 }
+interface GradioCatalogEnvelope { data?: GradioCatalog[] }
 
 interface GradioQueuedEnvelope { event_id?: string }
 interface GradioUpscaleResult { ok?: boolean; image?: string; error?: string }
 
 export function normalizeRemoteUpscalerEndpoint(value: string): string {
-  return value.trim().replace(/\/(?:gradio_api\/)?(?:api\/upscale_models|call\/upscale_image)\/?$/i, "").replace(/\/$/, "");
+  return value.trim().replace(/\/(?:gradio_api\/)?(?:api\/upscale_models|call\/(?:upscale_models|upscale_image|upscale_video_chunk))\/?$/i, "").replace(/\/$/, "");
 }
 
 export function activeRemoteUpscalerEndpoints(settings: Settings): string[] {
@@ -29,7 +28,10 @@ export function activeRemoteUpscalerEndpoints(settings: Settings): string[] {
 }
 
 export function usesRemoteUpscaler(settings: Settings): boolean {
-  return settings.remote.enabled && Boolean(settings.remote.model) && activeRemoteUpscalerEndpoints(settings).length > 0;
+  // Enabling the remote coordinator is an explicit routing decision. A missing
+  // model must surface as a configuration error; it must never silently fall
+  // through to the local Canvas/PyTorch video path.
+  return settings.remote.enabled && activeRemoteUpscalerEndpoints(settings).length > 0;
 }
 
 export function shouldGenerateUpscalerAi(settings: Settings): boolean {
@@ -52,6 +54,33 @@ async function directCatalogForEndpoint(endpoint: string, signal?: AbortSignal):
 }> {
   const normalized = normalizeRemoteUpscalerEndpoint(endpoint);
   const errors: string[] = [];
+  for (const path of ["/gradio_api/call/upscale_models", "/call/upscale_models"]) {
+    const aborted = abortError(signal); if (aborted) throw aborted;
+    try {
+      const submission = await fetch(`${normalized}${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ data: [] }),
+        ...(signal ? { signal } : {})
+      });
+      if (!submission.ok) throw new Error(await errorMessage(submission, `HTTP ${submission.status}`));
+      const queued = await submission.json() as GradioQueuedEnvelope;
+      if (!queued.event_id) throw new Error("Gradio non ha restituito event_id per il catalogo.");
+      const stream = await fetch(`${normalized}${path}/${encodeURIComponent(queued.event_id)}`, signal ? { signal } : undefined);
+      if (!stream.ok) throw new Error(await errorMessage(stream, `HTTP ${stream.status}`));
+      const catalog = parseGradioCompleteEvent(await stream.text())[0] as GradioCatalog | undefined;
+      if (!catalog?.ok || !Array.isArray(catalog.models) || !catalog.models.length) {
+        throw new Error("risposta catalogo non valida");
+      }
+      return {
+        status: { url: normalized, ok: true, models: catalog.models },
+        defaultModel: catalog.default_model ?? ""
+      };
+    } catch (reason) {
+      const aborted = abortError(signal); if (aborted) throw aborted;
+      errors.push(reason instanceof Error ? reason.message : String(reason));
+    }
+  }
   for (const path of ["/gradio_api/api/upscale_models", "/api/upscale_models"]) {
     const aborted = abortError(signal); if (aborted) throw aborted;
     try {
@@ -100,12 +129,12 @@ export async function discoverRemoteUpscalerModelsDirect(
     const details = statuses.map((item) => `${item.url}: ${item.error || "offline"}`).join(" | ");
     throw new Error(`Nessun endpoint Gradio ha risposto. ${details}`);
   }
-  const commonNames = healthy.slice(1).reduce(
-    (names, item) => new Set([...names].filter((name) => item.status.models.some((model) => model.name === name))),
-    new Set(healthy[0]?.status.models.map((model) => model.name) ?? [])
-  );
-  const models = healthy[0]?.status.models.filter((model) => commonNames.has(model.name)) ?? [];
-  const preferred = healthy.map((item) => item.defaultModel).find((name) => commonNames.has(name));
+  const modelsByName = new Map<string, RemoteUpscalerModel>();
+  for (const item of healthy) {
+    for (const model of item.status.models) if (!modelsByName.has(model.name)) modelsByName.set(model.name, model);
+  }
+  const models = [...modelsByName.values()];
+  const preferred = healthy.map((item) => item.defaultModel).find((name) => modelsByName.has(name));
   return {
     ok: true,
     endpoints: statuses,
@@ -125,7 +154,14 @@ export async function discoverRemoteUpscalerModels(endpoints: string[], signal?:
     const aborted = abortError(signal); if (aborted) throw aborted;
     return discoverRemoteUpscalerModelsDirect(endpoints, signal);
   }
-  if (!response.ok) throw new Error(await errorMessage(response, `Discovery remota fallita: HTTP ${response.status}.`));
+  if (!response.ok) {
+    const coordinatorError = await errorMessage(response, `Discovery remota fallita: HTTP ${response.status}.`);
+    try { return await discoverRemoteUpscalerModelsDirect(endpoints, signal); }
+    catch (reason) {
+      const aborted = abortError(signal); if (aborted) throw aborted;
+      throw new Error(`${coordinatorError} Verifica diretta: ${reason instanceof Error ? reason.message : String(reason)}`);
+    }
+  }
   const catalog = await response.json() as RemoteUpscalerCatalog;
   if (!Array.isArray(catalog.models) || !Array.isArray(catalog.endpoints)) throw new Error("Catalogo remoto non valido.");
   return { ...catalog, transport: "coordinator" };
@@ -154,7 +190,7 @@ function decodeDataUrl(value: string): Blob {
   return new Blob([decodeURIComponent(payload)], { type: mimeType });
 }
 
-function parseGradioEventStream(body: string): GradioUpscaleResult {
+function parseGradioCompleteEvent(body: string): unknown[] {
   let event = "";
   for (const line of body.split(/\r?\n/)) {
     if (line.startsWith("event:")) event = line.slice(6).trim();
@@ -163,11 +199,16 @@ function parseGradioEventStream(body: string): GradioUpscaleResult {
     if (event === "error") throw new Error(raw || "Il job Gradio ha restituito un errore.");
     if (event !== "complete") continue;
     const data = JSON.parse(raw) as unknown;
-    const result = Array.isArray(data) ? data[0] as GradioUpscaleResult | undefined : undefined;
-    if (!result?.ok || !result.image) throw new Error(result?.error || "Risultato Gradio non valido.");
-    return result;
+    if (!Array.isArray(data)) throw new Error("Risultato Gradio non valido.");
+    return data;
   }
   throw new Error("Lo stream Gradio è terminato senza un risultato.");
+}
+
+function parseGradioImageEventStream(body: string): GradioUpscaleResult {
+  const result = parseGradioCompleteEvent(body)[0] as GradioUpscaleResult | undefined;
+  if (!result?.ok || !result.image) throw new Error(result?.error || "Risultato Gradio non valido.");
+  return result;
 }
 
 export async function upscaleRemoteImageDirect(
@@ -193,7 +234,7 @@ export async function upscaleRemoteImageDirect(
       if (!queued.event_id) throw new Error("Gradio non ha restituito event_id.");
       const stream = await fetch(`${normalized}${path}/${encodeURIComponent(queued.event_id)}`, signal ? { signal } : undefined);
       if (!stream.ok) throw new Error(await errorMessage(stream, `HTTP ${stream.status}`));
-      return decodeDataUrl(parseGradioEventStream(await stream.text()).image ?? "");
+      return decodeDataUrl(parseGradioImageEventStream(await stream.text()).image ?? "");
     } catch (reason) {
       const aborted = abortError(signal); if (aborted) throw aborted;
       errors.push(reason instanceof Error ? reason.message : String(reason));

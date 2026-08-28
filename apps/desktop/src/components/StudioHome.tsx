@@ -14,7 +14,7 @@ const areaCopyKeys = {
   music: { label: "music", description: "musicDescription" }
 } as const;
 
-export type StudioAreaDestination = AnimationCategoryId | "longCatVideo";
+export type StudioAreaDestination = AnimationCategoryId;
 
 export function StudioHome({ onEnterArea }: { onEnterArea: (category: StudioAreaDestination) => void }) {
   const { language, theme, setLanguage, setTheme } = useUiPreferences(); const copy = uiCopy[language]; const setAnimationMode = useProjectStore((state) => state.setAnimationMode);
@@ -41,11 +41,6 @@ export function StudioHome({ onEnterArea }: { onEnterArea: (category: StudioArea
             <span className="studio-area-card__action">{copy.enterArea}<b>↗</b></span><i className="studio-area-card__shine" aria-hidden="true" />
           </button>;
         })}
-        <button className="studio-area-card area-longCatVideo" style={{ "--area-index": animationCategories.length } as CSSProperties} type="button" onClick={() => { resetWorkspaceForAreaEntry(); onEnterArea("longCatVideo"); }}>
-          <span className="studio-area-card__number">0{animationCategories.length + 1}</span><span className="studio-area-card__icon"><AreaIcon category="longCatVideo" /></span>
-          <span className="studio-area-card__copy"><small>3 {copy.creativeModes}</small><strong>LongCat Video</strong><em>{copy.longCatVideoDescription}</em></span>
-          <span className="studio-area-card__action">{copy.enterArea}<b>↗</b></span><i className="studio-area-card__shine" aria-hidden="true" />
-        </button>
       </section>
     </main>
     <footer className="studio-home__footer"><span>MLSM Studio · Creative production suite</span><span>Sound · Image · Video</span></footer>

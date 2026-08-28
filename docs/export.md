@@ -27,10 +27,11 @@ Nel pannello Upscaler, quando **Mantieni proporzioni** è attivo, importazione e
 - **Scene 3D e visualizer:** ricostruzione della scena al tempo di render, stessa camera e stesso percorso della preview.
 - **Circular Spectrum Auto Detector:** renderer Canvas2D canonico e deterministico condiviso con la preview; supporta cerchi associati a detection o posizionati manualmente, anche senza rilevamenti. Ricostruisce frame per frame anello radiale, spettro centrale, bande stereo L/R, Pro Subtitles clipped al cerchio e particelle secondo i toggle di ogni effetto, senza rieseguire il modello. Overlay diagnostici e il toggle **Show/Hide detected areas** restano esclusi dal file esportato.
 - **From 9:16 to 16:9:** compositor a livelli con video centrale, immagini laterali, cubo, spettro ed effetti.
+- **Comments Invasion:** ricostruzione deterministica dei timbri alla cadenza scelta; permanenza e animazione d’uscita usano lo stesso clock della preview, mantiene al massimo il numero configurato di screenshot, usa una cache immagini limitata al gruppo visibile e preserva la traccia audio originale del video.
 - **Pro Subtitles:** video completo oppure livello trasparente MOV ProRes 4444/WebM VP9 alpha quando il runtime lo supporta; sfondo pieno come fallback. Nel video completo risoluzione, rapporto e audio restano quelli della sorgente, mentre il frame rate è selezionabile (24, 25, 30, 50, 60 o 120 fps) e viene ricostruito offline. Un ultimo campione MP4 valido con durata dichiarata pari a zero viene mantenuto ricavandone la durata dalla cadenza reale. L'audit confronta poi i frame realmente composti con quelli riletti dal file finalizzato, senza contare un frame fantasma dovuto agli arrotondamenti della durata o a una coda audio AAC.
 - **Static Watermark Remover:** decodifica e correzione frame per frame.
 - **Upscaler video:** frame originali temporanei, elaborazione per frame/tile, ricostruzione audio/video. Nel percorso remoto la scelta tra ripresa dei checkpoint compatibili e ripartenza completa è esplicita per ogni job; il backend non riusa mai automaticamente la cache.
-- **Frame Booster standalone:** la stessa pipeline di interpolazione è disponibile anche fuori dal Video Editor per video singoli. Blend, Motion e RIFE producono un job cancellabile con avanzamento; il risultato viene accettato soltanto dopo l’audit di FPS, durata, numero frame, DAR/rotazione, dimensioni e audio della sorgente. Non viene applicato alcun fallback silenzioso.
+- **Frame Booster standalone:** la stessa pipeline di interpolazione è disponibile anche fuori dal Video Editor per video singoli. I tre metodi FFmpeg — Blend, Motion AOBMC e Motion OBMC bidirezionale — producono un job cancellabile con avanzamento; OBMC usa `minterpolate=fps=<target>:mi_mode=mci:mc_mode=obmc:me_mode=bidir`. Il risultato viene accettato soltanto dopo l’audit di FPS, durata, numero frame, DAR/rotazione, dimensioni e audio della sorgente. Non viene applicato alcun fallback silenzioso.
 - **Video Editor:** livelli, blend, correzione, effetti e mix audio dalla timeline; le immagini PNG/WebP mantengono l’alpha durante la composizione dei livelli. Le ombre delle immagini usano la silhouette alpha e gli stili Ombra morbida, Bagliore o Ombra lunga con gli stessi parametri della preview (colore, opacità, diffusione e, quando applicabile, distanza/direzione). Trasformazioni, fade e ordine delle tracce vengono applicati prima della composizione dell’ombra; il file MP4 finale viene consegnato come composizione opaca.
 
 Per il Video Editor l’export usa la stessa base temporale razionale e la stessa mappatura canonica half-open locale delle clip della preview, dell’audio e degli strumenti. Sono preservati i tagli frazionari e l’identità dei frame; automazioni e rampe di velocità vengono risolte offline con le curve salvate nel progetto. Il preserva-pitch DSP professionale non viene applicato a velocità diverse da 1× o a rampe: quando non è supportato il controllo viene disabilitato nell’interfaccia.
@@ -39,12 +40,44 @@ Se **Frame interpolation (optional)** è attivata, l’encoder crea e verifica p
 
 L’interpolazione viene eseguita come job remoto cancellabile: annullando l’export il job viene terminato e i suoi temporanei vengono rimossi anche in caso di errore di rete o di download. Il file interpolato viene accettato solo se la verifica conferma durata, FPS target e numero di frame atteso; se il servizio non è disponibile, fallisce o la verifica non passa, viene consegnato il file base già verificato con un avviso non bloccante. Disattivando l’opzione, il file mantiene esattamente gli FPS renderizzati.
 
-La modalità standalone Frame Booster usa lo stesso contratto e conserva inoltre
-audio, rapporto di visualizzazione e rotazione del video sorgente. Per RIFE la
-barra può essere indeterminata durante l’inferenza, perché il runtime non espone
-un conteggio affidabile dei frame; l’annullamento resta comunque effettivo.
+La modalità standalone Frame Booster usa lo stesso contratto con i soli metodi
+FFmpeg Motion e Blend e conserva inoltre audio, rapporto di visualizzazione e
+rotazione del video sorgente. Il
+risultato scaricato dal backend rimane l'artifact canonico della sessione:
+preview, **Salva video** ed Esporta lo riutilizzano senza lanciare un secondo
+job. Una modifica alla sorgente o ai parametri invalida esplicitamente tale
+artifact.
 
 ## Audio
+
+### Upscaler remoto a segmenti
+
+Per un video remoto MLSM non effettua più una richiesta Gradio per fotogramma.
+Prima dell'upload controlla contemporaneamente tutti gli endpoint attivi. Se solo
+alcuni non rispondono, mostra URL ed errore e chiede se continuare escludendoli
+dal job corrente; gli endpoint restano configurati per i tentativi successivi.
+Il job viene bloccato soltanto quando l'utente annulla oppure nessun endpoint è
+utilizzabile. Il sorgente viene suddiviso in segmenti MP4 configurabili (100
+frame per default, fino a 5000) con un solo passaggio FFmpeg in streaming, senza
+la precedente estrazione PNG e ricodifica intermedia; tutti i frame e gli FPS originali vengono
+mantenuti per default. Una conversione FPS viene effettuata e comunicata a
+Gradio soltanto quando l'utente abilita esplicitamente **Modifica frame rate**;
+ogni endpoint ne elabora uno alla volta, mentre gli endpoint lavorano in parallelo.
+Gli endpoint Video Editor API v4/v5 inviano eventi SSE a ogni frame: MLSM mostra per
+ciascun Colab segmento corrente, progresso, frame elaborati, velocità ed ETA senza
+aprire ulteriori upload o serializzare i worker. Le vecchie sessioni Colab continuano
+a funzionare con progresso indeterminato finché non vengono riavviate sul codice aggiornato.
+La versione API v5 usa un encoder H.264 di trasporto a bassa latenza e con thread
+CPU limitati, così la codifica del segmento non rallenta l'inferenza RealESRGAN.
+Gli MP4 risultanti restano nella cache del job e permettono la ripresa dopo
+un'interruzione. Solo dopo l'audit completo MLSM li ricostruisce nell'ordine
+originale, applica le regolazioni comuni ed effettua il mux dell'audio sorgente.
+Un annullamento rende immediatamente libero il coordinatore, sgancia le letture
+Gradio ancora bloccate e impedisce alle risposte tardive di riattivare il job.
+L'ammissione viene controllata prima della copia locale del sorgente.
+Il coordinatore ammette un solo job video locale per volta e limita esplicitamente
+i thread di estrazione/ricostruzione, evitando che due FFmpeg concorrenti saturino
+la CPU. Il limite non serializza i Colab del job attivo e non elimina fotogrammi.
 
 ### Cassette Desk
 

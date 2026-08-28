@@ -7,7 +7,7 @@ describe("remote upscaler client", () => {
 
   it("deduplica solo gli endpoint attivi e abilita AI anche col profilo Canvas locale", () => {
     const settings = createProject().animation.upscaler;
-    settings.remote = { enabled: true, model: "remote-x4", frameRetries: 2, endpoints: [
+    settings.remote = { ...settings.remote, enabled: true, model: "remote-x4", frameRetries: 2, endpoints: [
       { id: "a", label: "A", url: "https://a.gradio.live", enabled: true },
       { id: "b", label: "B", url: "https://a.gradio.live", enabled: true },
       { id: "c", label: "C", url: "https://c.gradio.live", enabled: false }
@@ -16,6 +16,9 @@ describe("remote upscaler client", () => {
     expect(usesRemoteUpscaler(settings)).toBe(true);
     expect(shouldGenerateUpscalerAi(settings)).toBe(true);
     expect(normalizeRemoteUpscalerEndpoint("https://a.gradio.live/gradio_api/call/upscale_image")).toBe("https://a.gradio.live");
+    expect(normalizeRemoteUpscalerEndpoint("https://a.gradio.live/gradio_api/call/upscale_models")).toBe("https://a.gradio.live");
+    settings.remote.model = "";
+    expect(usesRemoteUpscaler(settings)).toBe(true);
   });
 
   it("carica il catalogo attraverso il coordinatore locale", async () => {
@@ -33,11 +36,16 @@ describe("remote upscaler client", () => {
   it("interroga Gradio direttamente quando il coordinatore locale non risponde", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockRejectedValueOnce(new TypeError("Failed to fetch"))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [{
-        ok: true,
-        default_model: "RealESRGAN_x4plus",
-        models: [{ name: "RealESRGAN_x4plus", scale: 4, description: "photo", default: true }]
-      }] }), { status: 200 }));
+      .mockResolvedValueOnce(new Response(JSON.stringify({ event_id: "catalog-123" }), { status: 200 }))
+      .mockResolvedValueOnce(new Response([
+        "event: complete",
+        `data: ${JSON.stringify([{
+          ok: true,
+          default_model: "RealESRGAN_x4plus",
+          models: [{ name: "RealESRGAN_x4plus", scale: 4, description: "photo", default: true }]
+        }])}`,
+        ""
+      ].join("\n"), { status: 200, headers: { "Content-Type": "text/event-stream" } }));
 
     await expect(discoverRemoteUpscalerModels(["https://live.gradio.live/"])).resolves.toMatchObject({
       transport: "direct",
@@ -46,7 +54,8 @@ describe("remote upscaler client", () => {
     });
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       "http://127.0.0.1:8765/upscale/remote/catalog",
-      "https://live.gradio.live/gradio_api/api/upscale_models"
+      "https://live.gradio.live/gradio_api/call/upscale_models",
+      "https://live.gradio.live/gradio_api/call/upscale_models/catalog-123"
     ]);
   });
 

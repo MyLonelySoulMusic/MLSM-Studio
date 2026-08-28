@@ -61,8 +61,9 @@ def resolve_precision(device: str, requested: str) -> str:
 
 
 def _load_upstream_model(runtime_path: Path, device: str, precision: str) -> Any:
-    module_path = runtime_path / "RIFE_HDv3.py"
-    weights_path = runtime_path / "flownet.pkl"
+    model_path = runtime_path / "train_log" if (runtime_path / "train_log").is_dir() else runtime_path
+    module_path = model_path / "RIFE_HDv3.py"
+    weights_path = model_path / "flownet.pkl"
     if not module_path.is_file() or not weights_path.is_file():
         raise RuntimeError("Runtime Practical-RIFE incompleto.")
     # v4.x architecture modules import siblings (IFNet_HDv3, warplayer, ...)
@@ -100,7 +101,7 @@ def _load_upstream_model(runtime_path: Path, device: str, precision: str) -> Any
         if isinstance(grid_cache, dict):
             grid_cache.clear()
     model = module.Model()
-    model.load_model(str(runtime_path), -1)
+    model.load_model(str(model_path), -1)
     model.eval()
     dtype = torch.float16 if precision == "fp16" else torch.float32
     modules = []

@@ -87,6 +87,7 @@ interface ProjectState {
   setWalkingCubePalette: (colors: readonly string[]) => void;
   updatePortraitLandscape: (patch: Partial<RhythmBallProject["animation"]["portraitLandscape"]>) => void;
   setPortraitLandscapePalette: (colors: readonly string[]) => void;
+  updateCommentsInvasion: (patch: Partial<RhythmBallProject["animation"]["commentsInvasion"]>) => void;
   updateTeddyWalk: (patch: Partial<RhythmBallProject["animation"]["teddyWalk"]>) => void;
   setTeddyWalkPalette: (colors: readonly string[]) => void;
   updateTeddySing: (patch: Partial<RhythmBallProject["animation"]["teddySing"]>) => void;
@@ -413,7 +414,39 @@ function clampSongPlayerOffset(offsetMs: number, fullTrackDurationSeconds: numbe
 export const useProjectStore = create<ProjectState>((set) => ({
   project: createProject(), filePath: null, dirty: false, status: "Pronto", eventHistory: [], eventFuture: [], videoEditorHistory: [], videoEditorFuture: [], selectedEventId: null, selectedEventIds: [],
   newProject: () => set({ project: createProject(), filePath: null, dirty: false, status: "Nuovo progetto creato", eventHistory: [], eventFuture: [], videoEditorHistory: [], videoEditorFuture: [], selectedEventId: null, selectedEventIds: [] }),
-  setProject: (project, filePath) => set({ project: { ...project, animation: { ...project.animation, backgroundAuto: normalizeBackgroundAutoSettings(project.animation.backgroundAuto) } }, filePath, dirty: false, status: "Progetto caricato", eventHistory: [], eventFuture: [], videoEditorHistory: [], videoEditorFuture: [], selectedEventId: null, selectedEventIds: [] }),
+  setProject: (project, filePath) => set({
+    project: {
+      ...project,
+      animation: {
+        ...project.animation,
+        backgroundAuto: normalizeBackgroundAutoSettings(project.animation.backgroundAuto),
+        commentsInvasion: {
+          ...project.animation.commentsInvasion,
+          videoUrl: null,
+          videoName: "",
+          videoWidth: 0,
+          videoHeight: 0,
+          videoHasAudio: false
+        },
+        // Frame Booster files live in a session-only File registry. Persisted
+        // blob URLs cannot be reopened after a restart and must never masquerade
+        // as a usable source.
+        frameBooster: {
+          ...project.animation.frameBooster,
+          sourceUrl: null,
+          sourceName: "",
+          sourceWidth: 0,
+          sourceHeight: 0,
+          sourceDurationSeconds: 0,
+          sourceFps: null,
+          sourceFrameCount: null,
+          sourceHasAudio: false,
+          lastOutput: null
+        }
+      }
+    },
+    filePath, dirty: false, status: "Progetto caricato", eventHistory: [], eventFuture: [], videoEditorHistory: [], videoEditorFuture: [], selectedEventId: null, selectedEventIds: []
+  }),
   renameProject: (name) => set((state) => ({ project: { ...state.project, project: { ...state.project.project, name } }, dirty: true })),
   attachAudio: (metadata, waveform, options = {}) => set((state) => {
     const preserveSubtitleTrack = options.preserveSubtitleTrack === true;
@@ -492,6 +525,7 @@ export const useProjectStore = create<ProjectState>((set) => ({
     return { project: { ...state.project, animation: { ...state.project.animation, walkingCube }, subtitles }, dirty: true, status: "Palette immagine applicata a cubo, vetro e campo audiovisivo" };
   }),
   updatePortraitLandscape: (patch) => set((state) => ({ project: { ...state.project, animation: { ...state.project.animation, portraitLandscape: { ...state.project.animation.portraitLandscape, ...patch } } }, dirty: true })),
+  updateCommentsInvasion: (patch) => set((state) => ({ project: { ...state.project, animation: { ...state.project.animation, commentsInvasion: { ...state.project.animation.commentsInvasion, ...patch } } }, dirty: true })),
   setPortraitLandscapePalette: (colors) => set((state) => {
     const settings = state.project.animation.portraitLandscape;
     const palette = [colors[0] ?? settings.palette[0], colors[1] ?? settings.palette[1], colors[2] ?? settings.palette[2]] as [string, string, string];
@@ -674,10 +708,16 @@ export const useProjectStore = create<ProjectState>((set) => ({
   updateFrameBooster: (patch) => set((state) => {
     const current = state.project.animation.frameBooster;
     const sourceChanged = patch.sourceUrl !== undefined && patch.sourceUrl !== current.sourceUrl;
+    const outputChanged = sourceChanged
+      || (patch.method !== undefined && patch.method !== current.method)
+      || (patch.targetMode !== undefined && patch.targetMode !== current.targetMode)
+      || (patch.targetMultiplier !== undefined && patch.targetMultiplier !== current.targetMultiplier)
+      || (patch.targetFps !== undefined && patch.targetFps !== current.targetFps);
     const next = {
       ...current,
       ...patch,
-      ...(sourceChanged ? { sourceFps: null, sourceFrameCount: null, lastOutput: null } : {})
+      ...(outputChanged && patch.lastOutput === undefined ? { lastOutput: null } : {}),
+      ...(sourceChanged ? { sourceFps: null, sourceFrameCount: null } : {})
     };
     return { project: { ...state.project, animation: { ...state.project.animation, frameBooster: next } }, dirty: true };
   }),

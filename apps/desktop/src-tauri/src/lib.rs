@@ -1,11 +1,19 @@
 use atomicwrites::{AllowOverwrite, AtomicFile};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::{fs, io::{Read, Write}, path::{Path, PathBuf}, process::Command};
+use std::{
+    fs,
+    io::{Read, Write},
+    net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream},
+    path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
+    sync::Mutex,
+    time::{Duration, Instant},
+};
+use tauri::Manager;
 
 mod memory;
 mod song_player;
-mod longcat_video;
 
 #[derive(Debug, thiserror::Error)]
 enum ProjectIoError {
@@ -31,6 +39,138 @@ enum ProjectIoError {
     UpscalerBatchPayloadTooLarge,
     #[error("Il percorso del video Upscaler non è valido")]
     InvalidUpscalerVideoPath,
+    #[error("Servizio Upscaler locale non avviabile: {0}")]
+    UpscalerRuntime(String),
+}
+
+#[derive(Default)]
+struct UpscalerServiceState {
+    child: Mutex<Option<Child>>,
+}
+
+fn terminate_upscaler_child(process: &mut Child) {
+    #[cfg(unix)]
+    {
+        // Give Uvicorn a bounded graceful shutdown window. Its shutdown hook
+        // terminates/reaps active ffmpeg workers before the Python process exits.
+        let _ = Command::new("kill")
+            .args(["-TERM", &process.id().to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            match process.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+                Err(_) => break,
+            }
+        }
+    }
+    let _ = process.kill();
+    // Reap synchronously: closing MLSM must not leave a zombie or a live
+    // backend listening on 8765 after the application has gone away.
+    let _ = process.wait();
+}
+
+impl UpscalerServiceState {
+    fn shutdown(&self) {
+        if let Ok(mut child) = self.child.lock() {
+            if let Some(mut process) = child.take() {
+                terminate_upscaler_child(&mut process);
+            }
+        }
+    }
+}
+
+impl Drop for UpscalerServiceState {
+    fn drop(&mut self) {
+        if let Ok(child) = self.child.get_mut() {
+            if let Some(mut process) = child.take() {
+                terminate_upscaler_child(&mut process);
+            }
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpscalerServiceStatus {
+    running: bool,
+    started: bool,
+    pid: Option<u32>,
+}
+
+fn upscaler_port_is_open() -> bool {
+    let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8765);
+    TcpStream::connect_timeout(&address, Duration::from_millis(150)).is_ok()
+}
+
+fn upscaler_runtime_from(start: &Path) -> Option<(PathBuf, PathBuf, PathBuf)> {
+    for root in start.ancestors() {
+        let server = root.join("tools/upscaler_server.py");
+        let python = if cfg!(windows) {
+            root.join(".venv/Scripts/python.exe")
+        } else {
+            root.join(".venv/bin/python")
+        };
+        if server.is_file() && python.is_file() {
+            return Some((root.to_path_buf(), python, server));
+        }
+    }
+    None
+}
+
+fn find_upscaler_runtime() -> Option<(PathBuf, PathBuf, PathBuf)> {
+    let mut starts = Vec::new();
+    if let Ok(directory) = std::env::current_dir() { starts.push(directory); }
+    starts.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(parent) = executable.parent() { starts.push(parent.to_path_buf()); }
+    }
+    starts.iter().find_map(|start| upscaler_runtime_from(start))
+}
+
+#[tauri::command]
+fn ensure_upscaler_service(
+    state: tauri::State<'_, UpscalerServiceState>,
+) -> Result<UpscalerServiceStatus, ProjectIoError> {
+    let mut child = state.child.lock().map_err(|_| {
+        ProjectIoError::UpscalerRuntime("stato del processo non disponibile".into())
+    })?;
+    if let Some(process) = child.as_mut() {
+        match process.try_wait() {
+            Ok(None) => return Ok(UpscalerServiceStatus {
+                running: false, started: false, pid: Some(process.id()),
+            }),
+            Ok(Some(_)) => { *child = None; }
+            Err(error) => return Err(ProjectIoError::UpscalerRuntime(error.to_string())),
+        }
+    }
+    if upscaler_port_is_open() {
+        return Err(ProjectIoError::UpscalerRuntime(
+            "la porta 8765 è occupata da un processo non posseduto da questa istanza; MLSM non lo adotterà né lo lascerà attivo alla chiusura".into(),
+        ));
+    }
+    let (root, python, server) = find_upscaler_runtime().ok_or_else(|| {
+        ProjectIoError::UpscalerRuntime(
+            "runtime .venv o tools/upscaler_server.py non trovati nell'installazione".into(),
+        )
+    })?;
+    let process = Command::new(python)
+        .arg(server)
+        .current_dir(root)
+        .env("PYTHONUNBUFFERED", "1")
+        .env("MLSM_UPSCALER_PARENT_PID", std::process::id().to_string())
+        .env("MLSM_UPSCALER_OWNER_KIND", "tauri")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| ProjectIoError::UpscalerRuntime(error.to_string()))?;
+    let pid = process.id();
+    *child = Some(process);
+    Ok(UpscalerServiceStatus { running: false, started: true, pid: Some(pid) })
 }
 
 #[derive(Debug, Serialize)]
@@ -299,33 +439,39 @@ fn write_project(path: String, content: String) -> Result<(), ProjectIoError> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default().manage(song_player::SongPlayerState::default()).manage(longcat_video::LongCatVideoState::default()).plugin(tauri_plugin_dialog::init()).invoke_handler(tauri::generate_handler![
-        read_project,
-        write_project,
-        detect_audio_tools,
-        detect_upscaler_hardware,
-        probe_audio,
-        generate_waveform,
-        read_audio_data,
-        write_upscaler_batch_image,
-        copy_upscaler_video_result,
-        memory::memory_scan_paths,
-        memory::memory_read_preview,
-        memory::memory_read_text_preview,
-        memory::memory_copy_entries,
-        song_player::song_player_capabilities,
-        song_player::song_player_ensure_runtime,
-        song_player::song_player_get_runtime_setup,
-        song_player::song_player_start_job,
-        song_player::song_player_get_job,
-        song_player::song_player_cancel_job,
-        longcat_video::longcat_video_capabilities,
-        longcat_video::longcat_video_start_job,
-        longcat_video::longcat_video_get_job,
-        longcat_video::longcat_video_cancel_job,
-        longcat_video::longcat_video_write_remote_result,
-        longcat_video::longcat_video_open_colab
-    ]).run(tauri::generate_context!()).expect("errore durante l'avvio di MLSM Studio");
+    let app = tauri::Builder::default()
+        .manage(song_player::SongPlayerState::default())
+        .manage(UpscalerServiceState::default())
+        .plugin(tauri_plugin_dialog::init())
+        .invoke_handler(tauri::generate_handler![
+            read_project,
+            write_project,
+            detect_audio_tools,
+            detect_upscaler_hardware,
+            ensure_upscaler_service,
+            probe_audio,
+            generate_waveform,
+            read_audio_data,
+            write_upscaler_batch_image,
+            copy_upscaler_video_result,
+            memory::memory_scan_paths,
+            memory::memory_read_preview,
+            memory::memory_read_text_preview,
+            memory::memory_copy_entries,
+            song_player::song_player_capabilities,
+            song_player::song_player_ensure_runtime,
+            song_player::song_player_get_runtime_setup,
+            song_player::song_player_start_job,
+            song_player::song_player_get_job,
+            song_player::song_player_cancel_job
+        ])
+        .build(tauri::generate_context!())
+        .expect("errore durante l'avvio di MLSM Studio");
+    app.run(|app_handle, event| {
+        if matches!(event, tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit) {
+            app_handle.state::<UpscalerServiceState>().shutdown();
+        }
+    });
 }
 
 #[cfg(test)]
@@ -384,6 +530,36 @@ mod tests {
         fs::write(&source, b"").expect("empty source fixture");
         assert!(copy_upscaler_video_result(source.to_string_lossy().into_owned(), directory.path().join("empty.mp4").to_string_lossy().into_owned()).is_err());
         assert!(validate_upscaler_video_path(Path::new("relative.mp4"), false).is_err());
+    }
+
+    #[test]
+    fn resolves_the_project_upscaler_runtime_from_nested_directories() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let root = directory.path();
+        let nested = root.join("apps/desktop/src-tauri");
+        fs::create_dir_all(&nested).expect("nested fixture");
+        let server = root.join("tools/upscaler_server.py");
+        fs::create_dir_all(server.parent().expect("tools directory")).expect("tools fixture");
+        fs::write(&server, b"# fixture").expect("server fixture");
+        let python = if cfg!(windows) { root.join(".venv/Scripts/python.exe") } else { root.join(".venv/bin/python") };
+        fs::create_dir_all(python.parent().expect("venv directory")).expect("venv fixture");
+        fs::write(&python, b"fixture").expect("python fixture");
+        assert_eq!(upscaler_runtime_from(&nested), Some((root.to_path_buf(), python, server)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn upscaler_state_terminates_and_reaps_its_owned_child() {
+        let process = Command::new("sh")
+            .args(["-c", "sleep 30"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("child fixture");
+        let state = UpscalerServiceState { child: Mutex::new(Some(process)) };
+        state.shutdown();
+        assert!(state.child.lock().expect("state lock").is_none());
     }
 
     fn write_test_wav(path: &Path) {

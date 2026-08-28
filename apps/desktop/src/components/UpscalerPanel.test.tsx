@@ -82,6 +82,52 @@ describe("UpscalerPanel source picker", () => {
     expect(screen.getByText("two.png")).toBeInTheDocument();
   });
 
+  it("separa le modalità Locale e Gradio mostrando soltanto i controlli pertinenti", async () => {
+    render(<UpscalerPanel />);
+    const modes = screen.getByRole("group", { name: "Modalità elaborazione Upscaler" });
+    expect(screen.getByRole("button", { name: "Locale" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByLabelText("Modello Upscaler")).toBeInTheDocument();
+    expect(screen.queryByLabelText("URL endpoint Upscaler remoto")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Gradio / Colab" }));
+    await waitFor(() => expect(useProjectStore.getState().project.animation.upscaler.remote.enabled).toBe(true));
+    expect(modes).toContainElement(screen.getByRole("button", { name: "Gradio / Colab" }));
+    expect(screen.getByRole("button", { name: "Gradio / Colab" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByLabelText("Modello Upscaler")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Acceleratore Upscaler")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("URL endpoint Upscaler remoto")).toBeInTheDocument();
+    expect(screen.getByText(/motori locali non vengono usati/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Locale" }));
+    await waitFor(() => expect(useProjectStore.getState().project.animation.upscaler.remote.enabled).toBe(false));
+    expect(screen.getByLabelText("Modello Upscaler")).toBeInTheDocument();
+    expect(screen.queryByLabelText("URL endpoint Upscaler remoto")).not.toBeInTheDocument();
+  });
+
+  it("mantiene la scala del modello remoto quando viene caricata una nuova sorgente", async () => {
+    mockVideoMetadata({ width: 641, height: 359 });
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:remote-x4") });
+    const current = useProjectStore.getState().project.animation.upscaler;
+    useProjectStore.getState().updateUpscaler({
+      scale: 4,
+      remote: { ...current.remote, enabled: true, model: "remote-x4" },
+    });
+
+    render(<UpscalerPanel />);
+    fireEvent.change(screen.getByLabelText("Carica sorgente Upscaler"), {
+      target: { files: [new File(["video"], "remote.mp4", { type: "video/mp4" })] },
+    });
+
+    await waitFor(() => expect(useProjectStore.getState().project.animation.upscaler).toMatchObject({
+      sourceName: "remote.mp4",
+      sourceWidth: 641,
+      sourceHeight: 359,
+      scale: 4,
+      finalWidth: 2564,
+      finalHeight: 1436,
+    }));
+  });
+
   it("disabilita il picker principale durante l'elaborazione batch", () => {
     const controller = new AbortController();
     useUpscalerBatchStore.setState({ running: true, controller });

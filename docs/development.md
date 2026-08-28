@@ -9,10 +9,6 @@
 - Rust/Cargo per i pacchetti Tauri
 - Rubber Band per le funzioni audio che lo richiedono
 
-LongCat Video ha requisiti separati e più elevati: Linux/WSL2, Python 3.10,
-driver NVIDIA compatibili con CUDA 12.4 e spazio sufficiente per il checkpoint
-da 13,6 miliardi di parametri. Non viene installato dal setup generale.
-
 Gli script di installazione rilevano il sistema operativo e installano o verificano questi componenti.
 
 ## Comandi principali
@@ -37,23 +33,23 @@ npm run upscaler:setup
 npm run upscaler:server
 npm run ai-quantizer:setup
 npm run ai-quantizer:server
-npm run longcat-video:setup          # repository, runtime CUDA e checkpoint
-npm run longcat-video:setup:runtime  # senza scaricare il checkpoint
-npm run longcat-video:check          # capability check reale
-npm run longcat-video:server         # bridge locale per client browser
 ```
+
+Il comando manuale resta utile per diagnostica. In sviluppo Vite gestisce il
+processo; nell'app desktop il client può richiamare il comando nativo
+`ensure_upscaler_service`, che trova `.venv` e `tools/upscaler_server.py`, avvia
+il servizio su `127.0.0.1:8765` e lo termina insieme all'app. Il processo espone
+API 7, PID, processo padre e tipo di proprietario; Vite non adotta servizi
+avviati da altre sessioni. Sia Vite sia Tauri inviano prima una terminazione
+graceful e poi, entro un timeout, il kill forzato. Il backend osserva inoltre il
+PID del processo padre e chiude/reap tutti i propri FFmpeg se l'app o Vite
+terminano in modo anomalo. Anche il launcher CLI inoltra SIGINT/SIGTERM/SIGHUP,
+quindi non lascia un servizio sulla porta 8765 dopo la propria chiusura.
 
 Gli ambienti `.venv-upscaler` e `.venv-ai-quantizer` sono separati e ignorati da Git. I checkpoint vengono scaricati al primo uso del modello, non durante ogni avvio.
 
-Il setup LongCat usa `.venv-longcat-video` e `.longcat-video`, entrambi ignorati
-da Git. Il repository ufficiale è fissato alla revisione
-`6b3f4b8582a8bc3f20f795735f5383716c4ba794`; i pesi vengono scaricati da
-`meituan-longcat/LongCat-Video`. È possibile indicare installazioni esterne con
-`MLSM_LONGCAT_PYTHON`, `MLSM_LONGCAT_TORCHRUN`,
-`MLSM_LONGCAT_REPOSITORY` e `MLSM_LONGCAT_CHECKPOINT`.
-
-Il runtime RIFE viene preparato solo quando richiesto da Frame Booster o
-interpolazione del Video Editor. `npm run rife:verify` non scarica o simula un
+Il runtime RIFE viene preparato solo quando richiesto dall’interpolazione
+opzionale del Video Editor. `npm run rife:verify` non scarica o simula un
 risultato: restituisce esito positivo soltanto quando il runtime verificato è
 presente e la mini inferenza reale passa sul dispositivo selezionato.
 

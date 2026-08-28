@@ -20,4 +20,18 @@ export function clearFrameBoosterSourceFile(url?: string): void {
   else files.clear();
 }
 
+/** Releases only URLs created and owned by the Frame Booster importer. */
+export function releaseFrameBoosterSourceFile(url: string | null | undefined): void {
+  if (!url || !files.has(url)) return;
+  files.delete(url);
+  URL.revokeObjectURL(url);
+}
+
+/** Successful New/Open boundaries use this to release every session asset. */
+export function resetFrameBoosterRuntimeForProjectReplacement(): void {
+  window.dispatchEvent(new Event("frame-booster:reset"));
+  for (const url of files.keys()) URL.revokeObjectURL(url);
+  files.clear();
+}
+
 export function frameBoosterSourceFileCount(): number { return files.size; }

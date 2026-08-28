@@ -13,16 +13,18 @@ const exportUpscalerImage = vi.hoisted(() => vi.fn().mockResolvedValue({ blob: n
 const chooseUpscalerVideoSaveTarget = vi.hoisted(() => vi.fn().mockResolvedValue({ kind: "download" }));
 const prepareUpscalerVideoSaveTarget = vi.hoisted(() => vi.fn().mockResolvedValue({ kind: "download" }));
 const saveUpscalerVideoArtifact = vi.hoisted(() => vi.fn().mockResolvedValue({ bytes: 11, destination: "remote-upscaled.mp4" }));
+const hasCompatibleRemoteUpscalerCheckpoint = vi.hoisted(() => vi.fn().mockResolvedValue(true));
 vi.mock("../services/upscaler-video-exporter", () => ({ exportUpscaledVideo }));
 vi.mock("../services/upscaler-video-artifact", () => ({ chooseUpscalerVideoSaveTarget, prepareUpscalerVideoSaveTarget, saveUpscalerVideoArtifact }));
 vi.mock("../services/upscaler-ai", () => ({ generateAiUpscalerPreview }));
 vi.mock("../services/upscaler-image-exporter", () => ({ exportUpscalerImage }));
+vi.mock("../services/upscaler-remote-checkpoint", () => ({ hasCompatibleRemoteUpscalerCheckpoint }));
 
 import { UpscalerPreview } from "./UpscalerPreview";
 
 describe("UpscalerPreview video export", () => {
-  beforeEach(() => { useProjectStore.getState().newProject(); useUpscalerBatchStore.getState().resetForProjectReplacement(); chooseUpscalerVideoSaveTarget.mockResolvedValue({ kind: "download" }); prepareUpscalerVideoSaveTarget.mockResolvedValue({ kind: "download" }); saveUpscalerVideoArtifact.mockResolvedValue({ bytes: 11, destination: "remote-upscaled.mp4" }); vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null); });
-  afterEach(() => { cleanup(); useUpscalerBatchStore.getState().resetForProjectReplacement(); exportUpscaledVideo.mockClear(); generateAiUpscalerPreview.mockReset(); generateAiUpscalerPreview.mockResolvedValue(document.createElement("canvas")); exportUpscalerImage.mockClear(); chooseUpscalerVideoSaveTarget.mockClear(); prepareUpscalerVideoSaveTarget.mockClear(); saveUpscalerVideoArtifact.mockClear(); vi.restoreAllMocks(); });
+  beforeEach(() => { useProjectStore.getState().newProject(); useUpscalerBatchStore.getState().resetForProjectReplacement(); chooseUpscalerVideoSaveTarget.mockResolvedValue({ kind: "download" }); prepareUpscalerVideoSaveTarget.mockResolvedValue({ kind: "download" }); saveUpscalerVideoArtifact.mockResolvedValue({ bytes: 11, destination: "remote-upscaled.mp4" }); hasCompatibleRemoteUpscalerCheckpoint.mockResolvedValue(true); vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null); });
+  afterEach(() => { cleanup(); useUpscalerBatchStore.getState().resetForProjectReplacement(); exportUpscaledVideo.mockClear(); generateAiUpscalerPreview.mockReset(); generateAiUpscalerPreview.mockResolvedValue(document.createElement("canvas")); exportUpscalerImage.mockClear(); chooseUpscalerVideoSaveTarget.mockClear(); prepareUpscalerVideoSaveTarget.mockClear(); saveUpscalerVideoArtifact.mockClear(); hasCompatibleRemoteUpscalerCheckpoint.mockClear(); vi.restoreAllMocks(); });
 
   it("collega l'azione globale al job del video intero usando il File originale", async () => {
     vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
@@ -50,6 +52,43 @@ describe("UpscalerPreview video export", () => {
     await waitFor(() => expect(generateAiUpscalerPreview).toHaveBeenCalledOnce());
     fireEvent.click(screen.getByRole("button", { name: "Avvia upscaling video completo" }));
     await waitFor(() => expect(exportUpscaledVideo).toHaveBeenCalledOnce());
+  });
+
+  it("mantiene il progresso Canvas locale separato dalla percentuale e non mostra istruzioni Gradio", async () => {
+    vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
+    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
+    let finish!: () => void;
+    exportUpscaledVideo.mockImplementationOnce((_options, _signal, onProgress: (progress: unknown) => void) => {
+      onProgress({
+        phase: "upscaling", phaseLabel: "Frame 45/361 · passaggio 1/1", progress: .05,
+        currentFrame: 44, totalFrames: 361, elapsedMs: 1_000, estimatedRemainingMs: 180_000,
+        originalFramesDirectory: "/tmp/local/original-frames"
+      });
+      return new Promise<void>((resolve) => { finish = () => resolve(); });
+    });
+    const settings = { ...createProject().animation.upscaler, model: "canvas" as const, sourceUrl: "blob:local-canvas", sourceName: "canvas.mp4", sourceKind: "video" as const, sourceWidth: 1280, sourceHeight: 720, durationSeconds: 12 };
+    const { container } = render(<UpscalerPreview settings={settings} />);
+    fireEvent.loadedData(container.querySelector("video")!);
+    fireEvent.click(screen.getByRole("button", { name: "Avvia upscaling video completo" }));
+
+    expect(await screen.findByText("Frame 45/361 · passaggio 1/1")).toBeInTheDocument();
+    expect(screen.getByLabelText("Avanzamento 5%")).toHaveTextContent("Avanzamento 5%");
+    expect(screen.getByText("/tmp/local/original-frames")).toBeInTheDocument();
+    expect(screen.queryByText(/I video vengono inviati come segmenti/i)).not.toBeInTheDocument();
+    act(() => finish());
+  });
+
+  it("non ripiega sui motori locali se Gradio è selezionato senza endpoint attivi", async () => {
+    vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
+    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
+    const defaults = createProject().animation.upscaler;
+    const settings = { ...defaults, sourceUrl: "blob:remote-unconfigured", sourceName: "remote.mp4", sourceKind: "video" as const, sourceWidth: 1280, sourceHeight: 720, durationSeconds: 8, remote: { ...defaults.remote, enabled: true, endpoints: [] } };
+    const { container } = render(<UpscalerPreview settings={settings} />);
+    fireEvent.loadedData(container.querySelector("video")!);
+    fireEvent.click(screen.getByRole("button", { name: "Avvia upscaling video completo" }));
+
+    expect(await screen.findByText(/aggiungi e attiva almeno un endpoint/i)).toBeInTheDocument();
+    expect(exportUpscaledVideo).not.toHaveBeenCalled();
   });
 
   it("adotta il video remoto ricostruito nella preview e permette di salvarlo senza rieseguire il job", async () => {
@@ -107,24 +146,67 @@ describe("UpscalerPreview video export", () => {
     exportUpscaledVideo.mockImplementationOnce((_options, _signal, onProgress: (progress: unknown) => void) => {
       onProgress({
         phase: "upscaling", phaseLabel: "Upscaling remoto · 2/2 endpoint al lavoro", progress: .25,
-        currentFrame: 20, totalFrames: 100, elapsedMs: 1_000, estimatedRemainingMs: 4_000,
+        currentFrame: 200, totalFrames: 400, completedSegments: 2, totalSegments: 4, elapsedMs: 1_000, estimatedRemainingMs: 4_000,
         activeEndpoints: ["https://first.gradio.live", "https://second.gradio.live"],
         endpointActivity: [
-          { url: "https://first.gradio.live", state: "busy", activeFrame: "frame-00000021.png", completed: 10, failures: 0 },
-          { url: "https://second.gradio.live", state: "busy", activeFrame: "frame-00000022.png", completed: 10, failures: 1 }
+          { url: "https://first.gradio.live", state: "busy", activeFrame: null, activeSegment: "segment-000003.mp4", completed: 1, completedSegments: 1, completedFrames: 100, failures: 0, segmentFrame: 42, segmentTotalFrames: 100, segmentProgress: .42, segmentPhase: "upscaling", secondsPerFrame: 1.75, segmentEstimatedRemainingSeconds: 101.5 },
+          { url: "https://second.gradio.live", state: "busy", activeFrame: null, activeSegment: "segment-000004.mp4", completed: 1, completedSegments: 1, completedFrames: 100, failures: 1, segmentFrame: 0, segmentTotalFrames: 100, segmentProgress: 0, segmentPhase: "awaiting_progress" }
         ]
       });
       return new Promise<void>((resolve) => { finish = resolve; });
     });
-    const settings = { ...createProject().animation.upscaler, sourceUrl: "blob:parallel-video", sourceName: "parallel.mp4", sourceKind: "video" as const, sourceWidth: 1280, sourceHeight: 720, durationSeconds: 8 };
+    hasCompatibleRemoteUpscalerCheckpoint.mockResolvedValueOnce(false);
+    const defaults = createProject().animation.upscaler;
+    const settings = { ...defaults, sourceUrl: "blob:parallel-video", sourceName: "parallel.mp4", sourceKind: "video" as const, sourceWidth: 1280, sourceHeight: 720, durationSeconds: 8, remote: { ...defaults.remote, enabled: true, model: "x4", endpoints: [
+      { id: "first", label: "First", url: "https://first.gradio.live", enabled: true },
+      { id: "second", label: "Second", url: "https://second.gradio.live", enabled: true }
+    ] } };
     const { container } = render(<UpscalerPreview settings={settings} />);
     fireEvent.loadedData(container.querySelector("video")!);
     fireEvent.click(screen.getByRole("button", { name: "Avvia upscaling video completo" }));
     expect(await screen.findByText("2 richieste contemporaneamente in volo")).toBeInTheDocument();
     expect(screen.getByText("first.gradio.live")).toBeInTheDocument();
     expect(screen.getByText("second.gradio.live")).toBeInTheDocument();
-    expect(screen.getByText("10 completati · 1 retry")).toBeInTheDocument();
+    expect(screen.getByText("2", { selector: "b" })).toBeInTheDocument();
+    expect(screen.getByText("1 segmenti · 100 frame · 1 retry")).toBeInTheDocument();
+    expect(screen.getByText("Upscaling frame · segment-000003.mp4")).toBeInTheDocument();
+    const firstProgress = screen.getByRole("progressbar", { name: "Progresso first.gradio.live" });
+    expect(firstProgress).toHaveValue(.42);
+    expect(firstProgress.closest(".upscaler-remote-worker")).toHaveTextContent("42% · frame 42/100 · 1.75 s/frame · ETA 2 min");
+    expect(screen.getByRole("progressbar", { name: "Progresso second.gradio.live" })).not.toHaveAttribute("value");
+    expect(screen.getByText(/Riavvia un endpoint aggiornato/)).toBeInTheDocument();
+    expect(screen.getByText(/I video vengono inviati come segmenti da 100 frame/i)).toBeInTheDocument();
     act(() => finish());
+  });
+
+  it("chiede conferma e continua con i soli endpoint raggiungibili", async () => {
+    vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
+    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
+    hasCompatibleRemoteUpscalerCheckpoint.mockResolvedValue(false);
+    let receivedDecision = "";
+    exportUpscaledVideo.mockImplementationOnce(async (options, signal: AbortSignal) => {
+      receivedDecision = await options.onRemoteEndpointDecision({
+        ok: true,
+        reachableEndpoints: ["https://online.gradio.live"],
+        failures: [{ url: "https://offline.gradio.live", error: "HTTP Error 404: Not Found" }],
+      }, signal);
+      return {};
+    });
+    const defaults = createProject().animation.upscaler;
+    const settings = { ...defaults, sourceUrl: "blob:remote-source", sourceName: "remote.mp4", sourceKind: "video" as const, sourceWidth: 1280, sourceHeight: 720, durationSeconds: 8, remote: {
+      ...defaults.remote, enabled: true, model: "x4", endpoints: [
+        { id: "online", label: "Online", url: "https://online.gradio.live", enabled: true },
+        { id: "offline", label: "Offline", url: "https://offline.gradio.live", enabled: true },
+      ],
+    } };
+    const { container } = render(<UpscalerPreview settings={settings} />);
+    fireEvent.loadedData(container.querySelector("video")!);
+    fireEvent.click(screen.getByRole("button", { name: "Avvia upscaling video completo" }));
+    expect(await screen.findByRole("dialog", { name: "Alcuni endpoint non rispondono" })).toBeInTheDocument();
+    expect(screen.getByText("offline.gradio.live")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Continua con 1 endpoint" }));
+    await waitFor(() => expect(receivedDecision).toBe("continue"));
+    expect(screen.queryByRole("dialog", { name: "Alcuni endpoint non rispondono" })).not.toBeInTheDocument();
   });
 
   it("sincronizza metadata e target proporzionale quando il video reale non è 16:9", async () => {
@@ -301,7 +383,7 @@ describe("UpscalerPreview video export", () => {
   it.each([
     ["Riprendi cache compatibile", "resume"],
     ["Riparti da zero", "restart"]
-  ] as const)("chiede sempre la policy cache per il video remoto e inoltra %s", async (buttonName, expectedPolicy) => {
+  ] as const)("chiede la policy soltanto per una cache compatibile e inoltra %s", async (buttonName, expectedPolicy) => {
     vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
     vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
     const file = new File(["same-video"], "same-video.mp4", { type: "video/mp4" });
@@ -323,6 +405,26 @@ describe("UpscalerPreview video export", () => {
     expect(exportUpscaledVideo.mock.calls[0]?.[0]).toMatchObject({ sourceVideoFile: file, remoteCheckpointPolicy: expectedPolicy });
   });
 
+  it("avvia automaticamente da zero un video remoto nuovo senza mostrare la domanda cache", async () => {
+    vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
+    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
+    hasCompatibleRemoteUpscalerCheckpoint.mockResolvedValueOnce(false);
+    const file = new File(["brand-new-video"], "brand-new.mp4", { type: "video/mp4" });
+    const defaults = createProject().animation.upscaler;
+    const settings = {
+      ...defaults,
+      sourceUrl: "blob:brand-new", sourceName: file.name, sourceKind: "video" as const, sourceWidth: 1280, sourceHeight: 720, durationSeconds: 8,
+      remote: { ...defaults.remote, enabled: true, model: "RealESRGAN_x4plus", endpoints: [{ id: "one", label: "Colab 1", url: "https://one.gradio.live", enabled: true }] }
+    };
+    registerUpscalerSourceFile(settings.sourceUrl, file);
+    render(<UpscalerPreview settings={settings} />);
+
+    act(() => window.dispatchEvent(new Event("upscaler:export")));
+    await waitFor(() => expect(exportUpscaledVideo).toHaveBeenCalledOnce());
+    expect(screen.queryByRole("dialog", { name: "Come vuoi gestire la cache?" })).not.toBeInTheDocument();
+    expect(exportUpscaledVideo.mock.calls[0]?.[0]).toMatchObject({ sourceVideoFile: file, remoteCheckpointPolicy: "restart" });
+  });
+
   it("invalida l'artifact remoto in anteprima quando la sua cache viene svuotata", async () => {
     vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
     vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
@@ -337,7 +439,6 @@ describe("UpscalerPreview video export", () => {
     const { container } = render(<UpscalerPreview settings={settings} />);
     fireEvent.loadedData(container.querySelector("video")!);
     fireEvent.click(screen.getByRole("button", { name: "Avvia upscaling video completo" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Riprendi cache compatibile" }));
     expect(await screen.findByText("RISULTATO UPSCALATO · PRONTO")).toBeInTheDocument();
 
     act(() => window.dispatchEvent(new Event(UPSCALER_REMOTE_CACHE_CLEARED_EVENT)));
