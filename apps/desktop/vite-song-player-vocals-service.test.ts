@@ -16,6 +16,7 @@ describe("Song Player vocal service locale", () => {
   it("decodes the terminal worker result and hides its temporary stem path", () => {
     const output = `${JSON.stringify({ protocolVersion:1,type:"progress",progress:.5,message:"Demucs" })}\n${JSON.stringify({ protocolVersion:1,type:"result",result:{kind:"separateVocals",path:"/tmp/private/vocals.wav",model:"htdemucs",pitchAlgorithm:"pyin",pitch:[[.2,64,.9]]} })}\n`;
     expect(decodeSongPlayerWorkerOutput(output)).toMatchObject({ kind:"separateVocals",path:"browser://vocals.wav",pitch:[[.2,64,.9]] });
+    expect(decodeSongPlayerWorkerOutput(output, true)).toMatchObject({ path:"/tmp/private/vocals.wav" });
   });
   it("surfaces the worker error instead of inventing notes from the mix", () => {
     expect(() => decodeSongPlayerWorkerOutput(JSON.stringify({type:"error",error:{message:"Demucs failed"}}))).toThrow(/Demucs failed/);

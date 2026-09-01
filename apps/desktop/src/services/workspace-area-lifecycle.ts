@@ -6,6 +6,9 @@ import { resetSongPlayerRuntimeForProjectReplacement } from "./song-player-lifec
 import { resetUpscalerRuntimeForProjectReplacement } from "./upscaler-batch-lifecycle";
 import { clearVideoEditorSession } from "./video-editor-import";
 import { resetCommentsInvasionRuntime } from "../store/comments-invasion-store";
+import { resetFrameBoosterRuntimeForProjectReplacement } from "./frame-booster-source-file";
+import { clearOverlaySpectralBackground } from "./overlay-spectral-background-runtime";
+import { useVideoEditorPlayback } from "../store/video-editor-playback-store";
 
 /**
  * Area boundaries are new workspaces, not navigation tabs. Runtime media,
@@ -16,7 +19,10 @@ export function resetWorkspaceForAreaEntry(): void {
   const previousProject = useProjectStore.getState().project;
   clearVideoEditorSession(previousProject.animation.videoEditor.assets);
   resetUpscalerRuntimeForProjectReplacement();
+  resetFrameBoosterRuntimeForProjectReplacement();
+  clearOverlaySpectralBackground();
   resetCommentsInvasionRuntime();
+  const videoEditorPlayback = useVideoEditorPlayback.getState(); videoEditorPlayback.stop(); videoEditorPlayback.setLooping(false); videoEditorPlayback.setZoom(1);
   useAudioStore.getState().reset();
   useAnalysisStore.getState().reset();
   useSceneStore.getState().reset();

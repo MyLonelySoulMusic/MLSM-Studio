@@ -439,6 +439,8 @@ describe("ProSubtitles exporter", () => {
     mediabunnyMock.videoTimings = [[0, .04], [.04, .04], [.08, .02]];
     mediabunnyMock.forceLastProcessedDurationZero = false;
     mediabunnyMock.processedDurations.length = 0;
+    mediabunnyMock.videoTrack.getDisplayWidth.mockReset().mockResolvedValue(640);
+    mediabunnyMock.videoTrack.getDisplayHeight.mockReset().mockResolvedValue(360);
     mediabunnyMock.videoTrack.computePacketStats.mockReset().mockResolvedValue({
       packetCount: 3,
       averagePacketRate: 30,
@@ -509,9 +511,10 @@ describe("ProSubtitles exporter", () => {
     });
   });
 
-  it("mappa separatamente i probe VP9 alpha, AVC e VP9 opaco", async () => {
+  it("mappa separatamente i probe VP9 alpha, AVC, HEVC e VP9 opaco", async () => {
     mediabunnyMock.canEncodeVideo.mockImplementation(async (codec, options) => {
       if (codec === "avc") return false;
+      if (codec === "hevc") return true;
       return options?.alpha === "keep";
     });
 
@@ -519,6 +522,7 @@ describe("ProSubtitles exporter", () => {
 
     expect(capabilities.webmVp9Alpha.supported).toBe(true);
     expect(capabilities.mp4H264Solid.supported).toBe(false);
+    expect(capabilities.mp4HevcSolid.supported).toBe(true);
     expect(capabilities.webmVp9Solid.supported).toBe(false);
     expect(mediabunnyMock.canEncodeVideo).toHaveBeenCalledWith("vp9", expect.objectContaining({
       width: 1080,
@@ -558,7 +562,7 @@ describe("ProSubtitles exporter", () => {
     );
 
     expect(order[0]).toBe("picker");
-    expect(order.slice(1)).toEqual(["probe", "probe", "probe"]);
+    expect(order.slice(1)).toEqual(["probe", "probe", "probe", "probe"]);
     expect(writable.close).toHaveBeenCalledOnce();
     expect(writable.abort).not.toHaveBeenCalled();
   });
@@ -710,6 +714,57 @@ describe("ProSubtitles exporter", () => {
       totalFrames: 2,
       progress: 1
     }));
+  });
+
+  it("usa automaticamente H.265 per un video oltre 4K quando H.264 non è supportato", async () => {
+    mediabunnyMock.videoTrack.getDisplayWidth.mockResolvedValue(5760);
+    mediabunnyMock.videoTrack.getDisplayHeight.mockResolvedValue(3240);
+    mediabunnyMock.videoTrack.computePacketStats.mockResolvedValue({
+      packetCount: 2,
+      averagePacketRate: 20,
+      averageBitrate: 2_000_000
+    });
+    mediabunnyMock.canEncodeVideo.mockImplementation(async (codec) => codec === "hevc");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(new Blob(["source-video"], { type: "video/mp4" }))
+    );
+
+    const result = await exportProSubtitleVideo(
+      baseSettings({
+        outputMode: "completeVideo",
+        sourceVideoUrl: "blob:source-video",
+        sourceVideoName: "source-6k.mp4",
+        durationSeconds: .1
+      }),
+      createRenderer(),
+      vi.fn(),
+      new AbortController().signal,
+      vi.fn()
+    );
+
+    expect(mediabunnyMock.canEncodeVideo).toHaveBeenNthCalledWith(1, "avc", expect.objectContaining({
+      width: 5760,
+      height: 3240,
+      alpha: "discard"
+    }));
+    expect(mediabunnyMock.canEncodeVideo).toHaveBeenNthCalledWith(2, "hevc", expect.objectContaining({
+      width: 5760,
+      height: 3240,
+      alpha: "discard"
+    }));
+    expect(result.format).toMatchObject({
+      id: "mp4HevcSolid",
+      codec: "hevc",
+      label: "MP4 · H.265/HEVC con audio originale"
+    });
+    expect(mediabunnyMock.conversionOptions).toMatchObject({
+      video: {
+        codec: "hevc",
+        hardwareAcceleration: "no-preference",
+        processedWidth: 5760,
+        processedHeight: 3240
+      }
+    });
   });
 
   it("recupera la durata zero dell’ultimo frame sorgente 1801 senza perderlo", async () => {

@@ -274,6 +274,7 @@ describe("ExportDialog", () => {
 
     expect(screen.queryByLabelText("Risoluzione")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Frame rate")).toBeInTheDocument();
+    expect(screen.getByText(/oltre 4K, passa automaticamente a H\.265\/HEVC/)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Frame rate"), { target: { value: "60" } });
     expect(screen.getByText(/ricampiona i fotogrammi al frame rate scelto/))
       .toBeInTheDocument();

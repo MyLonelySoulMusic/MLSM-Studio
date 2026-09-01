@@ -454,12 +454,18 @@ const videoEditorEffectClipSchema = z.object({
   enabled: z.boolean().default(true), mix: z.number().min(0).max(1).default(1),
   parameters: z.record(z.string().min(1).max(80), videoEditorEffectParameterSchema).default({})
 }).strict();
-const defaultVideoEditorAdjustments = { exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, saturation: 0, vibrance: 0, temperature: 0, tint: 0, hue: 0, sharpness: 0, denoise: 0, opacity: 1 };
+const defaultVideoEditorAdjustments = {
+  exposure: 0, brightness: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0,
+  clarity: 0, saturation: 0, vibrance: 0, temperature: 0, tint: 0, hue: 0,
+  sharpness: 0, denoise: 0, blur: 0, grayscale: 0, sepia: 0, fade: 0, vignette: 0, opacity: 1
+};
 const videoEditorAdjustmentsSchema = z.object({
-  exposure: z.number().min(-2).max(2), contrast: z.number().min(-100).max(100), highlights: z.number().min(-100).max(100), shadows: z.number().min(-100).max(100),
+  exposure: z.number().min(-2).max(2), brightness: z.number().min(-100).max(100).default(0), contrast: z.number().min(-100).max(100), highlights: z.number().min(-100).max(100), shadows: z.number().min(-100).max(100),
   whites: z.number().min(-100).max(100), blacks: z.number().min(-100).max(100), saturation: z.number().min(-100).max(100), vibrance: z.number().min(-100).max(100),
   temperature: z.number().min(-100).max(100), tint: z.number().min(-100).max(100), hue: z.number().min(-180).max(180), sharpness: z.number().min(0).max(100),
-  denoise: z.number().min(0).max(100), opacity: z.number().min(0).max(1)
+  denoise: z.number().min(0).max(100), clarity: z.number().min(-100).max(100).default(0), blur: z.number().min(0).max(100).default(0),
+  grayscale: z.number().min(0).max(100).default(0), sepia: z.number().min(0).max(100).default(0), fade: z.number().min(0).max(100).default(0),
+  vignette: z.number().min(0).max(100).default(0), opacity: z.number().min(0).max(1)
 }).strict();
 const videoEditorAssetSchema = z.object({
   id: z.string().min(1), name: z.string().min(1).max(500), kind: z.enum(["video", "image", "audio"]),
@@ -659,6 +665,48 @@ const defaultSongPlayer = {
     analyzedAt: null
   }
 };
+const defaultOverlaySpectral = {
+  backgroundImageUrl: null,
+  backgroundMediaType: "image" as const,
+  backgroundFit: "cover" as const,
+  backgroundDim: 0,
+  title: "",
+  artist: "",
+  showMetadata: true,
+  visualStyle: "radial" as const,
+  presetId: "milkdrop-radial-spectrum" as const,
+  autoPalette: true,
+  palette: ["#63f0d1", "#7657ff", "#ff4f9a"] as [string, string, string],
+  paletteInfluence: 1,
+  intensity: 1,
+  sensitivity: 1,
+  overlayOpacity: 0.92,
+  motionSpeed: 1,
+  symmetry: 8 as const,
+  trail: 0.42,
+  blendMode: "screen" as const
+};
+const overlaySpectralSchema = z.object({
+  backgroundImageUrl: z.string().refine((value) => !value.startsWith("blob:"), "Gli URL blob runtime non possono essere salvati nel progetto.").nullable().default(defaultOverlaySpectral.backgroundImageUrl),
+  backgroundMediaType: z.enum(["image", "video"]).default(defaultOverlaySpectral.backgroundMediaType),
+  backgroundFit: z.enum(["cover", "contain"]).default(defaultOverlaySpectral.backgroundFit),
+  backgroundDim: z.number().min(0).max(1).default(defaultOverlaySpectral.backgroundDim),
+  title: z.string().max(160).default(defaultOverlaySpectral.title),
+  artist: z.string().max(160).default(defaultOverlaySpectral.artist),
+  showMetadata: z.boolean().default(defaultOverlaySpectral.showMetadata),
+  visualStyle: z.enum(["radial", "tunnel", "kaleidoscope", "plasma"]).default(defaultOverlaySpectral.visualStyle),
+  presetId: z.enum(["milkdrop-radial-spectrum", "milkdrop-spectral-tunnel", "milkdrop-kaleidoscope", "milkdrop-plasma-field", "milkdrop-spectrum-bars", "milkdrop-circular-spectrum", "milkdrop-waveform-line", "milkdrop-particle-burst", "milkdrop-pulse-shapes", "milkdrop-dynamic-vignette", "milkdrop-radial-rays", "milkdrop-mirrored-waveform", "milkdrop-audio-grid", "milkdrop-orbiting-particles"]).default(defaultOverlaySpectral.presetId),
+  autoPalette: z.boolean().default(defaultOverlaySpectral.autoPalette),
+  palette: z.tuple([z.string(), z.string(), z.string()]).default(defaultOverlaySpectral.palette),
+  paletteInfluence: z.number().min(0).max(1).default(defaultOverlaySpectral.paletteInfluence),
+  intensity: z.number().min(0.1).max(3).default(defaultOverlaySpectral.intensity),
+  sensitivity: z.number().min(0.25).max(3).default(defaultOverlaySpectral.sensitivity),
+  overlayOpacity: z.number().min(0.1).max(1).default(defaultOverlaySpectral.overlayOpacity),
+  motionSpeed: z.number().min(0).max(3).default(defaultOverlaySpectral.motionSpeed),
+  symmetry: z.union([z.literal(4), z.literal(6), z.literal(8), z.literal(12)]).default(defaultOverlaySpectral.symmetry),
+  trail: z.number().min(0).max(0.95).default(defaultOverlaySpectral.trail),
+  blendMode: z.enum(["screen", "lighter", "source-over"]).default(defaultOverlaySpectral.blendMode)
+}).strict();
 export const cassetteDeskWindowEnvironments = [
   "summer-day",
   "snow-day",
@@ -762,7 +810,7 @@ export const projectSchema = z.object({
   canvas: z.object({ aspectRatio: z.enum(["9:16", "16:9", "1:1", "4:5", "custom"]), previewWidth: z.number().int().positive(), previewHeight: z.number().int().positive(), previewFps: fpsSchema, exportWidth: z.number().int().positive(), exportHeight: z.number().int().positive(), exportFps: fpsSchema }).strict(),
   analysis: z.object({ analyzerVersion: z.string(), cacheKey: z.string(), globalBpm: z.number().positive().nullable(), latencyCompensationMs: z.number(), waveform: z.array(z.number().min(-1).max(1)), localTempo: z.array(z.unknown()).default([]), segments: z.array(z.unknown()).default([]) }).strict(),
   events: z.array(musicEventSchema),
-  animation: z.object({ modeId: z.string().min(1), baseObjectTypes: z.array(z.enum(["drum", "kick", "snare", "cymbal", "piano", "guitar", "strings", "peg", "platform", "block", "spring", "pebble"])).min(1), newYorkStreets: newYorkStreetsSchema.default(defaultNewYorkStreets), coverSphere: coverSphereSchema.default(defaultCoverSphere), stereoUnfold: stereoUnfoldSchema.default(defaultStereoUnfold), walkingCube: walkingCubeSchema.default(defaultWalkingCube), portraitLandscape: portraitLandscapeSchema.default(defaultPortraitLandscape), commentsInvasion: commentsInvasionSchema.default(defaultCommentsInvasion), teddyWalk: teddyWalkSchema.default(defaultTeddyWalk), teddySing: teddySingSchema.default(defaultTeddySing), proSubtitles: proSubtitlesSchema.default(defaultProSubtitles), pixelsSub: pixelsSubSchema.default(defaultPixelsSub), backgroundAuto: backgroundAutoSchema.default(defaultBackgroundAuto), staticWatermark: staticWatermarkSchema.default(defaultStaticWatermark), upscaler: upscalerSchema.default(defaultUpscaler), frameBooster: frameBoosterSchema.default(defaultFrameBooster), videoEditor: videoEditorSchema.default(defaultVideoEditor), songPlayer: songPlayerSchema.default(defaultSongPlayer), cassetteDesk: cassetteDeskSchema.default(defaultCassetteDesk) }).default({ modeId: "instrumentalFalling", baseObjectTypes: ["kick", "snare", "drum", "cymbal"], newYorkStreets: defaultNewYorkStreets, coverSphere: defaultCoverSphere, stereoUnfold: defaultStereoUnfold, walkingCube: defaultWalkingCube, portraitLandscape: defaultPortraitLandscape, commentsInvasion: defaultCommentsInvasion, teddyWalk: defaultTeddyWalk, teddySing: defaultTeddySing, proSubtitles: defaultProSubtitles, pixelsSub: defaultPixelsSub, backgroundAuto: defaultBackgroundAuto, staticWatermark: defaultStaticWatermark, upscaler: defaultUpscaler, frameBooster: defaultFrameBooster, videoEditor: defaultVideoEditor, songPlayer: defaultSongPlayer, cassetteDesk: defaultCassetteDesk }),
+  animation: z.object({ modeId: z.string().min(1), baseObjectTypes: z.array(z.enum(["drum", "kick", "snare", "cymbal", "piano", "guitar", "strings", "peg", "platform", "block", "spring", "pebble"])).min(1), newYorkStreets: newYorkStreetsSchema.default(defaultNewYorkStreets), coverSphere: coverSphereSchema.default(defaultCoverSphere), stereoUnfold: stereoUnfoldSchema.default(defaultStereoUnfold), walkingCube: walkingCubeSchema.default(defaultWalkingCube), portraitLandscape: portraitLandscapeSchema.default(defaultPortraitLandscape), commentsInvasion: commentsInvasionSchema.default(defaultCommentsInvasion), teddyWalk: teddyWalkSchema.default(defaultTeddyWalk), teddySing: teddySingSchema.default(defaultTeddySing), proSubtitles: proSubtitlesSchema.default(defaultProSubtitles), pixelsSub: pixelsSubSchema.default(defaultPixelsSub), backgroundAuto: backgroundAutoSchema.default(defaultBackgroundAuto), staticWatermark: staticWatermarkSchema.default(defaultStaticWatermark), upscaler: upscalerSchema.default(defaultUpscaler), frameBooster: frameBoosterSchema.default(defaultFrameBooster), videoEditor: videoEditorSchema.default(defaultVideoEditor), songPlayer: songPlayerSchema.default(defaultSongPlayer), cassetteDesk: cassetteDeskSchema.default(defaultCassetteDesk), overlaySpectral: overlaySpectralSchema.default(defaultOverlaySpectral) }).default({ modeId: "instrumentalFalling", baseObjectTypes: ["kick", "snare", "drum", "cymbal"], newYorkStreets: defaultNewYorkStreets, coverSphere: defaultCoverSphere, stereoUnfold: defaultStereoUnfold, walkingCube: defaultWalkingCube, portraitLandscape: defaultPortraitLandscape, commentsInvasion: defaultCommentsInvasion, teddyWalk: defaultTeddyWalk, teddySing: defaultTeddySing, proSubtitles: defaultProSubtitles, pixelsSub: defaultPixelsSub, backgroundAuto: defaultBackgroundAuto, staticWatermark: defaultStaticWatermark, upscaler: defaultUpscaler, frameBooster: defaultFrameBooster, videoEditor: defaultVideoEditor, songPlayer: defaultSongPlayer, cassetteDesk: defaultCassetteDesk, overlaySpectral: defaultOverlaySpectral }),
   ball: z.object({ radius: z.number().positive(), visualMass: z.number().positive(), material: materialSchema, spinRate: z.number(), impactDeformation: z.number().min(0).max(1), trailEnabled: z.boolean(), innerColor: z.string().default("#63f0d1"), innerShape: z.enum(["orb", "icosahedron", "torusKnot"]).default("icosahedron"), innerImageUrl: z.string().nullable().default(null), endRevealEnabled: z.boolean().default(false), revealMode: z.enum(["end", "time"]).default("end"), revealTimeSeconds: z.number().nonnegative().default(0), revealHoldSeconds: z.number().min(0).max(30).default(2) }).strict(),
   objects: z.array(sceneObjectSchema), trajectorySegments: z.array(trajectorySegmentSchema),
   camera: z.object({ mode: z.enum(["fixed", "verticalTracking", "fullTracking", "smoothFollow", "cinematic", "keyframed", "autoFraming", "spline"]), position: vector3Schema, target: vector3Schema, fieldOfView: z.number().positive().max(179), damping: z.number().min(0).max(1), lookAhead: z.number().nonnegative() }).strict(),
@@ -840,6 +888,7 @@ export type SongPlayerAsset = SongPlayerSettings["assets"][number];
 export type SongPlayerMatch = SongPlayerSettings["match"];
 export type CassetteDeskSettings = RhythmBallProject["animation"]["cassetteDesk"];
 export type CassetteDeskWindowEnvironment = CassetteDeskSettings["windowEnvironment"];
+export type OverlaySpectralSettings = RhythmBallProject["animation"]["overlaySpectral"];
 export type CommentsInvasionSettings = RhythmBallProject["animation"]["commentsInvasion"];
 
 export function parseProject(input: unknown): RhythmBallProject {
@@ -934,9 +983,13 @@ export function parseProject(input: unknown): RhythmBallProject {
   const migratedLegacySubtitleSource = legacyAnimation.modeId === "addSubtitles" && legacyAddSubtitles && typeof legacyAddSubtitles === "object" && !Array.isArray(legacyAddSubtitles)
     ? { ...migratedProSubtitles, ...legacyAddSubtitles as Record<string, unknown> }
     : migratedProSubtitles;
+  const legacyOverlaySpectral = legacyAnimation.overlaySpectral;
+  const migratedOverlaySpectral = legacyOverlaySpectral && typeof legacyOverlaySpectral === "object" && !Array.isArray(legacyOverlaySpectral)
+    ? { ...legacyOverlaySpectral, backgroundDim: (legacyOverlaySpectral as Record<string, unknown>).backgroundDim === .38 ? 0 : (legacyOverlaySpectral as Record<string, unknown>).backgroundDim }
+    : defaultOverlaySpectral;
   const currentAnimation = { ...legacyAnimation }; delete currentAnimation.addSubtitles; delete currentAnimation.pixelArt;
   const migratedBaseObjectTypes = legacyAnimation.modeId === "pixelArt" ? ["kick", "snare", "drum", "cymbal"] : currentAnimation.baseObjectTypes;
-  return projectSchema.parse({ ...candidate, animation: { ...currentAnimation, modeId: migratedModeId, baseObjectTypes: migratedBaseObjectTypes, teddyWalk: migratedTeddy, proSubtitles: migratedLegacySubtitleSource, pixelsSub: legacyAnimation.pixelsSub ?? defaultPixelsSub, staticWatermark: migratedStaticWatermark, videoEditor: migratedVideoEditor, songPlayer: legacyAnimation.songPlayer ?? defaultSongPlayer, cassetteDesk: legacyAnimation.cassetteDesk ?? defaultCassetteDesk, commentsInvasion: legacyAnimation.commentsInvasion ?? defaultCommentsInvasion } });
+  return projectSchema.parse({ ...candidate, animation: { ...currentAnimation, modeId: migratedModeId, baseObjectTypes: migratedBaseObjectTypes, teddyWalk: migratedTeddy, proSubtitles: migratedLegacySubtitleSource, pixelsSub: legacyAnimation.pixelsSub ?? defaultPixelsSub, staticWatermark: migratedStaticWatermark, videoEditor: migratedVideoEditor, songPlayer: legacyAnimation.songPlayer ?? defaultSongPlayer, cassetteDesk: legacyAnimation.cassetteDesk ?? defaultCassetteDesk, overlaySpectral: migratedOverlaySpectral, commentsInvasion: legacyAnimation.commentsInvasion ?? defaultCommentsInvasion } });
 }
 
 export function createProject(name = "Progetto senza titolo", now = new Date()): RhythmBallProject {
@@ -948,7 +1001,7 @@ export function createProject(name = "Progetto senza titolo", now = new Date()):
     canvas: { aspectRatio: "9:16", previewWidth: 540, previewHeight: 960, previewFps: { numerator: 30, denominator: 1 }, exportWidth: 1080, exportHeight: 1920, exportFps: { numerator: 60, denominator: 1 } },
     analysis: { analyzerVersion: "", cacheKey: "", globalBpm: null, latencyCompensationMs: 0, waveform: [], localTempo: [], segments: [] },
     events: [],
-    animation: { modeId: "instrumentalFalling", baseObjectTypes: ["kick", "snare", "drum", "cymbal"], newYorkStreets: defaultNewYorkStreets, coverSphere: defaultCoverSphere, stereoUnfold: defaultStereoUnfold, walkingCube: defaultWalkingCube, portraitLandscape: defaultPortraitLandscape, commentsInvasion: defaultCommentsInvasion, teddyWalk: defaultTeddyWalk, teddySing: defaultTeddySing, proSubtitles: defaultProSubtitles, pixelsSub: defaultPixelsSub, backgroundAuto: defaultBackgroundAuto, staticWatermark: defaultStaticWatermark, upscaler: defaultUpscaler, frameBooster: defaultFrameBooster, videoEditor: defaultVideoEditor, songPlayer: defaultSongPlayer, cassetteDesk: defaultCassetteDesk },
+    animation: { modeId: "instrumentalFalling", baseObjectTypes: ["kick", "snare", "drum", "cymbal"], newYorkStreets: defaultNewYorkStreets, coverSphere: defaultCoverSphere, stereoUnfold: defaultStereoUnfold, walkingCube: defaultWalkingCube, portraitLandscape: defaultPortraitLandscape, commentsInvasion: defaultCommentsInvasion, teddyWalk: defaultTeddyWalk, teddySing: defaultTeddySing, proSubtitles: defaultProSubtitles, pixelsSub: defaultPixelsSub, backgroundAuto: defaultBackgroundAuto, staticWatermark: defaultStaticWatermark, upscaler: defaultUpscaler, frameBooster: defaultFrameBooster, videoEditor: defaultVideoEditor, songPlayer: defaultSongPlayer, cassetteDesk: defaultCassetteDesk, overlaySpectral: defaultOverlaySpectral },
     ball: { radius: 0.45, visualMass: 1, material: { color: "#dffeff", palette: ["#63f0d1", "#7857ff"], roughness: 0.05, metalness: 0, emission: 0.2, opacity: .32, textureAssetId: null }, spinRate: 1, impactDeformation: 0.2, trailEnabled: true, innerColor: "#63f0d1", innerShape: "icosahedron", innerImageUrl: null, endRevealEnabled: false, revealMode: "end", revealTimeSeconds: 0, revealHoldSeconds: 2 },
     objects: [], trajectorySegments: [],
     camera: { mode: "smoothFollow", position: { x: 0, y: 2, z: 10 }, target: { x: 0, y: 2, z: 0 }, fieldOfView: 45, damping: 0.12, lookAhead: 1.5 },

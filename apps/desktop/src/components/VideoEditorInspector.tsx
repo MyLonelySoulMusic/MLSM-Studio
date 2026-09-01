@@ -7,8 +7,7 @@ import {
   videoEditorClip,
   videoEditorClipEnd,
   videoEditorClipMaximumDuration,
-  videoEditorTimelineDuration,
-  type VideoEditorAdjustments
+  videoEditorTimelineDuration
 } from "../services/video-editor";
 import { videoEditorEffectCatalog, videoEditorEffectClipEnd, videoEditorEffectDefinition } from "../services/video-editor-effects";
 import { videoEditorAdjustmentsAreNeutral } from "../services/video-editor-renderer";
@@ -16,8 +15,9 @@ import { videoEditorSecondsToFrame } from "../services/video-editor";
 import { videoEditorSpeedAtFrame, videoEditorSpeedWithPointBezier, videoEditorSpeedWithPointCurve } from "../services/video-editor-speed";
 import { useVideoEditorPlayback } from "../store/video-editor-playback-store";
 import { defaultVideoEditorImageShadow, videoEditorImageShadowStyles, type VideoEditorImageShadow } from "../services/video-editor-image-shadow";
+import { neutralVideoEditorAdjustments } from "../services/video-editor-adjustments";
+import { VideoEditorAdjustmentsPanel } from "./VideoEditorAdjustmentsPanel";
 
-interface AdjustmentControl { key: keyof VideoEditorAdjustments; label: string; minimum: number; maximum: number; step: number; unit?: string }
 interface NormalizedBezier { x1: number; y1: number; x2: number; y2: number }
 
 const defaultBezier: NormalizedBezier = { x1: .33, y1: .33, x2: .67, y2: .67 };
@@ -25,32 +25,6 @@ const automationCurveOptions = [
   ["hold", "Mantieni"], ["linear", "Lineare"], ["exponential", "Esponenziale"],
   ["logarithmic", "Logaritmica"], ["custom", "Custom Bézier"]
 ] as const;
-
-/**
- * Le regolazioni seguono l’ordine di una correzione colore professionale: prima
- * esposizione e tonalità, poi colore, infine dettaglio. È lo stesso ordine in cui
- * il compositor le applica, così il risultato corrisponde a ciò che si legge qui.
- */
-const adjustmentControls: readonly AdjustmentControl[] = [
-  { key: "exposure", label: "Esposizione", minimum: -2, maximum: 2, step: .01, unit: " EV" },
-  { key: "contrast", label: "Contrasto", minimum: -100, maximum: 100, step: 1 },
-  { key: "highlights", label: "Luci", minimum: -100, maximum: 100, step: 1 },
-  { key: "shadows", label: "Ombre", minimum: -100, maximum: 100, step: 1 },
-  { key: "whites", label: "Bianchi", minimum: -100, maximum: 100, step: 1 },
-  { key: "blacks", label: "Neri", minimum: -100, maximum: 100, step: 1 },
-  { key: "saturation", label: "Saturazione", minimum: -100, maximum: 100, step: 1 },
-  { key: "vibrance", label: "Vividezza", minimum: -100, maximum: 100, step: 1 },
-  { key: "temperature", label: "Temperatura", minimum: -100, maximum: 100, step: 1 },
-  { key: "tint", label: "Tinta", minimum: -100, maximum: 100, step: 1 },
-  { key: "hue", label: "Tonalità", minimum: -180, maximum: 180, step: 1, unit: "°" },
-  { key: "sharpness", label: "Nitidezza", minimum: 0, maximum: 100, step: 1 },
-  { key: "denoise", label: "Riduzione rumore", minimum: 0, maximum: 100, step: 1 }
-];
-
-const neutralAdjustments: VideoEditorAdjustments = {
-  exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0,
-  saturation: 0, vibrance: 0, temperature: 0, tint: 0, hue: 0, sharpness: 0, denoise: 0, opacity: 1
-};
 
 const fitLabels = { cover: "Riempi il fotogramma", contain: "Contieni tutto", fill: "Deforma ai bordi" } as const;
 const imageShadowLabels = { drop: "Ombra morbida", glow: "Bagliore", long: "Ombra lunga" } as const;
@@ -309,12 +283,8 @@ export function VideoEditorInspector() {
               <button type="button" disabled={clipLocked} onClick={() => updateAdjustments(clip.id, { exposure: 0, contrast: 10, highlights: -14, shadows: 9, saturation: -5, temperature: 5, sharpness: 5 })}>Soft film</button>
               <button type="button" disabled={clipLocked} onClick={() => updateAdjustments(clip.id, { exposure: .03, contrast: 18, highlights: -6, shadows: -4, vibrance: 14, sharpness: 16 })}>Punch</button>
             </div>
-            <div className="video-editor-adjustments">
-              {adjustmentControls.map((control) => <label key={control.key}>{control.label}: {control.step < 1 ? clip.adjustments[control.key].toFixed(2) : clip.adjustments[control.key]}{control.unit ?? ""}
-                <span className="video-editor-automation-control"><input aria-label={`${control.label} clip`} type="range" min={control.minimum} max={control.maximum} step={control.step} value={clip.adjustments[control.key]} disabled={clipLocked} onChange={(event) => updateAdjustments(clip.id, { [control.key]: Number(event.target.value) })} /><button type="button" className="video-editor-keyframe" aria-label={`Aggiungi keyframe ${control.label}`} disabled={clipLocked} onClick={() => addKeyframe(`adjustments.${String(control.key)}`, Number(clip.adjustments[control.key]))}>◆</button></span>
-              </label>)}
-            </div>
-            <button type="button" disabled={clipLocked || (videoEditorAdjustmentsAreNeutral(clip.adjustments) && clip.adjustments.opacity === 1)} onClick={() => updateAdjustments(clip.id, neutralAdjustments)}>Ripristina regolazioni</button>
+            <VideoEditorAdjustmentsPanel adjustments={clip.adjustments} disabled={clipLocked} ariaLabelSuffix="clip" onChange={(patch) => updateAdjustments(clip.id, patch)} onAddKeyframe={(key, value) => addKeyframe(`adjustments.${String(key)}`, value)} />
+            <button type="button" disabled={clipLocked || (videoEditorAdjustmentsAreNeutral(clip.adjustments) && clip.adjustments.opacity === 1)} onClick={() => updateAdjustments(clip.id, neutralVideoEditorAdjustments)}>Ripristina regolazioni</button>
           </>
           : null}
 

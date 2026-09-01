@@ -18,18 +18,22 @@ export type VideoEditorSourceResolver = (clip: VideoEditorClip, sourceTimeSecond
  * dell’Upscaler, estesi con la rotazione di tonalità richiesta dal montaggio.
  */
 export function videoEditorFilter(item: VideoEditorAdjustments): string {
-  const brightness = Math.pow(2, item.exposure) * (1 + (item.whites + item.highlights * .35 + item.shadows * .15 + item.blacks * .1) / 500);
-  const contrast = 1 + item.contrast / 100 + (item.whites - item.blacks) / 600;
+  const brightness = Math.pow(2, item.exposure) * (1 + item.brightness / 100) * (1 + (item.whites + item.highlights * .35 + item.shadows * .15 + item.blacks * .1) / 500);
+  const contrast = (1 + item.contrast / 100 + (item.whites - item.blacks) / 600 + item.clarity / 320) * (1 - item.fade / 350);
   const saturation = 1 + (item.saturation + item.vibrance * .65) / 100;
-  const blur = item.denoise > 0 ? Math.min(1.2, item.denoise / 90) : 0;
+  const blur = Math.min(5, item.denoise / 90 + item.blur / 25);
   const hue = item.hue !== 0 ? ` hue-rotate(${item.hue}deg)` : "";
-  return `brightness(${Math.max(.05, brightness).toFixed(4)}) contrast(${Math.max(.05, contrast).toFixed(4)}) saturate(${Math.max(0, saturation).toFixed(4)}) blur(${blur.toFixed(3)}px)${hue}`;
+  const grayscale = item.grayscale !== 0 ? ` grayscale(${(item.grayscale / 100).toFixed(4)})` : "";
+  const sepia = item.sepia !== 0 ? ` sepia(${(item.sepia / 100).toFixed(4)})` : "";
+  return `brightness(${Math.max(.05, brightness).toFixed(4)}) contrast(${Math.max(.05, contrast).toFixed(4)}) saturate(${Math.max(0, saturation).toFixed(4)}) blur(${blur.toFixed(3)}px)${hue}${grayscale}${sepia}`;
 }
 
 export function videoEditorAdjustmentsAreNeutral(item: VideoEditorAdjustments): boolean {
   return item.exposure === 0 && item.contrast === 0 && item.highlights === 0 && item.shadows === 0
     && item.whites === 0 && item.blacks === 0 && item.saturation === 0 && item.vibrance === 0
-    && item.temperature === 0 && item.tint === 0 && item.hue === 0 && item.sharpness === 0 && item.denoise === 0;
+    && item.temperature === 0 && item.tint === 0 && item.hue === 0 && item.sharpness === 0 && item.denoise === 0
+    && item.brightness === 0 && item.clarity === 0 && item.blur === 0 && item.grayscale === 0 && item.sepia === 0
+    && item.fade === 0 && item.vignette === 0;
 }
 
 /** Applies the persisted automation lanes to a render-only settings snapshot. */
@@ -81,6 +85,26 @@ function correctionOverlay(context: CanvasRenderingContext2D, width: number, hei
     context.globalAlpha = Math.min(.18, item.sharpness / 420);
     context.filter = `contrast(${(1 + item.sharpness / 180).toFixed(4)})`;
     context.drawImage(context.canvas, 0, 0);
+    context.restore();
+  }
+  if (item.fade > 0) {
+    context.save();
+    context.globalCompositeOperation = "screen";
+    context.globalAlpha = Math.min(.2, item.fade / 500);
+    context.fillStyle = "#777777";
+    context.fillRect(0, 0, width, height);
+    context.restore();
+  }
+  if (item.vignette > 0) {
+    context.save();
+    context.globalCompositeOperation = "source-atop";
+    context.globalAlpha = Math.min(.9, item.vignette / 110);
+    const vignette = context.createRadialGradient(width / 2, height / 2, Math.min(width, height) * .2, width / 2, height / 2, Math.max(width, height) * .7);
+    vignette.addColorStop(0, "#00000000");
+    vignette.addColorStop(.58, "#00000008");
+    vignette.addColorStop(1, "#000000");
+    context.fillStyle = vignette;
+    context.fillRect(0, 0, width, height);
     context.restore();
   }
 }

@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { createProject, type CassetteDeskSettings, type RhythmBallProject, type SongPlayerAsset, type SongPlayerMatch, type SongPlayerSettings } from "@rbs/project-schema";
+import { createProject, type CassetteDeskSettings, type OverlaySpectralSettings, type RhythmBallProject, type SongPlayerAsset, type SongPlayerMatch, type SongPlayerSettings } from "@rbs/project-schema";
 import type { AudioMetadata } from "../services/audio-import";
 import type { AudioAnalysisResult } from "@rbs/audio-analysis";
 import {
@@ -63,6 +63,8 @@ interface ProjectState {
   updateSongPlayer: (patch: Partial<SongPlayerSettings>) => void;
   updateCassetteDesk: (patch: Partial<CassetteDeskSettings>) => void;
   applyCassetteDeskExtractedPalette: (colors: readonly string[]) => void;
+  updateOverlaySpectral: (patch: Partial<OverlaySpectralSettings>) => void;
+  applyOverlaySpectralExtractedPalette: (colors: readonly string[]) => void;
   setSongPlayerPalette: (colors: readonly string[]) => void;
   applySongPlayerExtractedPalette: (colors: readonly string[]) => void;
   setSongPlayerMatch: (match: SongPlayerMatch) => void;
@@ -348,7 +350,7 @@ function defaultVideoEditorClip(id: string, asset: VideoEditorAsset, placement: 
     audioFadeInSeconds: 0, audioFadeOutSeconds: 0,
     blendMode: "normal", blendIntensity: 1,
     speed: { mode: "constant", constant: 1, points: [], preservePitch: false },
-    adjustments: { exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, saturation: 0, vibrance: 0, temperature: 0, tint: 0, hue: 0, sharpness: 0, denoise: 0, opacity: 1 },
+    adjustments: { exposure: 0, brightness: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, clarity: 0, saturation: 0, vibrance: 0, temperature: 0, tint: 0, hue: 0, sharpness: 0, denoise: 0, blur: 0, grayscale: 0, sepia: 0, fade: 0, vignette: 0, opacity: 1 },
     transform: { x: 0, y: 0, scale: 1, rotation: 0 },
     imageShadow: { ...defaultVideoEditorImageShadow },
     // Un fermo immagine trasparente deve mostrare tutto il canvas senza crop:
@@ -493,6 +495,8 @@ export const useProjectStore = create<ProjectState>((set) => ({
   updateSongPlayer: (patch) => set((state) => ({ project: { ...state.project, animation: { ...state.project.animation, songPlayer: { ...state.project.animation.songPlayer, ...patch } } }, dirty: true })),
   updateCassetteDesk: (patch) => set((state) => ({ project: { ...state.project, animation: { ...state.project.animation, cassetteDesk: { ...state.project.animation.cassetteDesk, ...patch } } }, dirty: true })),
   applyCassetteDeskExtractedPalette: (colors) => set((state) => { const settings = state.project.animation.cassetteDesk; if (!settings.autoPalette) return state; const palette = [colors[0] ?? settings.palette[0], colors[1] ?? settings.palette[1], colors[2] ?? settings.palette[2]] as [string, string, string]; return { project: { ...state.project, animation: { ...state.project.animation, cassetteDesk: { ...settings, palette } } }, dirty: true }; }),
+  updateOverlaySpectral: (patch) => set((state) => ({ project: { ...state.project, animation: { ...state.project.animation, overlaySpectral: { ...state.project.animation.overlaySpectral, ...patch } } }, dirty: true })),
+  applyOverlaySpectralExtractedPalette: (colors) => set((state) => { const settings = state.project.animation.overlaySpectral; if (!settings.autoPalette) return state; const palette = [colors[0] ?? settings.palette[0], colors[1] ?? settings.palette[1], colors[2] ?? settings.palette[2]] as [string, string, string]; return { project: { ...state.project, animation: { ...state.project.animation, overlaySpectral: { ...settings, palette } } }, dirty: true }; }),
   setSongPlayerPalette: (colors) => set((state) => { const settings = state.project.animation.songPlayer; const palette = [colors[0] ?? settings.palette[0], colors[1] ?? settings.palette[1], colors[2] ?? settings.palette[2]] as [string, string, string]; return { project: { ...state.project, animation: { ...state.project.animation, songPlayer: { ...settings, palette, autoPalette: false } } }, dirty: true }; }),
   applySongPlayerExtractedPalette: (colors) => set((state) => { const settings = state.project.animation.songPlayer; if (!settings.autoPalette) return state; const palette = [colors[0] ?? settings.palette[0], colors[1] ?? settings.palette[1], colors[2] ?? settings.palette[2]] as [string, string, string]; return { project: { ...state.project, animation: { ...state.project.animation, songPlayer: { ...settings, palette } } }, dirty: true }; }),
   setSongPlayerMatch: (match) => set((state) => { const settings = state.project.animation.songPlayer; const asset = settings.fullTrackAssetId ? settings.assets.find((item) => item.id === settings.fullTrackAssetId) : undefined; if ((match.fragmentHash && match.fragmentHash !== state.project.audio.hash) || (match.fullTrackHash && match.fullTrackHash !== asset?.hash)) return { status: "Matching ignorato: hash non coerenti" }; const selectedOffsetMs = clampSongPlayerOffset(match.selectedOffsetMs, asset?.durationSeconds ?? null, state.project.audio.durationSeconds); return { project: { ...state.project, animation: { ...state.project.animation, songPlayer: { ...settings, match: { ...match, selectedOffsetMs } } } }, dirty: true }; }),

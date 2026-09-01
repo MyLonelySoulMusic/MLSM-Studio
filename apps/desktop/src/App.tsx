@@ -45,6 +45,7 @@ import { VideoEditorInspector } from "./components/VideoEditorInspector";
 import { VideoEditorTimeline } from "./components/VideoEditorTimeline";
 import { VideoEditorWorkspace } from "./components/VideoEditorWorkspace";
 import { AIQuantizerWorkspace } from "./components/AIQuantizerWorkspace";
+import { MlsmPostLipsyncWorkspace } from "./components/MlsmPostLipsyncWorkspace";
 import { exportVideoEditorOfflineVideo } from "./services/video-editor-offline-exporter";
 import { videoEditorSourceTime, videoEditorTimelineDuration } from "./services/video-editor";
 import { useVideoEditorPlayback } from "./store/video-editor-playback-store";
@@ -62,6 +63,8 @@ import { useUpscalerBatchStore } from "./store/upscaler-batch-store";
 import { resolveUpscalerDisplaySettings } from "./services/upscaler-batch";
 import { resetUpscalerRuntimeForProjectReplacement } from "./services/upscaler-batch-lifecycle";
 import { resetFrameBoosterRuntimeForProjectReplacement } from "./services/frame-booster-source-file";
+import { clearOverlaySpectralBackground } from "./services/overlay-spectral-background-runtime";
+import { requestMediaPlayback } from "./services/media-playback";
 import { SongPlayerPreview } from "./components/SongPlayerPreview";
 import { analyzeSongPlayerAudio } from "./services/song-player-analysis";
 import { exportSongPlayerOfflineVideo } from "./services/song-player-offline-exporter";
@@ -79,10 +82,13 @@ import { CommentsInvasionPreview } from "./components/CommentsInvasionPreview";
 import { CommentsInvasionInspector } from "./components/CommentsInvasionInspector";
 import { exportCommentsInvasionOfflineVideo } from "./services/comments-invasion-offline-exporter";
 import { resetCommentsInvasionRuntime, useCommentsInvasionStore } from "./store/comments-invasion-store";
+import { OverlaySpectralPreview } from "./components/OverlaySpectralPreview";
+import { exportOverlaySpectralOfflineVideo } from "./services/overlay-spectral-offline-exporter";
 
 const WORKSPACE_LAYOUT_KEY = "dynamic-sound-animation-studio.workspace-layout.v1";
 const TIMELINE_LAYOUT_KEY = "dynamic-sound-animation-studio.timeline-height.v1";
 const VIDEO_EDITOR_TIMELINE_LAYOUT_KEY = "dynamic-sound-animation-studio.video-editor.timeline-height.v1";
+type PlaybackPhase = "idle" | "intro" | "starting" | "playing";
 
 function initialWorkspacePanelWidths() {
   if (typeof window === "undefined") return DEFAULT_WORKSPACE_PANEL_WIDTHS;
@@ -110,13 +116,20 @@ function probeVideoDimensions(url: string): Promise<{ width: number; height: num
 }
 
 export function App({ onHome }: { onHome?: () => void } = {}) {
-  const store = useProjectStore(); const audio = useAudioStore(); const analysis = useAnalysisStore(); const exportState = useExportStore(); const sceneObjects = useSceneStore((state) => state.objects); const sceneBall = useSceneStore((state) => state.ball); const sceneBackground = useSceneStore((state) => state.background); const sceneRailColors = useSceneStore((state) => state.railColors); const sceneLight = useSceneStore((state) => state.light); const replaceScene = useSceneStore((state) => state.replace); const regenerateScene = useSceneStore((state) => state.regenerate); const resetScene = useSceneStore((state) => state.reset); const updateSceneBall = useSceneStore((state) => state.updateBall); const updateSceneBackground = useSceneStore((state) => state.updateBackground); const updateSceneLight = useSceneStore((state) => state.updateLight); const updateRailColor = useSceneStore((state) => state.updateRailColor); const { setCurrentTime, setPlaying, setDiagnostics, setSongPlayerSegmentOffsetSeconds } = audio; const audioElement = useRef<HTMLAudioElement>(null); const viewportRenderer = useRef<SharedViewportRenderer | null>(null); const workspace = useRef<HTMLDivElement>(null); const portraitAutoAnalysisHash = useRef<string | null>(null); const [workspacePanelWidths, setWorkspacePanelWidths] = useState(initialWorkspacePanelWidths); const [timelineHeight, setTimelineHeight] = useState(initialTimelineHeight); const [videoEditorTimelineHeight, setVideoEditorTimelineHeight] = useState(initialVideoEditorTimelineHeight); const [exportRenderTime, setExportRenderTime] = useState<number | null>(null); const [selectedPhonemeId, setSelectedPhonemeId] = useState<string | null>(null); const [selectedSubtitleId, setSelectedSubtitleId] = useState<string | null>(null); const analyzer = useRef(new WebAudioAnalyzer()); const onRendererReady = useCallback((renderer: SharedViewportRenderer | null) => { viewportRenderer.current = renderer; }, []); const handleSelectObject = useCallback((id: string | null) => { useSceneStore.getState().select(id); if (id) useProjectStore.getState().selectEvent(null); }, []); const handleSelectMusicEvent = useCallback((id: string | null, additive = false) => { setSelectedPhonemeId(null); setSelectedSubtitleId(null); useSceneStore.getState().select(null); useProjectStore.getState().selectEvent(id, additive); }, []);
+  const store = useProjectStore(); const audio = useAudioStore(); const analysis = useAnalysisStore(); const exportState = useExportStore(); const sceneObjects = useSceneStore((state) => state.objects); const sceneBall = useSceneStore((state) => state.ball); const sceneBackground = useSceneStore((state) => state.background); const sceneRailColors = useSceneStore((state) => state.railColors); const sceneLight = useSceneStore((state) => state.light); const replaceScene = useSceneStore((state) => state.replace); const regenerateScene = useSceneStore((state) => state.regenerate); const resetScene = useSceneStore((state) => state.reset); const updateSceneBall = useSceneStore((state) => state.updateBall); const updateSceneBackground = useSceneStore((state) => state.updateBackground); const updateSceneLight = useSceneStore((state) => state.updateLight); const updateRailColor = useSceneStore((state) => state.updateRailColor); const { setCurrentTime, setPlaying, setDiagnostics, setSongPlayerSegmentOffsetSeconds } = audio; const audioElement = useRef<HTMLAudioElement>(null); const playbackIntent = useRef(0); const playbackPhase = useRef<PlaybackPhase>("idle"); const viewportRenderer = useRef<SharedViewportRenderer | null>(null); const workspace = useRef<HTMLDivElement>(null); const portraitAutoAnalysisHash = useRef<string | null>(null); const [workspacePanelWidths, setWorkspacePanelWidths] = useState(initialWorkspacePanelWidths); const [timelineHeight, setTimelineHeight] = useState(initialTimelineHeight); const [videoEditorTimelineHeight, setVideoEditorTimelineHeight] = useState(initialVideoEditorTimelineHeight); const [exportRenderTime, setExportRenderTime] = useState<number | null>(null); const [selectedPhonemeId, setSelectedPhonemeId] = useState<string | null>(null); const [selectedSubtitleId, setSelectedSubtitleId] = useState<string | null>(null); const analyzer = useRef(new WebAudioAnalyzer()); const onRendererReady = useCallback((renderer: SharedViewportRenderer | null) => { viewportRenderer.current = renderer; }, []); const overlaySpectralPlaybackTime = useCallback(() => audioElement.current?.currentTime ?? useAudioStore.getState().currentTime, []); const handleSelectObject = useCallback((id: string | null) => { useSceneStore.getState().select(id); if (id) useProjectStore.getState().selectEvent(null); }, []); const handleSelectMusicEvent = useCallback((id: string | null, additive = false) => { setSelectedPhonemeId(null); setSelectedSubtitleId(null); useSceneStore.getState().select(null); useProjectStore.getState().selectEvent(id, additive); }, []);
+  const pauseMasterPlayback = useCallback((element: HTMLMediaElement | null = audioElement.current) => {
+    playbackIntent.current += 1;
+    playbackPhase.current = "idle";
+    element?.pause();
+    setPlaying(false);
+  }, [setPlaying]);
   const upscalerBatchRunning = useUpscalerBatchStore((state) => state.running);
   const commentsInvasionAssets = useCommentsInvasionStore((state) => state.assets);
   const projectSourceOperation = useRef(new LatestOperation());
   const imported = audio.imported; const duration = imported?.metadata.durationSeconds ?? store.project.audio.durationSeconds;
   const songPlayerMode = store.project.animation.modeId === "songPlayer";
   const cassetteDeskMode = store.project.animation.modeId === "cassetteDesk";
+  const overlaySpectralMode = store.project.animation.modeId === "overlaySpectral";
   const songPlayerOffsetSeconds = store.project.animation.songPlayer.match.selectedOffsetMs / 1000;
   const songPlayerRange = useMemo(() => songPlayerPlaybackRange(songPlayerOffsetSeconds, duration, audio.fullTrack?.metadata.durationSeconds ?? duration), [audio.fullTrack?.metadata.durationSeconds, duration, songPlayerOffsetSeconds]);
   const [cassetteVocalNotes,setCassetteVocalNotes]=useState<CassetteDeskPitchFrame[]>([]);const [cassetteMusicalAnalysis,setCassetteMusicalAnalysis]=useState<CassetteDeskMusicalAnalysis|null>(null);const [cassetteVocalsReady,setCassetteVocalsReady]=useState(false);const [cassetteVocalStatus,setCassetteVocalStatus]=useState("In attesa del brano");const [cassetteVocalError,setCassetteVocalError]=useState<string|null>(null);const [cassetteVocalRetry,setCassetteVocalRetry]=useState(0);
@@ -168,13 +181,21 @@ export function App({ onHome }: { onHome?: () => void } = {}) {
   const workspaceStyle = { "--library-width": `${workspacePanelWidths.left}px`, "--inspector-width": `${workspacePanelWidths.right}px` } as CSSProperties;
   const applyGeneratedScene = useCallback((project: RhythmBallProject) => { const generated = generateSceneForMode(project); const availableTypes = new Set(getAnimationMode(project.animation.modeId).objectTypes.map((item) => item.type)); const sceneState = useSceneStore.getState(); const current = sceneState.objects; const rebasedLight = rebaseSceneLight(sceneState.light, current, generated); if (current.length && current.every((object) => availableTypes.has(object.type))) regenerateScene(generated); else replaceScene(generated); sceneState.updateLight(rebasedLight); }, [regenerateScene, replaceScene]);
   useEffect(() => { ensureSongPlayerRuntimeProject(store.project.project.id); }, [store.project.project.id]);
-  useEffect(() => () => { projectSourceOperation.current.invalidate(); disposeSongPlayerRuntime(); }, []);
+  useEffect(() => () => { playbackIntent.current += 1; playbackPhase.current = "idle"; projectSourceOperation.current.invalidate(); clearOverlaySpectralBackground(); disposeSongPlayerRuntime(); }, []);
+  useEffect(() => {
+    playbackIntent.current += 1;
+    playbackPhase.current = "idle";
+    setPlaying(false);
+  }, [imported?.url, setPlaying]);
   useEffect(() => {
     const element = audioElement.current; if (!element) return;
     const update = () => setCurrentTime(Math.max(0, Math.min(duration, element.currentTime)));
-    const ended = () => { setPlaying(false); if (cassetteDeskMode) { setCassetteIntroPlayed(false); setCassetteIntroTime(0); } };
-    element.addEventListener("timeupdate", update); element.addEventListener("ended", ended);
-    return () => { element.removeEventListener("timeupdate", update); element.removeEventListener("ended", ended); };
+    const playing = () => { if (playbackPhase.current === "starting" || playbackPhase.current === "playing") { playbackPhase.current = "playing"; setPlaying(true); } };
+    const paused = () => { if (playbackPhase.current === "playing") { playbackIntent.current += 1; playbackPhase.current = "idle"; setPlaying(false); } };
+    const failed = () => { if (playbackPhase.current === "idle") return; playbackIntent.current += 1; playbackPhase.current = "idle"; setPlaying(false); useAudioStore.getState().setError(element.error?.message ? `Riproduzione audio non riuscita: ${element.error.message}` : "Riproduzione audio non riuscita."); };
+    const ended = () => { playbackIntent.current += 1; playbackPhase.current = "idle"; setPlaying(false); if (cassetteDeskMode) { setCassetteIntroPlayed(false); setCassetteIntroTime(0); } };
+    element.addEventListener("timeupdate", update); element.addEventListener("playing", playing); element.addEventListener("pause", paused); element.addEventListener("error", failed); element.addEventListener("ended", ended);
+    return () => { element.removeEventListener("timeupdate", update); element.removeEventListener("playing", playing); element.removeEventListener("pause", paused); element.removeEventListener("error", failed); element.removeEventListener("ended", ended); };
   }, [cassetteDeskMode, duration, setCurrentTime, setPlaying]);
   useEffect(() => {
     if (!audio.playing) return; let animationFrame = 0; let last = performance.now(); let windowStart = last; let frames = 0; let dropped = audio.droppedFrames;
@@ -182,24 +203,40 @@ export function App({ onHome }: { onHome?: () => void } = {}) {
     animationFrame = requestAnimationFrame(tick); return () => cancelAnimationFrame(animationFrame);
   }, [audio.droppedFrames, audio.playing, duration, setCurrentTime, setDiagnostics]);
   const saveProject = useCallback(async () => {
-    try { const repository = new TauriProjectRepository(store.filePath); const snapshot = { ...store.project, objects: serializeSceneObjects(sceneObjects), ball: { ...store.project.ball, radius: sceneBall.radius, material: { ...store.project.ball.material, color: sceneBall.color, emission: sceneBall.emission, metalness: sceneBall.metalness }, trailEnabled: sceneBall.trailEnabled, innerColor: sceneBall.innerColor, innerShape: sceneBall.innerShape, innerImageUrl: sceneBall.innerImageUrl, endRevealEnabled: sceneBall.endRevealEnabled, revealMode: sceneBall.revealMode, revealTimeSeconds: sceneBall.revealTimeSeconds, revealHoldSeconds: sceneBall.revealHoldSeconds }, background: { ...store.project.background, type: sceneBackground.imageUrl ? sceneBackground.mediaType : "linearGradient" as const, colors: sceneBackground.colors, imageUrl: sceneBackground.imageUrl, presetId: sceneBackground.presetId, finish: sceneBackground.finish, opacity: sceneBackground.opacity, blur: sceneBackground.blur, effects: sceneBackground.effects, neon: sceneBackground.neon, railColors: sceneRailColors }, lighting: { ...sceneLight, origin: { x: sceneLight.origin[0], y: sceneLight.origin[1], z: sceneLight.origin[2] }, target: { x: sceneLight.target[0], y: sceneLight.target[1], z: sceneLight.target[2] } } }; const saved = await new ProjectService(repository).save(snapshot); if (repository.filePath) store.markSaved(saved, repository.filePath); }
-    catch (error) { store.setStatus(error instanceof Error ? error.message : "Errore durante il salvataggio"); }
+    try {
+      const repository = new TauriProjectRepository(store.filePath);
+      const liveOverlay = store.project.animation.overlaySpectral;
+      const persistedOverlay = liveOverlay.backgroundImageUrl?.startsWith("blob:") ? { ...liveOverlay, backgroundImageUrl: null, backgroundMediaType: "image" as const } : liveOverlay;
+      const snapshot = {
+        ...store.project,
+        animation: { ...store.project.animation, overlaySpectral: persistedOverlay },
+        objects: serializeSceneObjects(sceneObjects),
+        ball: { ...store.project.ball, radius: sceneBall.radius, material: { ...store.project.ball.material, color: sceneBall.color, emission: sceneBall.emission, metalness: sceneBall.metalness }, trailEnabled: sceneBall.trailEnabled, innerColor: sceneBall.innerColor, innerShape: sceneBall.innerShape, innerImageUrl: sceneBall.innerImageUrl, endRevealEnabled: sceneBall.endRevealEnabled, revealMode: sceneBall.revealMode, revealTimeSeconds: sceneBall.revealTimeSeconds, revealHoldSeconds: sceneBall.revealHoldSeconds },
+        background: { ...store.project.background, type: sceneBackground.imageUrl ? sceneBackground.mediaType : "linearGradient" as const, colors: sceneBackground.colors, imageUrl: sceneBackground.imageUrl, presetId: sceneBackground.presetId, finish: sceneBackground.finish, opacity: sceneBackground.opacity, blur: sceneBackground.blur, effects: sceneBackground.effects, neon: sceneBackground.neon, railColors: sceneRailColors },
+        lighting: { ...sceneLight, origin: { x: sceneLight.origin[0], y: sceneLight.origin[1], z: sceneLight.origin[2] }, target: { x: sceneLight.target[0], y: sceneLight.target[1], z: sceneLight.target[2] } }
+      };
+      const saved = await new ProjectService(repository).save(snapshot);
+      if (repository.filePath) {
+        const liveSaved = liveOverlay.backgroundImageUrl?.startsWith("blob:") ? { ...saved, animation: { ...saved.animation, overlaySpectral: liveOverlay } } : saved;
+        store.markSaved(liveSaved, repository.filePath);
+      }
+    } catch (error) { store.setStatus(error instanceof Error ? error.message : "Errore durante il salvataggio"); }
   }, [sceneBackground, sceneBall, sceneLight, sceneObjects, sceneRailColors, store]);
   const openProject = useCallback(async () => {
     const operation = projectSourceOperation.current.begin();
     try {
       const repository = new TauriProjectRepository(null); if (!(await repository.chooseForLoad()) || !operation.isCurrent()) return; const loaded = await new ProjectService(repository).load(); if (!operation.isCurrent() || !loaded || !repository.filePath) return;
-      resetUpscalerRuntimeForProjectReplacement(); resetFrameBoosterRuntimeForProjectReplacement(); resetCommentsInvasionRuntime(); resetSongPlayerRuntimeForProjectReplacement(loaded.project.id); audioElement.current?.pause(); audio.reset(); analysis.reset(); store.setProject(loaded, repository.filePath);
+      pauseMasterPlayback(); resetUpscalerRuntimeForProjectReplacement(); resetFrameBoosterRuntimeForProjectReplacement(); resetCommentsInvasionRuntime(); clearOverlaySpectralBackground(); resetSongPlayerRuntimeForProjectReplacement(loaded.project.id); audio.reset(); analysis.reset(); store.setProject(loaded, repository.filePath);
       if (loaded.objects.length) replaceScene(deserializeSceneObjects(loaded.objects)); updateSceneBall({ radius: loaded.ball.radius, color: loaded.ball.material.color, emission: loaded.ball.material.emission, metalness: loaded.ball.material.metalness, trailEnabled: loaded.ball.trailEnabled, innerColor: loaded.ball.innerColor, innerShape: loaded.ball.innerShape, innerImageUrl: loaded.ball.innerImageUrl, endRevealEnabled: loaded.ball.endRevealEnabled, revealMode: loaded.ball.revealMode, revealTimeSeconds: loaded.ball.revealTimeSeconds, revealHoldSeconds: loaded.ball.revealHoldSeconds }); updateSceneBackground({ colors: [loaded.background.colors[0] ?? "#0d1020", loaded.background.colors[1] ?? "#211238"], imageUrl: loaded.background.imageUrl, mediaType: loaded.background.type === "video" ? "video" : "image", presetId: loaded.background.presetId as typeof sceneBackground.presetId, finish: loaded.background.finish, opacity: loaded.background.opacity, blur: loaded.background.blur, effects: loaded.background.effects, neon: loaded.background.neon }); updateSceneLight({ ...loaded.lighting, origin: [loaded.lighting.origin.x, loaded.lighting.origin.y, loaded.lighting.origin.z], target: [loaded.lighting.target.x, loaded.lighting.target.y, loaded.lighting.target.z] }); updateRailColor("pinball", loaded.background.railColors.pinball); updateRailColor("glassTube", loaded.background.railColors.glassTube); updateRailColor("bricks", loaded.background.railColors.bricks);
       if (loaded.audio.sourcePath && isTauri()) { const fragmentAudio = await loadAudioFromPath(loaded.audio.sourcePath); if (!operation.isCurrent() || useProjectStore.getState().project.project.id !== loaded.project.id) { releaseImportedAudio(fragmentAudio); return; } audio.setImported(fragmentAudio); } else if (loaded.audio.sourcePath) store.setStatus("Progetto caricato: reimporta l’audio per riattivare la preview web");
       if (isTauri()) { try { const fullTrackAudio = await rehydrateSongPlayerFullTrack(loaded, loadAudioFromPath, { isCurrent: () => operation.isCurrent() && useProjectStore.getState().project.project.id === loaded.project.id }); if (!operation.isCurrent() || useProjectStore.getState().project.project.id !== loaded.project.id) { releaseImportedAudio(fullTrackAudio); return; } audio.setFullTrack(fullTrackAudio); } catch (error) { if (!operation.isCurrent() || (error instanceof DOMException && error.name === "AbortError")) return; audio.setFullTrack(null); store.setStatus(error instanceof Error ? error.message : "Traccia completa non recuperabile: reimportala."); } }
     }
     catch (error) { if (operation.isCurrent()) store.setStatus(error instanceof Error ? error.message : "Errore durante l'apertura"); }
-  }, [analysis, audio, replaceScene, sceneBackground, store, updateRailColor, updateSceneBackground, updateSceneBall, updateSceneLight]);
+  }, [analysis, audio, pauseMasterPlayback, replaceScene, sceneBackground, store, updateRailColor, updateSceneBackground, updateSceneBall, updateSceneLight]);
   const newProject = useCallback(() => {
     if (store.dirty && !window.confirm("Le modifiche non salvate andranno perse. Continuare?")) return;
-    projectSourceOperation.current.invalidate(); resetUpscalerRuntimeForProjectReplacement(); resetFrameBoosterRuntimeForProjectReplacement(); resetCommentsInvasionRuntime(); audioElement.current?.pause(); audio.reset(); analysis.reset(); resetScene(); store.newProject(); resetSongPlayerRuntimeForProjectReplacement(useProjectStore.getState().project.project.id);
-  }, [analysis, audio, resetScene, store]);
+    projectSourceOperation.current.invalidate(); pauseMasterPlayback(); resetUpscalerRuntimeForProjectReplacement(); resetFrameBoosterRuntimeForProjectReplacement(); resetCommentsInvasionRuntime(); clearOverlaySpectralBackground(); audio.reset(); analysis.reset(); resetScene(); store.newProject(); resetSongPlayerRuntimeForProjectReplacement(useProjectStore.getState().project.project.id);
+  }, [analysis, audio, pauseMasterPlayback, resetScene, store]);
   const handleImportAudio = useCallback(async () => {
     const operation = projectSourceOperation.current.begin(); const ownerProjectId = useProjectStore.getState().project.project.id; const isCurrent = () => operation.isCurrent() && useProjectStore.getState().project.project.id === ownerProjectId;
     audio.setLoading(true); audio.setError(null);
@@ -251,16 +288,32 @@ export function App({ onHome }: { onHome?: () => void } = {}) {
     try { const completed = await analyzer.current.analyze(imported.url, imported.metadata.hash, undefined, analysis.updateProgress); analysis.complete(completed.result, completed.cached); store.applyAnalysis(completed.result); const current = useProjectStore.getState(); if (current.project.animation.modeId === "teddySing") { const settings = current.project.animation.teddySing; current.setTeddySingPhonemes(extractTeddyPhonemeCues(completed.result.energy, settings.vocalSensitivity, settings.lipSyncIntensity)); } applyGeneratedScene(useProjectStore.getState().project); }
     catch (error) { analysis.fail(error instanceof Error ? error.message : String(error)); }
   }, [analysis, applyGeneratedScene, audio.imported, store]);
-  useEffect(() => { if (cassetteDeskMode && imported && !analysis.result && !analysis.running && !analysis.error) void handleAnalyze(); }, [analysis.error, analysis.result, analysis.running, cassetteDeskMode, handleAnalyze, imported]);
+  useEffect(() => { if ((cassetteDeskMode || overlaySpectralMode) && imported && !analysis.result && !analysis.running && !analysis.error) void handleAnalyze(); }, [analysis.error, analysis.result, analysis.running, cassetteDeskMode, handleAnalyze, imported, overlaySpectralMode]);
   const seek = useCallback((time: number) => { if (!audioElement.current) return; const local = Math.max(0, Math.min(duration, time)); cassetteIntroPlayback.current?.cancel(); cassetteIntroPlayback.current=null; setCassetteIntroPlayed(local > 0); setCassetteIntroTime(local > 0 ? store.project.animation.cassetteDesk.introDurationSeconds : 0); audioElement.current.currentTime = local; audio.setCurrentTime(local); }, [audio, duration, store.project.animation.cassetteDesk.introDurationSeconds]);
   const playPause = useCallback(() => {
     const element = audioElement.current; if (!element) return;
-    if (cassetteDeskMode && element.paused && element.currentTime < .005 && !cassetteIntroPlayed) { const playback=playCassetteDeskIntro(store.project.animation.cassetteDesk.introDurationSeconds,setCassetteIntroTime); cassetteIntroPlayback.current=playback; audio.setPlaying(true); void playback.finished.then(()=>{if(cassetteIntroPlayback.current!==playback)return;cassetteIntroPlayback.current=null;setCassetteIntroPlayed(true);void element.play().then(()=>audio.setPlaying(true)).catch((error:unknown)=>audio.setError(error instanceof Error?error.message:String(error)));}); return; }
-    if (cassetteIntroPlayback.current) { cassetteIntroPlayback.current.cancel(); cassetteIntroPlayback.current=null; audio.setPlaying(false); return; }
-    if (element.paused) { if (element.currentTime >= duration - .005) element.currentTime = 0; void element.play().then(() => audio.setPlaying(true)).catch((error: unknown) => audio.setError(error instanceof Error ? error.message : String(error))); }
-    else { element.pause(); audio.setPlaying(false); }
-  }, [audio, cassetteDeskMode, cassetteIntroPlayed, duration, store.project.animation.cassetteDesk.introDurationSeconds]);
-  const stop = useCallback(() => { cassetteIntroPlayback.current?.cancel(); cassetteIntroPlayback.current=null; audioElement.current?.pause(); seek(0); audio.setPlaying(false); }, [audio, seek]);
+    const beginPlayback = () => {
+      const intent = ++playbackIntent.current;
+      playbackPhase.current = "starting";
+      const requested = requestMediaPlayback(element, () => playbackIntent.current === intent);
+      audio.setError(null);
+      audio.setPlaying(false);
+      void requested.then((started) => {
+        if (playbackIntent.current !== intent) return;
+        if (!started) { playbackPhase.current = "idle"; audio.setPlaying(false); return; }
+        if (playbackPhase.current === "starting") { playbackPhase.current = "playing"; audio.setPlaying(true); }
+      }).catch((error: unknown) => {
+        if (playbackIntent.current !== intent) return;
+        playbackPhase.current = "idle"; audio.setPlaying(false); audio.setError(error instanceof Error ? error.message : String(error));
+      });
+    };
+    if (cassetteIntroPlayback.current) { cassetteIntroPlayback.current.cancel(); cassetteIntroPlayback.current=null; pauseMasterPlayback(element); return; }
+    if (playbackPhase.current === "intro" || playbackPhase.current === "starting" || playbackPhase.current === "playing") { pauseMasterPlayback(element); return; }
+    if (cassetteDeskMode && element.currentTime < .005 && !cassetteIntroPlayed) { playbackIntent.current += 1; playbackPhase.current = "intro"; const playback=playCassetteDeskIntro(store.project.animation.cassetteDesk.introDurationSeconds,setCassetteIntroTime); cassetteIntroPlayback.current=playback; audio.setPlaying(true); void playback.finished.then(()=>{if(cassetteIntroPlayback.current!==playback || playbackPhase.current !== "intro")return;cassetteIntroPlayback.current=null;setCassetteIntroPlayed(true);beginPlayback();}); return; }
+    if (element.currentTime >= duration - .005) element.currentTime = 0;
+    beginPlayback();
+  }, [audio, cassetteDeskMode, cassetteIntroPlayed, duration, pauseMasterPlayback, store.project.animation.cassetteDesk.introDurationSeconds]);
+  const stop = useCallback(() => { cassetteIntroPlayback.current?.cancel(); cassetteIntroPlayback.current=null; pauseMasterPlayback(); seek(0); }, [pauseMasterPlayback, seek]);
   useEffect(() => {
     setSongPlayerSegmentOffsetSeconds(songPlayerRange.startSeconds);
   }, [setSongPlayerSegmentOffsetSeconds, songPlayerRange.startSeconds]);
@@ -273,15 +326,16 @@ export function App({ onHome }: { onHome?: () => void } = {}) {
   useEffect(() => { if (selectedSubtitleId && !store.project.subtitles.cues.some((cue) => cue.id === selectedSubtitleId)) setSelectedSubtitleId(null); }, [selectedSubtitleId, store.project.subtitles.cues]);
   const videoEditorMode = store.project.animation.modeId === "videoEditor";
   const aiQuantizerMode = store.project.animation.modeId === "aiQuantizer";
+  const mlsmPostLipsyncMode = store.project.animation.modeId === "mlsmPostLipsync";
   useEffect(() => {
     const keyboardPlayback = (event: KeyboardEvent) => {
       // Nel Video Editor la barra spaziatrice appartiene al trasporto del montaggio.
-      if (videoEditorMode || aiQuantizerMode || (event.code !== "Space" && event.key !== " ") || event.repeat || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || duration <= 0 || exportState.open || exportState.running) return;
+      if (videoEditorMode || aiQuantizerMode || mlsmPostLipsyncMode || (event.code !== "Space" && event.key !== " ") || event.repeat || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || duration <= 0 || exportState.open || exportState.running) return;
       const target = event.target; if (target instanceof HTMLElement && (target.isContentEditable || target.matches("input, textarea, select, button, [role='button']"))) return;
       event.preventDefault(); playPause();
     };
     window.addEventListener("keydown", keyboardPlayback); return () => window.removeEventListener("keydown", keyboardPlayback);
-  }, [aiQuantizerMode, duration, exportState.open, exportState.running, playPause, videoEditorMode]);
+  }, [aiQuantizerMode, duration, exportState.open, exportState.running, mlsmPostLipsyncMode, playPause, videoEditorMode]);
   const walkingCubeMode = store.project.animation.modeId === "walkingCube";
   const portraitLandscapeMode = store.project.animation.modeId === "portraitLandscape";
   const commentsInvasionMode = store.project.animation.modeId === "commentsInvasion";
@@ -482,7 +536,7 @@ export function App({ onHome }: { onHome?: () => void } = {}) {
   const startExport = useCallback(async (settings: ExportDialogStartSettings) => {
     const renderer = viewportRenderer.current;
     const element = audioElement.current;
-    const rendererIndependentMode = pixelsSubMode || backgroundAutoMode || staticWatermarkMode || frameBoosterMode || portraitLandscapeMode || commentsInvasionMode || videoEditorMode || songPlayerMode || cassetteDeskMode;
+    const rendererIndependentMode = pixelsSubMode || backgroundAutoMode || staticWatermarkMode || frameBoosterMode || portraitLandscapeMode || commentsInvasionMode || videoEditorMode || songPlayerMode || cassetteDeskMode || overlaySpectralMode;
     if (!rendererIndependentMode && !renderer) {
       exportState.fail("Renderer o sorgente audio/video non disponibili");
       return;
@@ -494,7 +548,7 @@ export function App({ onHome }: { onHome?: () => void } = {}) {
         const editorSettings = useProjectStore.getState().project.animation.videoEditor;
         const timelineDuration = videoEditorTimelineDuration(editorSettings);
         if (timelineDuration <= 0) throw new Error("La timeline è vuota: aggiungi almeno una clip prima dell’export.");
-        element?.pause(); audio.setPlaying(false); useVideoEditorPlayback.getState().setPlaying(false);
+        pauseMasterPlayback(element); useVideoEditorPlayback.getState().setPlaying(false);
         const advanced = settings.videoEditor;
         const result = await exportVideoEditorOfflineVideo({
           width: settings.width,
@@ -519,7 +573,7 @@ export function App({ onHome }: { onHome?: () => void } = {}) {
         if (!backgroundAuto.imageUrl) throw new Error("Upload an image before exporting Circular Spectrum Auto Detector.");
         if (backgroundAuto.sourceWidth <= 0 || backgroundAuto.sourceHeight <= 0) throw new Error("Source dimensions are missing: reload the image before export.");
         const configurationError = backgroundAutoConfigurationError(backgroundAuto); if (configurationError) throw new Error(configurationError);
-        element?.pause(); audio.setPlaying(false);
+        pauseMasterPlayback(element);
         if (!imported?.url) throw new Error("Import an audio track before Circular Spectrum Auto Detector export.");
         const result = await exportBackgroundAutoOfflineVideo({ width: settings.width, height: settings.height, fps: settings.fps, durationSeconds: settings.durationSeconds, projectName: store.project.project.name, projectSeed: store.project.project.seed, quality: settings.quality, audioUrl: imported.url, imageUrl: backgroundAuto.imageUrl, backgroundAutoSettings: backgroundAuto, energyFrames: analysis.result?.energy ?? [], subtitleCues: store.project.subtitles.cues, proSubtitlesSettings: store.project.animation.proSubtitles }, controller.signal, (progress) => exportState.update(progress.progress, progress.currentFrame, progress.totalFrames));
         exportState.complete(); store.setStatus(`Circular Spectrum Auto Detector export ready · ${result.width} × ${result.height} · ${result.encodedFrameCount} frames · ${result.fileName}`); return;
@@ -527,14 +581,13 @@ export function App({ onHome }: { onHome?: () => void } = {}) {
       if (staticWatermarkMode) {
         const watermark = store.project.animation.staticWatermark;
         if (!watermark.videoUrl || !watermark.referenceImageUrl) throw new Error("Carica sia il video con watermark sia la fotografia originale pulita.");
-        element?.pause(); audio.setPlaying(false);
+        pauseMasterPlayback(element);
         const result = await exportStaticWatermarkVideo({ projectName: store.project.project.name, quality: settings.quality, sourceVideoUrl: watermark.videoUrl, referenceImageUrl: watermark.referenceImageUrl, watermarkSettings: watermark }, controller.signal, (progress) => exportState.update(progress.progress, progress.currentFrame, progress.totalFrames));
         exportState.complete(); store.setStatus(`Watermark rimosso · ${result.width} × ${result.height} · ${result.encodedFrameCount} frame verificati · ${result.fileName}`); return;
       }
       if (pixelsSubMode) {
         if (!imported?.url || !store.project.animation.pixelsSub.imageUrl) throw new Error("Brano o cover Pixels Subtitles mancanti.");
-        element?.pause();
-        audio.setPlaying(false);
+        pauseMasterPlayback(element);
         const rhythmEvents = store.project.events.filter((event) => event.enabled).map((event) => ({ timeSeconds: event.timeSeconds, strength: event.strength }));
         const result = await exportPixelsSubOfflineVideo({
           width: settings.width,
@@ -560,7 +613,7 @@ export function App({ onHome }: { onHome?: () => void } = {}) {
         const portrait = store.project.animation.portraitLandscape;
         if (!portrait.videoUrl || !portrait.sideImageUrl || !portrait.coverImageUrl) throw new Error("Carica video verticale, immagine laterale e cover prima dell’export.");
         if (portrait.videoHasAudio && !analysis.result) throw new Error("Analizza l’audio del video prima dell’export per generare spettro, urti e rotazione ritmica.");
-        element?.pause(); audio.setPlaying(false);
+        pauseMasterPlayback(element);
         const rhythmEvents = store.project.events.filter((event) => event.enabled).map((event) => ({ timeSeconds: event.timeSeconds, strength: event.strength }));
         const result = await exportPortraitLandscapeOfflineVideo({
           width: settings.width,
@@ -586,7 +639,7 @@ export function App({ onHome }: { onHome?: () => void } = {}) {
         const invasion = store.project.animation.commentsInvasion;
         if (!invasion.videoUrl) throw new Error("Carica il video sorgente prima dell’export Comments Invasion.");
         if (!commentsInvasionAssets.length) throw new Error("Carica almeno uno screenshot di commento prima dell’export Comments Invasion.");
-        element?.pause(); audio.setPlaying(false);
+        pauseMasterPlayback(element);
         const result = await exportCommentsInvasionOfflineVideo({
           width: settings.width,
           height: settings.height,
@@ -610,11 +663,18 @@ export function App({ onHome }: { onHome?: () => void } = {}) {
         const result = await exportSongPlayerOfflineVideo({ width: settings.width, height: settings.height, fps: settings.fps, playbackRange: songPlayerRange, fragmentAudioUrl: imported.url, aspectRatio: store.project.canvas.aspectRatio, projectName: store.project.project.name, quality: settings.quality, renderer }, controller.signal, (progress) => exportState.update(progress.progress, progress.currentFrame, progress.totalFrames));
         exportState.complete(); store.setStatus(`Song Player verificato · ${result.encodedFrameCount} frame · ${result.fileName}`); return;
       }
+      if (overlaySpectralMode) {
+        if (!imported?.url || !analysis.result) throw new Error("Overlay Spectral richiede un brano con analisi FFT completata.");
+        if (!renderer) throw new Error("Renderer Overlay Spectral non disponibile.");
+        pauseMasterPlayback(element);
+        const result = await exportOverlaySpectralOfflineVideo({ width: settings.width, height: settings.height, fps: settings.fps, durationSeconds: duration, sourceUrl: imported.url, aspectRatio: store.project.canvas.aspectRatio, projectName: store.project.project.name, quality: settings.quality, overlaySettings: store.project.animation.overlaySpectral, renderer }, controller.signal, (progress) => exportState.update(progress.progress, progress.currentFrame, progress.totalFrames));
+        exportState.complete(); store.setStatus(`Overlay Spectral verificata · ${result.encodedFrameCount} frame · ${result.fileName}`); return;
+      }
       if (cassetteDeskMode) {
         if (!imported?.url || !analysis.result) throw new Error("Cassette Desk richiede il brano analizzato prima dell’export.");
         if (!cassetteVocalsReady || cassetteVocalError) throw new Error("Completa la separazione vocale Demucs prima dell’export Cassette Desk.");
         if (!renderer) throw new Error("Renderer Cassette Desk non disponibile.");
-        element?.pause(); audio.setPlaying(false); const cassette = store.project.animation.cassetteDesk;
+        pauseMasterPlayback(element); const cassette = store.project.animation.cassetteDesk;
         const result = await exportCassetteDeskOfflineVideo({ width: settings.width, height: settings.height, fps: settings.fps, aspectRatio: store.project.canvas.aspectRatio, songDurationSeconds: duration, introDurationSeconds: cassette.introDurationSeconds, sourceUrl: imported.url,includeSongAudio:settings.cassetteDesk?.audioMode!=="effectsOnly", projectName: store.project.project.name, quality: settings.quality, renderer }, controller.signal, (progress) => exportState.update(progress.progress, progress.currentFrame, progress.totalFrames));
         exportState.complete(); store.setStatus(`Cassette Desk verificato · ${result.encodedFrameCount} frame · ${result.fileName}`); return;
       }
@@ -622,8 +682,7 @@ export function App({ onHome }: { onHome?: () => void } = {}) {
       if (proSubtitlesMode) {
         const proSettings = settings.proSubtitles;
         if (!proSettings) throw new Error("Impostazioni export Pro Subtitles mancanti.");
-        element?.pause();
-        audio.setPlaying(false);
+        pauseMasterPlayback(element);
         const result = await exportProSubtitleVideo({
           width: settings.width,
           height: settings.height,
@@ -649,8 +708,7 @@ export function App({ onHome }: { onHome?: () => void } = {}) {
       }
 
       if (!imported?.url) throw new Error("Sorgente audio/video non disponibile.");
-      element?.pause();
-      audio.setPlaying(false);
+      pauseMasterPlayback(element);
       const offlineSettings = {
         width: settings.width,
         height: settings.height,
@@ -685,7 +743,7 @@ export function App({ onHome }: { onHome?: () => void } = {}) {
       if (error instanceof DOMException && error.name === "AbortError") exportState.fail("Esportazione annullata");
       else exportState.fail(error instanceof Error ? error.message : String(error));
     }
-  }, [analysis.result, audio, backgroundAutoMode, cassetteDeskMode, cassetteVocalError, cassetteVocalsReady, characterMode, commentsInvasionAssets, commentsInvasionMode, duration, exportState, frameBoosterMode, globalBpm, imported?.url, pixelsSubMode, pixelsSubRhythmHits, portraitLandscapeMode, proSubtitlesMode, sceneBackground, sceneBall, songPlayerAnalysis, songPlayerAnalysisError, songPlayerMode, songPlayerRange, staticWatermarkMode, stereoUnfoldMode, store, videoEditorMode, walkingCubeMode]);
+  }, [analysis.result, audio, backgroundAutoMode, cassetteDeskMode, cassetteVocalError, cassetteVocalsReady, characterMode, commentsInvasionAssets, commentsInvasionMode, duration, exportState, frameBoosterMode, globalBpm, imported?.url, overlaySpectralMode, pauseMasterPlayback, pixelsSubMode, pixelsSubRhythmHits, portraitLandscapeMode, proSubtitlesMode, sceneBackground, sceneBall, songPlayerAnalysis, songPlayerAnalysisError, songPlayerMode, songPlayerRange, staticWatermarkMode, stereoUnfoldMode, store, videoEditorMode, walkingCubeMode]);
   const canExportCurrentMode = cassetteDeskMode
     ? Boolean(duration > 0 && imported?.url && analysis.result && cassetteVocalsReady && !cassetteVocalError && store.project.animation.cassetteDesk.coverImageUrl)
     : frameBoosterMode
@@ -696,10 +754,11 @@ export function App({ onHome }: { onHome?: () => void } = {}) {
       ? videoEditorDuration > 0
       : commentsInvasionMode
         ? Boolean(duration > 0 && store.project.animation.commentsInvasion.videoUrl && commentsInvasionAssets.length)
-      : songPlayerMode ? Boolean(duration > 0 && audio.fullTrack?.url && songPlayerAnalysis && songPlayerAnalysis.sourceHash === audio.fullTrack.metadata.hash && !songPlayerAnalysisError && (store.project.animation.songPlayer.match.state === "matched" || store.project.animation.songPlayer.match.state === "manual")) : duration > 0 && (backgroundAutoMode ? Boolean(store.project.animation.backgroundAuto.imageUrl && store.project.animation.backgroundAuto.sourceWidth > 0 && store.project.animation.backgroundAuto.effects.some((effect) => effect.enabled && (effect.placementMode === "manual" || Boolean(effect.detectionId))) && !backgroundAutoConfigurationError(store.project.animation.backgroundAuto)) : staticWatermarkMode ? Boolean(store.project.animation.staticWatermark.videoUrl && store.project.animation.staticWatermark.referenceImageUrl) : portraitLandscapeMode ? Boolean(store.project.animation.portraitLandscape.videoUrl && store.project.animation.portraitLandscape.sideImageUrl && store.project.animation.portraitLandscape.coverImageUrl && (!store.project.animation.portraitLandscape.videoHasAudio || analysis.result)) : pixelsSubMode ? Boolean(store.project.animation.pixelsSub.imageUrl) : subtitleVideoMode ? subtitleVideoReady : store.project.animation.modeId === "coverSphere" || stereoUnfoldMode || characterMode || trajectory.segments.length > 0);
+      : songPlayerMode ? Boolean(duration > 0 && audio.fullTrack?.url && songPlayerAnalysis && songPlayerAnalysis.sourceHash === audio.fullTrack.metadata.hash && !songPlayerAnalysisError && (store.project.animation.songPlayer.match.state === "matched" || store.project.animation.songPlayer.match.state === "manual")) : overlaySpectralMode ? Boolean(duration > 0 && imported?.url && analysis.result) : duration > 0 && (backgroundAutoMode ? Boolean(store.project.animation.backgroundAuto.imageUrl && store.project.animation.backgroundAuto.sourceWidth > 0 && store.project.animation.backgroundAuto.effects.some((effect) => effect.enabled && (effect.placementMode === "manual" || Boolean(effect.detectionId))) && !backgroundAutoConfigurationError(store.project.animation.backgroundAuto)) : staticWatermarkMode ? Boolean(store.project.animation.staticWatermark.videoUrl && store.project.animation.staticWatermark.referenceImageUrl) : portraitLandscapeMode ? Boolean(store.project.animation.portraitLandscape.videoUrl && store.project.animation.portraitLandscape.sideImageUrl && store.project.animation.portraitLandscape.coverImageUrl && (!store.project.animation.portraitLandscape.videoHasAudio || analysis.result)) : pixelsSubMode ? Boolean(store.project.animation.pixelsSub.imageUrl) : subtitleVideoMode ? subtitleVideoReady : store.project.animation.modeId === "coverSphere" || stereoUnfoldMode || characterMode || trajectory.segments.length > 0);
   const handleToolbarExport = () => { if (upscalerMode) window.dispatchEvent(new Event("upscaler:export")); else if (frameBoosterMode) window.dispatchEvent(new Event("frame-booster:export")); else exportState.show(); };
   const shellStyle = { "--timeline-height": `${timelineHeight}px` } as CSSProperties;
   if (aiQuantizerMode) return <AIQuantizerWorkspace {...(onHome ? { onHome } : {})} />;
+  if (mlsmPostLipsyncMode) return <MlsmPostLipsyncWorkspace {...(onHome ? { onHome } : {})} />;
   return <div className={`app-shell${upscalerMode ? " upscaler-app-shell" : ""}${frameBoosterMode ? " frame-booster-app-shell" : ""}${portraitLandscapeMode ? " portrait-landscape-app-shell" : ""}${commentsInvasionMode ? " comments-invasion-app-shell" : ""}${videoEditorMode ? " video-editor-app-shell" : ""}`} style={shellStyle}>
     <audio ref={audioElement} src={imported?.url} preload="auto" loop={audio.looping} />
     <Toolbar {...(onHome ? { onHome } : {})} name={store.project.project.name} dirty={store.dirty} subtitleVideoMode={videoEditorMode || (sourceVideoMode && !portraitLandscapeMode)} analysisOnlyMode={portraitLandscapeMode} audioLoading={audio.loading} canAnalyze={Boolean(imported) && !staticWatermarkMode} analysisRunning={analysis.running} analysisProgress={analysis.progress?.progress ?? 0} canGenerate={store.project.events.length > 0 && !characterMode && !stereoUnfoldMode && !sourceVideoMode && store.project.animation.modeId !== "coverSphere"} canExport={canExportCurrentMode} canUndo={videoEditorMode ? store.videoEditorHistory.length > 0 : store.eventHistory.length > 0} canRedo={videoEditorMode ? store.videoEditorFuture.length > 0 : store.eventFuture.length > 0} onNew={newProject} onOpen={() => void openProject()} onSave={() => void saveProject()} onImportAudio={() => void handleImportAudio()} onAnalyze={() => void handleAnalyze()} onGenerate={handleGenerateScene} onExport={handleToolbarExport} onUndo={videoEditorMode ? store.undoVideoEditor : store.undoEvents} onRedo={videoEditorMode ? store.redoVideoEditor : store.redoEvents} />
@@ -708,7 +767,7 @@ export function App({ onHome }: { onHome?: () => void } = {}) {
       : <><div className="workspace" ref={workspace} style={workspaceStyle}>
         <LibraryPanel canRegenerate={store.project.events.length > 0} onRegenerate={handleGenerateScene} onImportAudioFragment={handleImportAudio} onImportSubtitleVideo={handleImportSubtitleVideo} audioUrl={imported?.url ?? null} duration={duration} currentTime={audio.currentTime} selectedSubtitleId={selectedSubtitleId} onSelectSubtitle={setSelectedSubtitleId} />
         <WorkspaceResizeHandle side="left" width={workspacePanelWidths.left} onResize={(width) => resizeWorkspaceSide("left", width)} onReset={() => resizeWorkspaceSide("left", DEFAULT_WORKSPACE_PANEL_WIDTHS.left)} />
-        {cassetteDeskMode ? <CassetteDeskPreview settings={store.project.animation.cassetteDesk} analysis={cassetteDeskAnalysis} timeSeconds={displayTime} songDurationSeconds={duration} aspectRatio={store.project.canvas.aspectRatio} customWidth={store.project.canvas.previewWidth} customHeight={store.project.canvas.previewHeight} vocalStatus={cassetteVocalStatus} vocalError={cassetteVocalError} onRendererReady={onRendererReady} /> : frameBoosterMode ? <FrameBoosterPreview /> : songPlayerMode ? <SongPlayerPreview settings={store.project.animation.songPlayer} analysis={songPlayerAnalysis} playbackRange={songPlayerRange} currentTime={displayTime} aspectRatio={store.project.canvas.aspectRatio} customWidth={store.project.canvas.previewWidth} customHeight={store.project.canvas.previewHeight} analysisError={songPlayerAnalysisError} onRendererReady={onRendererReady} /> : commentsInvasionMode ? <CommentsInvasionPreview settings={store.project.animation.commentsInvasion} timeSeconds={displayTime} durationSeconds={duration} playing={audio.playing} aspectRatio={store.project.canvas.aspectRatio} customWidth={store.project.canvas.previewWidth} customHeight={store.project.canvas.previewHeight} projectSeed={store.project.project.seed} onPlayPause={playPause} onStop={stop} onSeek={seek} /> : portraitLandscapeMode ? <PortraitLandscapePreview settings={store.project.animation.portraitLandscape} subtitles={store.project.subtitles} proSubtitlesSettings={store.project.animation.proSubtitles} timeSeconds={displayTime} durationSeconds={duration} playing={audio.playing} bpm={globalBpm} analysisReady={Boolean(analysis.result?.energy.length)} audioPulse={coverSpectrum.pulse} rhythmPulse={rhythmPulse} spectrumBands={coverSpectrum.bands} stereoLeftBands={coverSpectrum.leftBands} stereoRightBands={coverSpectrum.rightBands} onPlayPause={playPause} onStop={stop} onSeek={seek} /> : backgroundAutoMode ? <BackgroundAutoPreview settings={store.project.animation.backgroundAuto} timeSeconds={displayTime} durationSeconds={duration} playing={audio.playing || exportState.running} spectrumBands={coverSpectrum.bands} audioPulse={coverSpectrum.pulse} stereoLeftBands={coverSpectrum.leftBands} stereoRightBands={coverSpectrum.rightBands} stereoLeftPulse={coverSpectrum.leftPulse} stereoRightPulse={coverSpectrum.rightPulse} subtitleCues={store.project.subtitles.cues} proSubtitlesSettings={store.project.animation.proSubtitles} projectSeed={store.project.project.seed} onSourceDimensions={hydrateBackgroundAutoSource} onPlayPause={playPause} onStop={stop} onSeek={seek} /> : <Viewport key={`${sceneBall.innerShape}-${store.project.animation.modeId}`} timeSeconds={displayTime} durationSeconds={duration} playing={audio.playing || exportState.running} onPlayPause={playPause} onStop={stop} onSeek={seek} ballPosition={trajectory.segments.length ? ballState.position : undefined} ballVelocity={trajectory.segments.length ? ballState.velocity : undefined} activeObjectIndex={activeObjectIndex} aspectRatio={store.project.canvas.aspectRatio} animationModeId={store.project.animation.modeId} newYorkSettings={store.project.animation.newYorkStreets} coverSphereSettings={store.project.animation.coverSphere} stereoUnfoldSettings={store.project.animation.stereoUnfold} walkingCubeSettings={store.project.animation.walkingCube} teddyWalkSettings={store.project.animation.teddyWalk} teddySingSettings={store.project.animation.teddySing} proSubtitlesSettings={store.project.animation.proSubtitles} pixelsSubSettings={store.project.animation.pixelsSub} staticWatermarkSettings={store.project.animation.staticWatermark} upscalerSettings={upscalerDisplaySettings} pixelsSubRhythmHits={pixelsSubRhythmHits} teddyLipSync={teddyLipSync} subtitles={viewportSubtitles} spectrumBands={coverSpectrum.bands} stereoLeftBands={coverSpectrum.leftBands} stereoRightBands={coverSpectrum.rightBands} stereoWidth={coverSpectrum.stereoWidth} stereoLeftPulse={coverSpectrum.leftPulse} stereoRightPulse={coverSpectrum.rightPulse} audioPulse={coverSpectrum.pulse} rhythmPulse={rhythmPulse} globalBpm={globalBpm} trajectorySegments={trajectory.segments} projectSeed={store.project.project.seed} motionKinds={trajectory.objectMotionKinds} impactResponses={impactResponses} onRendererReady={onRendererReady} onSelectObject={handleSelectObject} />}
+        {cassetteDeskMode ? <CassetteDeskPreview settings={store.project.animation.cassetteDesk} analysis={cassetteDeskAnalysis} timeSeconds={displayTime} songDurationSeconds={duration} aspectRatio={store.project.canvas.aspectRatio} customWidth={store.project.canvas.previewWidth} customHeight={store.project.canvas.previewHeight} vocalStatus={cassetteVocalStatus} vocalError={cassetteVocalError} onRendererReady={onRendererReady} /> : overlaySpectralMode ? <OverlaySpectralPreview settings={store.project.animation.overlaySpectral} energyFrames={analysis.result?.energy ?? []} currentTime={displayTime} playing={audio.playing} getPlaybackTime={overlaySpectralPlaybackTime} aspectRatio={store.project.canvas.aspectRatio} customWidth={store.project.canvas.previewWidth} customHeight={store.project.canvas.previewHeight} onRendererReady={onRendererReady} /> : frameBoosterMode ? <FrameBoosterPreview /> : songPlayerMode ? <SongPlayerPreview settings={store.project.animation.songPlayer} analysis={songPlayerAnalysis} playbackRange={songPlayerRange} currentTime={displayTime} aspectRatio={store.project.canvas.aspectRatio} customWidth={store.project.canvas.previewWidth} customHeight={store.project.canvas.previewHeight} analysisError={songPlayerAnalysisError} onRendererReady={onRendererReady} /> : commentsInvasionMode ? <CommentsInvasionPreview settings={store.project.animation.commentsInvasion} timeSeconds={displayTime} durationSeconds={duration} playing={audio.playing} aspectRatio={store.project.canvas.aspectRatio} customWidth={store.project.canvas.previewWidth} customHeight={store.project.canvas.previewHeight} projectSeed={store.project.project.seed} onPlayPause={playPause} onStop={stop} onSeek={seek} /> : portraitLandscapeMode ? <PortraitLandscapePreview settings={store.project.animation.portraitLandscape} subtitles={store.project.subtitles} proSubtitlesSettings={store.project.animation.proSubtitles} timeSeconds={displayTime} durationSeconds={duration} playing={audio.playing} bpm={globalBpm} analysisReady={Boolean(analysis.result?.energy.length)} audioPulse={coverSpectrum.pulse} rhythmPulse={rhythmPulse} spectrumBands={coverSpectrum.bands} stereoLeftBands={coverSpectrum.leftBands} stereoRightBands={coverSpectrum.rightBands} onPlayPause={playPause} onStop={stop} onSeek={seek} /> : backgroundAutoMode ? <BackgroundAutoPreview settings={store.project.animation.backgroundAuto} timeSeconds={displayTime} durationSeconds={duration} playing={audio.playing || exportState.running} spectrumBands={coverSpectrum.bands} audioPulse={coverSpectrum.pulse} stereoLeftBands={coverSpectrum.leftBands} stereoRightBands={coverSpectrum.rightBands} stereoLeftPulse={coverSpectrum.leftPulse} stereoRightPulse={coverSpectrum.rightPulse} subtitleCues={store.project.subtitles.cues} proSubtitlesSettings={store.project.animation.proSubtitles} projectSeed={store.project.project.seed} onSourceDimensions={hydrateBackgroundAutoSource} onPlayPause={playPause} onStop={stop} onSeek={seek} /> : <Viewport key={`${sceneBall.innerShape}-${store.project.animation.modeId}`} timeSeconds={displayTime} durationSeconds={duration} playing={audio.playing || exportState.running} onPlayPause={playPause} onStop={stop} onSeek={seek} ballPosition={trajectory.segments.length ? ballState.position : undefined} ballVelocity={trajectory.segments.length ? ballState.velocity : undefined} activeObjectIndex={activeObjectIndex} aspectRatio={store.project.canvas.aspectRatio} animationModeId={store.project.animation.modeId} newYorkSettings={store.project.animation.newYorkStreets} coverSphereSettings={store.project.animation.coverSphere} stereoUnfoldSettings={store.project.animation.stereoUnfold} walkingCubeSettings={store.project.animation.walkingCube} teddyWalkSettings={store.project.animation.teddyWalk} teddySingSettings={store.project.animation.teddySing} proSubtitlesSettings={store.project.animation.proSubtitles} pixelsSubSettings={store.project.animation.pixelsSub} staticWatermarkSettings={store.project.animation.staticWatermark} upscalerSettings={upscalerDisplaySettings} pixelsSubRhythmHits={pixelsSubRhythmHits} teddyLipSync={teddyLipSync} subtitles={viewportSubtitles} spectrumBands={coverSpectrum.bands} stereoLeftBands={coverSpectrum.leftBands} stereoRightBands={coverSpectrum.rightBands} stereoWidth={coverSpectrum.stereoWidth} stereoLeftPulse={coverSpectrum.leftPulse} stereoRightPulse={coverSpectrum.rightPulse} audioPulse={coverSpectrum.pulse} rhythmPulse={rhythmPulse} globalBpm={globalBpm} trajectorySegments={trajectory.segments} projectSeed={store.project.project.seed} motionKinds={trajectory.objectMotionKinds} impactResponses={impactResponses} onRendererReady={onRendererReady} onSelectObject={handleSelectObject} />}
         <WorkspaceResizeHandle side="right" width={workspacePanelWidths.right} onResize={(width) => resizeWorkspaceSide("right", width)} onReset={() => resizeWorkspaceSide("right", DEFAULT_WORKSPACE_PANEL_WIDTHS.right)} />
         {frameBoosterMode ? <FrameBoosterInspector /> : upscalerMode ? <UpscalerInspector /> : staticWatermarkMode ? <StaticWatermarkInspector /> : commentsInvasionMode ? <CommentsInvasionInspector /> : portraitLandscapeMode ? <PortraitLandscapeInspector /> : backgroundAutoMode ? null : <InspectorPanel name={store.project.project.name} aspectRatio={store.project.canvas.aspectRatio} event={selectedMusicEvent} events={store.project.events} duration={duration} availableObjectTypes={availableObjectTypes} onRename={store.renameProject} onAspectRatio={store.setAspectRatio} onSelectObject={(id) => handleSelectObject(id)} onChangeObjectType={handleChangeObjectType} onUpdateEvent={handleUpdateEvent} onDeleteEvent={store.deleteEvent} />}
       </div>

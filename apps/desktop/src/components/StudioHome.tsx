@@ -11,7 +11,8 @@ const areaCopyKeys = {
   soundAnimation: { label: "soundAnimation", description: "soundDescription" },
   photoVideoStudio: { label: "photoVideoStudio", description: "photoVideoDescription" },
   videoEditor: { label: "videoEditor", description: "videoEditorDescription" },
-  music: { label: "music", description: "musicDescription" }
+  music: { label: "music", description: "musicDescription" },
+  lipsync: { label: "lipsync", description: "lipsyncDescription" }
 } as const;
 
 export type StudioAreaDestination = AnimationCategoryId;

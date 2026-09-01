@@ -1,8 +1,9 @@
 export const ANALYSIS_DATABASE_NAME = "rhythm-ball-analysis";
 export const ANALYSIS_STORE_NAME = "analyses";
 export const SONG_PLAYER_ANALYSIS_STORE_NAME = "song-player-analysis";
+export const MLSM_POST_LIPSYNC_STORE_NAME = "mlsm-post-lipsync-analysis";
 
-const requiredStores = [ANALYSIS_STORE_NAME, SONG_PLAYER_ANALYSIS_STORE_NAME] as const;
+const requiredStores = [ANALYSIS_STORE_NAME, SONG_PLAYER_ANALYSIS_STORE_NAME, MLSM_POST_LIPSYNC_STORE_NAME] as const;
 
 function createMissingStores(database: IDBDatabase): void {
   requiredStores.forEach((storeName) => {

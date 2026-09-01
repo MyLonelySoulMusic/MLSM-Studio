@@ -104,6 +104,39 @@ describe("UpscalerPanel source picker", () => {
     expect(screen.queryByLabelText("URL endpoint Upscaler remoto")).not.toBeInTheDocument();
   });
 
+  it("rende uniformi i cursori e conserva l'ultimo valore durante un trascinamento rapido", () => {
+    render(<UpscalerPanel />);
+    const names = ["Esposizione", "Contrasto", "Luci", "Ombre", "Bianchi", "Neri", "Saturazione", "Vividezza", "Temperatura", "Tinta", "Nitidezza", "Riduzione rumore"];
+    const controls = names.map((name) => screen.getByLabelText(`${name} Upscaler`) as HTMLInputElement);
+
+    expect(controls).toHaveLength(12);
+    controls.forEach((control) => expect(control.closest("label")).toHaveClass("upscaler-range-control"));
+    expect(controls[0]).toHaveAttribute("min", "-2");
+    expect(controls[0]).toHaveAttribute("step", "0.05");
+    expect(controls[10]).toHaveAttribute("min", "0");
+
+    const exposure = controls[0]!;
+    fireEvent.pointerDown(exposure);
+    fireEvent.change(exposure, { target: { value: "0.45" } });
+    fireEvent.change(exposure, { target: { value: "1.35" } });
+    expect(exposure.value).toBe("1.35");
+    expect(exposure.closest("label")?.querySelector("output")).toHaveTextContent("+1.35");
+    fireEvent.pointerUp(exposure);
+    expect(useProjectStore.getState().project.animation.upscaler.adjustments.exposure).toBe(1.35);
+  });
+
+  it("sincronizza i cursori quando vengono ripristinate le regolazioni", async () => {
+    useProjectStore.getState().updateUpscaler({
+      adjustments: { ...useProjectStore.getState().project.animation.upscaler.adjustments, contrast: 47 },
+    });
+    render(<UpscalerPanel />);
+    const contrast = screen.getByLabelText("Contrasto Upscaler") as HTMLInputElement;
+    expect(contrast.value).toBe("47");
+
+    fireEvent.click(screen.getByRole("button", { name: "Ripristina regolazioni" }));
+    await waitFor(() => expect(contrast.value).toBe("0"));
+  });
+
   it("mantiene la scala del modello remoto quando viene caricata una nuova sorgente", async () => {
     mockVideoMetadata({ width: 641, height: 359 });
     Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:remote-x4") });

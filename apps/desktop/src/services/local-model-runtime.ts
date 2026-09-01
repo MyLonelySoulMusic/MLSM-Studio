@@ -155,7 +155,7 @@ async function createLocalPipeline(task: "automatic-speech-recognition" | "text-
 
 export function getLocalTranscriber(model: string, progress?: (message: string) => void): Promise<unknown> {
   let pipeline = transcriberPromises.get(model);
-  if (!pipeline) { pipeline = createLocalPipeline("automatic-speech-recognition", model, progress).catch((error: unknown) => { transcriberPromises.delete(model); throw error; }); transcriberPromises.set(model, pipeline); }
+  if (!pipeline) { pipeline = createLocalPipeline("automatic-speech-recognition", model, progress).catch((error: unknown) => { transcriberPromises.delete(model); const message = localModelErrorMessage(error); setLocalModelStatus(model, "error", `${model} unavailable: ${message}`, progress); throw new Error(message, { cause: error }); }); transcriberPromises.set(model, pipeline); }
   return pipeline;
 }
 

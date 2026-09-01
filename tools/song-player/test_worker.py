@@ -78,6 +78,8 @@ class YoutubeValidationTests(unittest.TestCase):
                 "action": "separateVocals",
                 "inputPath": "/music/full.wav",
                 "jobRoot": str(job),
+                "startSeconds": 30.0,
+                "endSeconds": 42.5,
             }
             self.assertEqual(worker.validate_request(request)[0], "separateVocals")
             with mock.patch.object(worker, "separate_vocals", return_value={"kind": "separateVocals", "pitch": []}) as separate:
@@ -85,6 +87,74 @@ class YoutubeValidationTests(unittest.TestCase):
                 separate.assert_called_once_with(request)
             with self.assertRaisesRegex(worker.WorkerError, "Campi non consentiti"):
                 worker.validate_request({**request, "referencePath": "/music/mix.wav"})
+
+    def test_ffmpeg_audio_window_is_applied_before_decoding(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "source.wav"
+            destination = Path(temporary) / "window.wav"
+            source.write_bytes(b"source")
+            completed = subprocess.CompletedProcess([], 0, b"", b"")
+            with mock.patch.object(worker, "resolve_tool", return_value="/usr/bin/ffmpeg"), mock.patch.object(worker, "run_process", return_value=completed) as run:
+                worker._run_ffmpeg(source, destination, 30.0, 42.5)
+            command = run.call_args.args[0]
+            self.assertEqual(command[command.index("-ss") + 1], "30.000000")
+            self.assertEqual(command[command.index("-t") + 1], "12.500000")
+            self.assertLess(command.index("-ss"), command.index("-i"))
+
+    def test_alignment_refinement_request_is_strict_and_dispatches_only_that_action(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            job = Path(temporary) / "job"
+            job.mkdir()
+            request = {
+                "protocolVersion": 1,
+                "action": "refineAlignment",
+                "sourcePath": "/music/source.wav",
+                "targetPath": "/music/target.wav",
+                "anchors": [{
+                    "id": "word-1",
+                    "cueIndex": 0,
+                    "sourceStart": 1.0,
+                    "sourceCenter": 1.1,
+                    "sourceEnd": 1.2,
+                    "targetStart": 1.02,
+                    "targetCenter": 1.12,
+                    "targetEnd": 1.22,
+                    "maxShiftMs": 50,
+                }],
+                "jobRoot": str(job),
+            }
+            self.assertEqual(worker.validate_request(request)[0], "refineAlignment")
+            expected = {"kind": "refineAlignment", "anchors": [], "algorithm": "mfcc-dtw-v1"}
+            with mock.patch.object(worker, "refine_alignment", return_value=expected) as refine:
+                self.assertEqual(worker.dispatch(request), expected)
+                refine.assert_called_once_with(request)
+            with self.assertRaisesRegex(worker.WorkerError, "Campi non consentiti"):
+                worker.validate_request({**request, "shellCommand": "anything"})
+
+    def test_visual_speech_request_dispatches_only_the_pinned_auto_avsr_action(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            job = Path(temporary) / "job"
+            job.mkdir()
+            video = Path(temporary) / "source.mp4"
+            video.write_bytes(b"video")
+            request = {
+                "protocolVersion": 1,
+                "action": "analyzeVisemes",
+                "inputPath": str(video),
+                "jobRoot": str(job),
+                "language": "en",
+                "anchors": [{
+                    "id": "word-1", "text": "Fallen", "canonicalIndex": 0, "cueIndex": 0,
+                    "sourceStart": 1.0, "sourceCenter": 1.2, "sourceEnd": 1.5,
+                    "sourceConfidence": 0.4,
+                }],
+            }
+            expected = {"kind": "analyzeVisemes", "provider": "Auto-AVSR", "words": [], "visemes": []}
+            with mock.patch.object(worker, "analyze_visemes", return_value=expected) as analyze:
+                self.assertEqual(worker.dispatch(request), expected)
+                analyze.assert_called_once_with(request)
+            with self.assertRaisesRegex(worker.WorkerError, "Campi non consentiti"):
+                worker.validate_request({**request, "shellCommand": "anything"})
 
 
 class MusicalContextTests(unittest.TestCase):
@@ -112,6 +182,65 @@ class MusicalContextTests(unittest.TestCase):
     def test_rejects_an_empty_chromagram_instead_of_inventing_a_key(self):
         with self.assertRaisesRegex(worker.WorkerError, "cromagramma"):
             worker.estimate_key_from_chroma([0.0] * 12)
+
+
+class AlignmentRefinementTests(unittest.TestCase):
+    def test_phrase_activity_discards_noise_islands_and_keeps_the_central_take(self):
+        intervals = [
+            (0, 3270), (3380, 3470),
+            (4460, 4700), (4750, 5010), (5020, 12430), (12610, 12660),
+            (15000, 18270), (18380, 18450),
+        ]
+        groups = worker._merge_activity_intervals(intervals, 1000)
+        self.assertEqual(groups, [(0.0, 3.27), (4.46, 12.43), (15.0, 18.27)])
+        self.assertEqual(worker._center_activity_groups(groups, 1), [(4.46, 12.43)])
+        self.assertAlmostEqual(worker._snap_to_acoustic_onset(7.91, [6.58, 7.78]), 7.78)
+        self.assertAlmostEqual(worker._snap_to_acoustic_onset(6.50, [6.58, 7.78]), 6.50)
+
+    def test_master_vocal_gate_delays_only_the_phrase_that_really_starts_late(self):
+        anchors = [
+            {"id": "the-fallen", "cueIndex": 0, "targetStart": .978, "targetCenter": 1.849, "targetEnd": 2.72},
+            {"id": "still", "cueIndex": 1, "targetStart": 4.34, "targetCenter": 4.62, "targetEnd": 4.9},
+            {"id": "loves", "cueIndex": 1, "targetStart": 5.598, "targetCenter": 5.8, "targetEnd": 6.0},
+        ]
+        groups = [(1.33, 2.91), (3.98, 6.01), (7.72, 9.0)]
+        self.assertEqual(worker._delayed_target_cue_onsets(groups, anchors), {"the-fallen": 1.33})
+
+    def test_refinement_validates_finite_timestamps_without_name_errors(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            job = root / "job"
+            source = root / "source.wav"
+            target = root / "target.wav"
+            job.mkdir()
+            source.write_bytes(b"RIFFsource")
+            target.write_bytes(b"RIFFtarget")
+            fake_librosa = mock.MagicMock()
+            fake_librosa.load.return_value = ([0.0] * 256, 16_000)
+            request = {
+                "jobRoot": str(job),
+                "sourcePath": str(source),
+                "targetPath": str(target),
+                "anchors": [{
+                    "id": "word-1",
+                    "cueIndex": 0,
+                    "sourceStart": 1.0,
+                    "sourceCenter": 1.1,
+                    "sourceEnd": 1.2,
+                    "targetStart": 1.02,
+                    "targetCenter": 1.12,
+                    "targetEnd": 1.22,
+                    "maxShiftMs": 50,
+                }],
+            }
+            with (
+                mock.patch.object(worker, "prepare_librosa_import"),
+                mock.patch.object(worker, "progress"),
+                mock.patch.dict(sys.modules, {"librosa": fake_librosa, "numpy": mock.MagicMock()}),
+            ):
+                result = worker.refine_alignment(request)
+            self.assertEqual(result["kind"], "refineAlignment")
+            self.assertEqual(result["anchors"][0]["method"], "mfcc-dtw-unresolved")
 
 
 class FakeYoutubeDL:
@@ -192,6 +321,29 @@ class DownloadTests(unittest.TestCase):
             self.assertFalse((job / "staging").exists())
             messages = [line for line in stdout.getvalue().splitlines() if line]
             self.assertGreaterEqual(len(messages), 3)
+
+    def test_extract_audio_reuses_cancellable_ffmpeg_and_keeps_source_untouched(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            job = root / "job"
+            job.mkdir()
+            source = root / "source.mp4"
+            source.write_bytes(b"original-video")
+
+            def fake_ffmpeg(input_path, destination):
+                self.assertEqual(input_path, source.resolve())
+                destination.write_bytes(b"RIFF" + b"audio" * 20)
+
+            with mock.patch.object(worker, "_run_ffmpeg", side_effect=fake_ffmpeg):
+                result = worker.dispatch({
+                    "protocolVersion": 1,
+                    "action": "extractAudio",
+                    "inputPath": str(source),
+                    "jobRoot": str(job),
+                })
+            self.assertEqual(result["kind"], "extractAudio")
+            self.assertEqual(Path(result["path"]), (job / "source-audio.wav").resolve())
+            self.assertEqual(source.read_bytes(), b"original-video")
 
     def test_download_rejects_a_symlink_job_root(self):
         if not hasattr(Path, "symlink_to"):

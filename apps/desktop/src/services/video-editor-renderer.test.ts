@@ -9,7 +9,7 @@ import {
 import type { VideoEditorAdjustments, VideoEditorAsset, VideoEditorClip, VideoEditorEffectClip, VideoEditorSettings } from "./video-editor";
 
 const baseSettings = createProject("Montaggio").animation.videoEditor;
-const neutralAdjustments: VideoEditorAdjustments = { exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, saturation: 0, vibrance: 0, temperature: 0, tint: 0, hue: 0, sharpness: 0, denoise: 0, opacity: 1 };
+const neutralAdjustments: VideoEditorAdjustments = { exposure: 0, brightness: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, clarity: 0, saturation: 0, vibrance: 0, temperature: 0, tint: 0, hue: 0, sharpness: 0, denoise: 0, blur: 0, grayscale: 0, sepia: 0, fade: 0, vignette: 0, opacity: 1 };
 
 function clip(overrides: Partial<VideoEditorClip> & { id: string }): VideoEditorClip {
   return {
@@ -168,6 +168,15 @@ describe("Video Editor · catena colore", () => {
     expect(videoEditorFilter({ ...neutralAdjustments, saturation: -100 })).toContain("saturate(0.0000)");
     expect(videoEditorFilter({ ...neutralAdjustments, vibrance: 100 })).toContain("saturate(1.6500)");
     expect(videoEditorFilter({ ...neutralAdjustments, denoise: 100 })).toContain("blur(1.111px)");
+  });
+
+  it("applica luminosità, chiarezza, blur e conversioni monocromatiche", () => {
+    expect(videoEditorFilter({ ...neutralAdjustments, brightness: 25 })).toContain("brightness(1.2500)");
+    expect(videoEditorFilter({ ...neutralAdjustments, clarity: 32 })).toContain("contrast(1.1000)");
+    expect(videoEditorFilter({ ...neutralAdjustments, blur: 50 })).toContain("blur(2.000px)");
+    const stylized = videoEditorFilter({ ...neutralAdjustments, grayscale: 70, sepia: 35 });
+    expect(stylized).toContain("grayscale(0.7000)");
+    expect(stylized).toContain("sepia(0.3500)");
   });
 
   it("aggiunge la rotazione di tonalità soltanto quando serve", () => {

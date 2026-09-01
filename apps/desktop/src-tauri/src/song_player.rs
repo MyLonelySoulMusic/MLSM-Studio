@@ -17,6 +17,7 @@ use tauri::Manager;
 
 const PROTOCOL_VERSION: u8 = 1;
 const MAX_LOCAL_INPUT_BYTES: u64 = 1024 * 1024 * 1024;
+const MAX_MEDIA_DURATION_SECONDS: f64 = 2.0 * 60.0 * 60.0;
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
 const MAX_STDOUT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_STDOUT_LINE_BYTES: usize = 1024 * 1024;
@@ -27,7 +28,7 @@ const CAPABILITIES_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_JOB_RUNTIME: Duration = Duration::from_secs(2 * 60 * 60 + 5 * 60);
 const MAX_ACTIVE_JOBS: usize = 1;
 const SUPPORTED_MEDIA_EXTENSIONS: &[&str] = &[
-    "aac", "flac", "m4a", "mp3", "mp4", "ogg", "opus", "wav", "webm",
+    "aac", "avi", "flac", "m4a", "m4v", "mkv", "mov", "mp3", "mp4", "ogg", "opus", "wav", "webm",
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -82,7 +83,55 @@ pub enum SongPlayerStartRequest {
     SeparateVocals {
         #[serde(rename = "inputPath")]
         input_path: String,
+        #[serde(rename = "startSeconds")]
+        start_seconds: Option<f64>,
+        #[serde(rename = "endSeconds")]
+        end_seconds: Option<f64>,
     },
+    ExtractAudio {
+        #[serde(rename = "inputPath")]
+        input_path: String,
+    },
+    RefineAlignment {
+        #[serde(rename = "sourcePath")]
+        source_path: String,
+        #[serde(rename = "targetPath")]
+        target_path: String,
+        anchors: Vec<LipsyncRefineAnchor>,
+    },
+    AnalyzeVisemes {
+        #[serde(rename = "inputPath")]
+        input_path: String,
+        anchors: Vec<LipsyncVisualAnchor>,
+        language: String,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LipsyncRefineAnchor {
+    id: String,
+    cue_index: usize,
+    source_start: f64,
+    source_center: f64,
+    source_end: f64,
+    target_start: f64,
+    target_center: f64,
+    target_end: f64,
+    max_shift_ms: f64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LipsyncVisualAnchor {
+    id: String,
+    text: String,
+    canonical_index: usize,
+    cue_index: usize,
+    source_start: f64,
+    source_center: f64,
+    source_end: f64,
+    source_confidence: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -99,6 +148,21 @@ enum ValidatedRequest {
     },
     SeparateVocals {
         input_path: PathBuf,
+        start_seconds: Option<f64>,
+        end_seconds: Option<f64>,
+    },
+    ExtractAudio {
+        input_path: PathBuf,
+    },
+    RefineAlignment {
+        source_path: PathBuf,
+        target_path: PathBuf,
+        anchors: Vec<LipsyncRefineAnchor>,
+    },
+    AnalyzeVisemes {
+        input_path: PathBuf,
+        anchors: Vec<LipsyncVisualAnchor>,
+        language: String,
     },
 }
 
@@ -109,6 +173,9 @@ impl ValidatedRequest {
             Self::Analyze { .. } => "analyze",
             Self::Match { .. } => "match",
             Self::SeparateVocals { .. } => "separateVocals",
+            Self::ExtractAudio { .. } => "extractAudio",
+            Self::RefineAlignment { .. } => "refineAlignment",
+            Self::AnalyzeVisemes { .. } => "analyzeVisemes",
         }
     }
 
@@ -137,10 +204,46 @@ impl ValidatedRequest {
                 "targetPath": target_path,
                 "jobRoot": job_root,
             }),
-            Self::SeparateVocals { input_path } => json!({
+            Self::SeparateVocals {
+                input_path,
+                start_seconds,
+                end_seconds,
+            } => json!({
                 "protocolVersion": PROTOCOL_VERSION,
                 "action": "separateVocals",
                 "inputPath": input_path,
+                "jobRoot": job_root,
+                "startSeconds": start_seconds,
+                "endSeconds": end_seconds,
+            }),
+            Self::ExtractAudio { input_path } => json!({
+                "protocolVersion": PROTOCOL_VERSION,
+                "action": "extractAudio",
+                "inputPath": input_path,
+                "jobRoot": job_root,
+            }),
+            Self::RefineAlignment {
+                source_path,
+                target_path,
+                anchors,
+            } => json!({
+                "protocolVersion": PROTOCOL_VERSION,
+                "action": "refineAlignment",
+                "sourcePath": source_path,
+                "targetPath": target_path,
+                "anchors": anchors,
+                "jobRoot": job_root,
+            }),
+            Self::AnalyzeVisemes {
+                input_path,
+                anchors,
+                language,
+            } => json!({
+                "protocolVersion": PROTOCOL_VERSION,
+                "action": "analyzeVisemes",
+                "inputPath": input_path,
+                "anchors": anchors,
+                "language": language,
                 "jobRoot": job_root,
             }),
         }
@@ -173,9 +276,105 @@ fn validate_start_request(
             reference_path: validate_local_media(Path::new(&reference_path))?,
             target_path: validate_local_media(Path::new(&target_path))?,
         }),
-        SongPlayerStartRequest::SeparateVocals { input_path } => {
+        SongPlayerStartRequest::SeparateVocals {
+            input_path,
+            start_seconds,
+            end_seconds,
+        } => {
+            if start_seconds.is_some() != end_seconds.is_some()
+                || start_seconds.is_some_and(|value| !value.is_finite() || value < 0.0)
+                || end_seconds.is_some_and(|value| !value.is_finite() || value <= 0.0)
+                || matches!((start_seconds, end_seconds), (Some(start), Some(end)) if end <= start + 0.05 || end - start > MAX_MEDIA_DURATION_SECONDS)
+            {
+                return Err(SongPlayerError::InvalidRequest(
+                    "intervallo startSeconds/endSeconds non valido".into(),
+                ));
+            }
             Ok(ValidatedRequest::SeparateVocals {
                 input_path: validate_local_media(Path::new(&input_path))?,
+                start_seconds,
+                end_seconds,
+            })
+        }
+        SongPlayerStartRequest::ExtractAudio { input_path } => Ok(ValidatedRequest::ExtractAudio {
+            input_path: validate_local_media(Path::new(&input_path))?,
+        }),
+        SongPlayerStartRequest::RefineAlignment {
+            source_path,
+            target_path,
+            anchors,
+        } => {
+            if anchors.is_empty()
+                || anchors.len() > 128
+                || anchors.iter().any(|anchor| {
+                    anchor.id.is_empty()
+                        || anchor.id.len() > 200
+                        || !anchor.source_start.is_finite()
+                        || !anchor.source_center.is_finite()
+                        || !anchor.source_end.is_finite()
+                        || !anchor.target_start.is_finite()
+                        || !anchor.target_center.is_finite()
+                        || !anchor.target_end.is_finite()
+                        || !anchor.max_shift_ms.is_finite()
+                        || !(0.0..=30_000.0).contains(&anchor.max_shift_ms)
+                        || anchor.source_start < 0.0
+                        || anchor.source_start > anchor.source_center
+                        || anchor.source_center > anchor.source_end
+                        || anchor.target_start < 0.0
+                        || anchor.target_start > anchor.target_center
+                        || anchor.target_center > anchor.target_end
+                })
+            {
+                return Err(SongPlayerError::InvalidRequest(
+                    "anchor di micro allineamento non validi".into(),
+                ));
+            }
+            Ok(ValidatedRequest::RefineAlignment {
+                source_path: validate_local_media(Path::new(&source_path))?,
+                target_path: validate_local_media(Path::new(&target_path))?,
+                anchors,
+            })
+        }
+        SongPlayerStartRequest::AnalyzeVisemes {
+            input_path,
+            anchors,
+            language,
+        } => {
+            if anchors.is_empty()
+                || anchors.len() > 128
+                || language.is_empty()
+                || language.len() > 16
+                || !language.chars().all(|value| value.is_ascii_alphabetic() || value == '-')
+                || anchors.iter().any(|anchor| {
+                    anchor.id.is_empty()
+                        || anchor.id.len() > 200
+                        || anchor.text.trim().is_empty()
+                        || anchor.text.len() > 120
+                        || !anchor.source_start.is_finite()
+                        || !anchor.source_center.is_finite()
+                        || !anchor.source_end.is_finite()
+                        || !anchor.source_confidence.is_finite()
+                        || !(0.0..=1.0).contains(&anchor.source_confidence)
+                        || anchor.source_start < 0.0
+                        || anchor.source_start > anchor.source_center
+                        || anchor.source_center > anchor.source_end
+                })
+            {
+                return Err(SongPlayerError::InvalidRequest(
+                    "anchor o lingua Auto-AVSR non validi".into(),
+                ));
+            }
+            let mut ids = std::collections::HashSet::new();
+            let mut indexes = std::collections::HashSet::new();
+            if anchors.iter().any(|anchor| !ids.insert(anchor.id.clone()) || !indexes.insert(anchor.canonical_index)) {
+                return Err(SongPlayerError::InvalidRequest(
+                    "anchor Auto-AVSR duplicati".into(),
+                ));
+            }
+            Ok(ValidatedRequest::AnalyzeVisemes {
+                input_path: validate_local_media(Path::new(&input_path))?,
+                anchors,
+                language,
             })
         }
     }
@@ -224,7 +423,7 @@ impl SongPlayerCapabilities {
             ready: false,
             runtime_ready,
             worker_ready,
-            features: json!({ "download": false, "analyze": false, "match": false, "separateVocals": false }),
+            features: json!({ "download": false, "analyze": false, "match": false, "separateVocals": false, "extractAudio": false, "refineAlignment": false, "analyzeVisemes": false }),
             dependencies: json!({}),
             limits: json!({}),
             reason: Some(reason),
@@ -641,8 +840,27 @@ fn install_song_player_runtime(app: tauri::AppHandle, state: SongPlayerState) {
         set_runtime_setup(
             &state,
             SongPlayerRuntimeSetupStatus::Installing,
+            34,
+            "Rimozione di distribuzioni OpenCV incompatibili",
+            None,
+        );
+        run_runtime_step(
+            &executable,
+            &[],
+            &[
+                "-m".into(),
+                "pip".into(),
+                "uninstall".into(),
+                "--yes".into(),
+                "opencv-python".into(),
+                "opencv-python-headless".into(),
+            ],
+        )?;
+        set_runtime_setup(
+            &state,
+            SongPlayerRuntimeSetupStatus::Installing,
             42,
-            "Installazione automatica di Demucs e pYIN",
+            "Installazione automatica di Demucs, pYIN e Auto-AVSR",
             None,
         );
         run_runtime_step(
@@ -702,9 +920,13 @@ fn install_song_player_runtime(app: tauri::AppHandle, state: SongPlayerState) {
                 .pointer("/features/separateVocals")
                 .and_then(Value::as_bool)
                 != Some(true)
+            || capability
+                .pointer("/features/analyzeVisemes")
+                .and_then(Value::as_bool)
+                != Some(true)
         {
             return Err(
-                "Il runtime installato non ha superato la verifica Demucs/pYIN/FFmpeg".into(),
+                "Il runtime installato non ha superato la verifica Demucs/pYIN/FFmpeg/Auto-AVSR".into(),
             );
         }
         Ok(())
@@ -1588,6 +1810,75 @@ mod tests {
             "kind": "separateVocals",
             "inputPath": "/tmp/full.wav",
             "targetPath": "/tmp/instrumental.wav"
+        }))
+        .is_err());
+        let extraction: SongPlayerStartRequest = serde_json::from_value(json!({
+            "kind": "extractAudio",
+            "inputPath": "/tmp/source.mov"
+        }))
+        .expect("strict audio extraction request");
+        assert!(matches!(
+            extraction,
+            SongPlayerStartRequest::ExtractAudio { .. }
+        ));
+        assert!(serde_json::from_value::<SongPlayerStartRequest>(json!({
+            "kind": "extractAudio",
+            "inputPath": "/tmp/source.mov",
+            "outputPath": "/tmp/unsafe.wav"
+        }))
+        .is_err());
+        let refinement: SongPlayerStartRequest = serde_json::from_value(json!({
+            "kind": "refineAlignment",
+            "sourcePath": "/tmp/source.wav",
+            "targetPath": "/tmp/target.wav",
+            "anchors": [{
+                "id": "word-1",
+                "cueIndex": 0,
+                "sourceStart": 1.0,
+                "sourceCenter": 1.1,
+                "sourceEnd": 1.2,
+                "targetStart": 1.02,
+                "targetCenter": 1.12,
+                "targetEnd": 1.22,
+                "maxShiftMs": 50.0
+            }]
+        }))
+        .expect("strict alignment refinement request");
+        assert!(matches!(
+            refinement,
+            SongPlayerStartRequest::RefineAlignment { .. }
+        ));
+        assert!(serde_json::from_value::<SongPlayerStartRequest>(json!({
+            "kind": "refineAlignment",
+            "sourcePath": "/tmp/source.wav",
+            "targetPath": "/tmp/target.wav",
+            "anchors": [],
+            "shellCommand": "anything"
+        }))
+        .is_err());
+        let visual: SongPlayerStartRequest = serde_json::from_value(json!({
+            "kind": "analyzeVisemes",
+            "inputPath": "/tmp/source.mp4",
+            "language": "en",
+            "anchors": [{
+                "id": "word-1",
+                "text": "Fallen",
+                "canonicalIndex": 0,
+                "cueIndex": 0,
+                "sourceStart": 1.0,
+                "sourceCenter": 1.2,
+                "sourceEnd": 1.5,
+                "sourceConfidence": 0.4
+            }]
+        }))
+        .expect("strict Auto-AVSR request");
+        assert!(matches!(visual, SongPlayerStartRequest::AnalyzeVisemes { .. }));
+        assert!(serde_json::from_value::<SongPlayerStartRequest>(json!({
+            "kind": "analyzeVisemes",
+            "inputPath": "/tmp/source.mp4",
+            "language": "en",
+            "anchors": [],
+            "shellCommand": "anything"
         }))
         .is_err());
 

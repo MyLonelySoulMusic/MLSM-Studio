@@ -6,13 +6,17 @@
   "build": { "beforeDevCommand": "npm run dev", "devUrl": "http://localhost:1420", "beforeBuildCommand": "npm run build", "frontendDist": "../dist" },
   "app": {
     "windows": [{ "title": "MLSM Studio — My Lonely Soul Music Studio", "width": 1440, "height": 920, "minWidth": 960, "minHeight": 680, "resizable": true }],
-    "security": { "csp": "default-src 'self'; script-src 'self' https://www.tiktok.com; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data: blob:; media-src 'self' asset: blob:; frame-src blob: https://open.spotify.com https://www.youtube.com https://www.youtube-nocookie.com https://www.tiktok.com https://*.tiktok.com; connect-src ipc: http://ipc.localhost http://127.0.0.1:8765 http://localhost:8765 https://*.gradio.live https://storage.googleapis.com https://huggingface.co https://*.huggingface.co https://*.hf.co https://*.xethub.hf.co https://www.tiktok.com https://*.tiktok.com" }
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' https://www.tiktok.com; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data: blob:; media-src 'self' asset: http://asset.localhost blob:; frame-src blob: https://open.spotify.com https://www.youtube.com https://www.youtube-nocookie.com https://www.tiktok.com https://*.tiktok.com; connect-src 'self' ipc: http://ipc.localhost blob: asset: http://asset.localhost http://localhost:1420 http://localhost:1421 ws://localhost:1420 ws://localhost:1421 http://127.0.0.1:8765 http://localhost:8765 https://*.gradio.live https://storage.googleapis.com https://huggingface.co https://*.huggingface.co https://*.hf.co https://*.xethub.hf.co https://www.tiktok.com https://*.tiktok.com",
+      "assetProtocol": { "enable": true, "scope": ["$HOME/**", "$TEMP/**"] }
+    }
   },
   "bundle": {
     "active": true,
     "targets": "all",
     "resources": {
       "../../../tools/song-player/worker.py": "song-player/worker.py",
+      "../../../tools/song-player/auto_avsr_runtime.py": "song-player/auto_avsr_runtime.py",
       "../../../tools/song-player/audio_analysis.py": "song-player/audio_analysis.py",
       "../../../tools/song-player/requirements.txt": "song-player/requirements.txt"
     }

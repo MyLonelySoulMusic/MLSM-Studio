@@ -63,6 +63,30 @@ describe("VideoEditorWorkspace · artifact tools", () => {
     expect(useProjectStore.getState().project.animation.videoEditor.effectClips).toHaveLength(1);
   });
 
+  it("espone nel tab Adjust lo stesso catalogo completo e fluido dell'Inspector", () => {
+    const clipId = useProjectStore.getState().addVideoEditorClip(asset.id, { trackId: "video-editor-track-main" })!;
+    useProjectStore.getState().selectVideoEditorClip(clipId);
+    render(<VideoEditorWorkspace preview={<div />} inspector={<div />} timeline={<div />} />);
+    fireEvent.click(screen.getByRole("button", { name: "Adjust" }));
+
+    const names = [
+      "Esposizione", "Luminosità", "Contrasto", "Luci", "Ombre", "Bianchi", "Neri", "Chiarezza",
+      "Saturazione", "Vividezza", "Temperatura", "Tinta", "Tonalità", "Nitidezza", "Riduzione rumore",
+      "Sfocatura", "Scala di grigi", "Seppia", "Neri sbiaditi", "Vignettatura"
+    ];
+    const controls = names.map((name) => screen.getByLabelText(`${name} nel dock Adjust`) as HTMLInputElement);
+    expect(controls).toHaveLength(20);
+    controls.forEach((control) => expect(control.closest("label")).toHaveClass("video-editor-adjustment-control"));
+
+    const vignette = screen.getByLabelText("Vignettatura nel dock Adjust") as HTMLInputElement;
+    fireEvent.pointerDown(vignette);
+    fireEvent.change(vignette, { target: { value: "28" } });
+    fireEvent.change(vignette, { target: { value: "64" } });
+    expect(vignette.value).toBe("64");
+    fireEvent.pointerUp(vignette);
+    expect(useProjectStore.getState().project.animation.videoEditor.clips.find((clip) => clip.id === clipId)?.adjustments.vignette).toBe(64);
+  });
+
   it("preserves unsaved effect control edits while switching through Transitions", () => {
     render(<VideoEditorWorkspace preview={<div />} inspector={<div />} timeline={<div />} />);
     fireEvent.click(screen.getByRole("button", { name: "Effects" }));

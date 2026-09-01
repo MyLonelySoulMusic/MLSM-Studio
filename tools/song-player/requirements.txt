@@ -2,3 +2,13 @@ numpy>=1.26.4,<3
 yt-dlp>=2025.1.15,<2027
 demucs>=4.0.1,<5
 librosa>=0.10.2,<1
+torchvision>=0.22,<1
+torchaudio>=2.7,<3
+sentencepiece>=0.2,<1
+av>=13,<17
+# Auto-AVSR's official landmark detector uses the legacy
+# ``mediapipe.solutions.face_detection`` API, removed by newer releases.
+mediapipe==0.10.21
+opencv-contrib-python>=4.10,<5
+scikit-image>=0.24,<1
+gdown>=5.2,<6

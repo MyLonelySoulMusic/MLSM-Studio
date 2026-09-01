@@ -2,8 +2,8 @@ import type { RhythmBallProject } from "@rbs/project-schema";
 import { getLocalTextGenerator, getLocalTranscriber, localGeneratedAnswer, runLocalTextGeneration, type LocalChatMessage } from "./local-model-runtime";
 
 export type SubtitleCue = RhythmBallProject["subtitles"]["cues"][number];
-export interface TimestampedWord { text: string; start: number; end: number; confidence: number; }
-interface WhisperChunk { text?: string; timestamp?: [number | null, number | null]; }
+export interface TimestampedWord { text: string; start: number; end: number; confidence: number; confidenceSource?: "model" | "estimated" | "unknown"; }
+interface WhisperChunk { text?: string; timestamp?: [number | null, number | null]; confidence?: number; score?: number; }
 interface WhisperResult { text?: string; chunks?: WhisperChunk[]; }
 export interface WhisperTranscriptDocument {
   schemaVersion: 1;
@@ -104,29 +104,92 @@ function wordSimilarity(left: string, right: string): number {
 export function timestampedWords(result: WhisperResult, durationSeconds: number): TimestampedWord[] {
   const chunks = result.chunks ?? [];
   if (chunks.length) {
+    const timestampsAreUsable = chunks.some((chunk) => {
+      const start = chunk.timestamp?.[0]; const end = chunk.timestamp?.[1];
+      return typeof start === "number" && typeof end === "number" && Number.isFinite(start) && Number.isFinite(end)
+        && start >= 0 && start < durationSeconds && end > start && end <= durationSeconds + .05;
+    });
+    if (!timestampsAreUsable) {
+      // Some Whisper backends return every sung token at the chunk limit (for
+      // example 29.98s for a 15s clip). Those values are not evidence. Preserve
+      // the recognized words as low-confidence seeds so the phrase-level
+      // MFCC/DTW pass can recover their actual timing.
+      const tokens = words(result.text ?? chunks.map((chunk) => chunk.text ?? "").join(" "));
+      return tokens.map((text, index) => ({
+        text,
+        start: index / Math.max(1, tokens.length) * durationSeconds,
+        end: (index + 1) / Math.max(1, tokens.length) * durationSeconds,
+        confidence: .35,
+        confidenceSource: "estimated" as const
+      }));
+    }
     const expanded = chunks.flatMap((chunk, index) => {
     const text = chunk.text?.trim() ?? ""; if (!text) return [];
-    const start = Math.max(0, chunk.timestamp?.[0] ?? index / chunks.length * durationSeconds);
-      const end = Math.min(durationSeconds, Math.max(start + .04, chunk.timestamp?.[1] ?? (index + 1) / chunks.length * durationSeconds));
+      const rawStart = chunk.timestamp?.[0]; const rawEnd = chunk.timestamp?.[1];
+      const validTimestamp = typeof rawStart === "number" && typeof rawEnd === "number" && Number.isFinite(rawStart) && Number.isFinite(rawEnd)
+        && rawStart >= 0 && rawStart < durationSeconds && rawEnd > rawStart && rawEnd <= durationSeconds + .05;
+      const start = validTimestamp ? rawStart : index / chunks.length * durationSeconds;
+      const end = validTimestamp ? Math.min(durationSeconds, rawEnd) : (index + 1) / chunks.length * durationSeconds;
       const tokens = words(text); const weights = tokens.map((token) => Math.max(1, normalized(token).length)); const totalWeight = weights.reduce((sum, value) => sum + value, 0);
       let elapsedWeight = 0;
       return tokens.map((token, tokenIndex) => {
         const tokenStart = start + (end - start) * elapsedWeight / Math.max(1, totalWeight); elapsedWeight += weights[tokenIndex] ?? 1;
         const tokenEnd = start + (end - start) * elapsedWeight / Math.max(1, totalWeight);
-        return { text: token, start: tokenStart, end: Math.max(tokenStart + .025, tokenEnd), confidence: .82 };
+        const reportedConfidence = validTimestamp && typeof chunk.confidence === "number" ? chunk.confidence : validTimestamp && typeof chunk.score === "number" ? chunk.score : null;
+        return { text: token, start: tokenStart, end: Math.max(tokenStart + .025, tokenEnd), confidence: reportedConfidence === null ? (validTimestamp ? .62 : .35) : clamp(reportedConfidence, 0, 1), confidenceSource: reportedConfidence === null ? "estimated" as const : "model" as const };
       });
     }).sort((left, right) => left.start - right.start);
     const monotonic: TimestampedWord[] = [];
     for (const item of expanded) {
       const previous = monotonic.at(-1);
       if (previous && normalized(previous.text) === normalized(item.text) && Math.abs(previous.start - item.start) < .12) continue;
-      const start = previous ? Math.max(item.start, Math.min(item.end - .025, previous.end)) : item.start;
-      monotonic.push({ ...item, start, end: Math.max(start + .025, item.end) });
+      const start = Math.max(0, item.start, previous?.end ?? 0);
+      if (start >= durationSeconds - .001) continue;
+      const end = Math.min(durationSeconds, Math.max(start + .025, item.end));
+      if (end <= start) continue;
+      monotonic.push({ ...item, start, end });
     }
     return monotonic;
   }
   const tokens = words(result.text ?? "");
-  return tokens.map((text, index) => ({ text, start: index / Math.max(1, tokens.length) * durationSeconds, end: (index + 1) / Math.max(1, tokens.length) * durationSeconds, confidence: .68 }));
+  return tokens.map((text, index) => ({ text, start: index / Math.max(1, tokens.length) * durationSeconds, end: (index + 1) / Math.max(1, tokens.length) * durationSeconds, confidence: .45, confidenceSource: "estimated" as const }));
+}
+
+/** Combines the stable long-context Whisper pass with a second short-window
+ * pass. Short windows resolve consonant attacks and word releases more tightly;
+ * the long pass remains the authority for sequence/order when the detail pass
+ * misses a sung token. */
+export function fuseDetailedTimestampWords(primary: readonly TimestampedWord[], detail: readonly TimestampedWord[]): TimestampedWord[] {
+  if (!primary.length || !detail.length) return [...primary];
+  let detailCursor = 0;
+  const fused = primary.map((word) => {
+    let bestIndex = -1; let bestScore = 0;
+    const searchEnd = Math.min(detail.length, detailCursor + 6);
+    for (let index = detailCursor; index < searchEnd; index += 1) {
+      const candidate = detail[index]!;
+      const score = wordSimilarity(word.text, candidate.text) - (index - detailCursor) * .035;
+      if (score > bestScore) { bestScore = score; bestIndex = index; }
+    }
+    if (bestIndex < 0 || bestScore < .58) return { ...word };
+    const measured = detail[bestIndex]!; detailCursor = bestIndex + 1;
+    return {
+      ...word,
+      start: measured.start,
+      end: measured.end,
+      confidence: Math.max(word.confidence, measured.confidence),
+      confidenceSource: measured.confidenceSource === "model" || word.confidenceSource === "model" ? "model" as const : measured.confidenceSource ?? word.confidenceSource ?? "unknown"
+    };
+  });
+  const monotonic: TimestampedWord[] = [];
+  const maximumEnd = Math.max(...fused.map((item) => item.end), 0);
+  for (const word of fused) {
+    const previous = monotonic.at(-1);
+    const start = Math.max(0, word.start, previous?.end ?? 0);
+    if (start >= maximumEnd - .001) continue;
+    const end = Math.min(maximumEnd, Math.max(start + .012, word.end));
+    monotonic.push({ ...word, start, end });
+  }
+  return monotonic;
 }
 
 export function reconcileWithLyrics(transcript: readonly TimestampedWord[], lyrics: string): TimestampedWord[] {
@@ -789,22 +852,38 @@ export async function reviewSubtitles(cues: readonly SubtitleCue[], lyrics: stri
   return corrected.map((cue, index) => ({ ...cue, verified: subtitleCueIssues(cue, corrected[index - 1], options).length === 0 && councilApproved, manual: false }));
 }
 
-export async function generateSubtitles(audioUrl: string, durationSeconds: number, options: { lyrics: string; maxWords: number; maxCueDuration?: number; maxCharsPerLine?: number; maxReadingSpeed?: number; language: string; whisperModel: WhisperModelId; llmEnabled: boolean; llmModel: LlmModelId; llmPasses: number; onWhisperJson?: (document: WhisperTranscriptDocument) => void; onEvent?: SubtitleGenerationEventHandler }, progress: (message: string) => void): Promise<SubtitleCue[]> {
+/** Shared Whisper facade used by subtitles and MLSM POST LIPSYNC. Keeping the
+ * model invocation here guarantees one model instance/cache and one timestamp
+ * decoder instead of creating a second transcription stack. */
+export async function transcribeTimestampedAudio(audioUrl: string, durationSeconds: number, options: {
+  language: string;
+  whisperModel: WhisperModelId;
+  phraseWords?: number;
+  timingDetail?: "word" | "phoneme";
+  signal?: AbortSignal;
+  onEvent?: SubtitleGenerationEventHandler;
+}, progress: (message: string) => void): Promise<WhisperTranscriptDocument> {
+  if (options.signal?.aborted) throw new DOMException("Trascrizione annullata", "AbortError");
   progress(`Preparazione ${whisperModelOptions.find((item) => item.id === options.whisperModel)?.label ?? "Whisper"} · verifica cache locale…`);
   stageEvent(options.onEvent, "setup", 2, `Preparazione ${whisperModelOptions.find((item) => item.id === options.whisperModel)?.label ?? "Whisper"}…`, true);
   const transcriber = await getLocalTranscriber(options.whisperModel, modelProgressReporter(progress, options.onEvent)) as (input: string, options: Record<string, unknown>) => Promise<WhisperResult>;
-  stageEvent(options.onEvent, "whisper", 20, `Whisper sta analizzando ${durationSeconds.toFixed(1)} secondi di audio…`, true);
-  const result = await transcriber(audioUrl, { return_timestamps: "word", chunk_length_s: 30, stride_length_s: 5, language: options.language === "auto" ? undefined : options.language });
-  progress("Montaggio professionale · pause, timestamp e leggibilità…");
-  const segmentation = segmentationOptions(options.maxWords, {
-    preferredWords: options.maxWords,
-    ...(options.maxCueDuration === undefined ? {} : { maxCueDuration: options.maxCueDuration }),
-    ...(options.maxCharsPerLine === undefined ? {} : { maxCharsPerLine: options.maxCharsPerLine }),
-    ...(options.maxReadingSpeed === undefined ? {} : { maxReadingSpeed: options.maxReadingSpeed })
-  });
-  const rawWords = timestampedWords(result, durationSeconds);
-  const rawCues = phraseCues(rawWords, options.maxWords, segmentation);
-  const whisperDocument: WhisperTranscriptDocument = {
+  if (options.signal?.aborted) throw new DOMException("Trascrizione annullata", "AbortError");
+  const deepTiming = options.timingDetail === "phoneme";
+  stageEvent(options.onEvent, "whisper", 20, `Whisper sta analizzando ${durationSeconds.toFixed(1)} secondi di audio${deepTiming ? " · passaggio contestuale 1/2" : ""}…`, true);
+  const language = options.language === "auto" ? undefined : options.language;
+  const result = await transcriber(audioUrl, { return_timestamps: "word", chunk_length_s: deepTiming ? 18 : 30, stride_length_s: deepTiming ? 4 : 5, language });
+  if (options.signal?.aborted) throw new DOMException("Trascrizione annullata", "AbortError");
+  const primaryWords = timestampedWords(result, durationSeconds);
+  let rawWords = primaryWords;
+  if (deepTiming) {
+    progress("Whisper approfondito · passaggio 2/2 su finestre fonetiche corte…");
+    stageEvent(options.onEvent, "whisper", 34, "Whisper sta rifinendo attacchi consonantici, vocali e rilasci…", true);
+    const detailedResult = await transcriber(audioUrl, { return_timestamps: "word", chunk_length_s: 8, stride_length_s: 2, condition_on_prev_tokens: false, language });
+    if (options.signal?.aborted) throw new DOMException("Trascrizione annullata", "AbortError");
+    rawWords = fuseDetailedTimestampWords(primaryWords, timestampedWords(detailedResult, durationSeconds));
+  }
+  const rawCues = phraseCues(rawWords, options.phraseWords ?? 6);
+  const document: WhisperTranscriptDocument = {
     schemaVersion: 1,
     engine: "Whisper",
     model: options.whisperModel,
@@ -813,8 +892,21 @@ export async function generateSubtitles(audioUrl: string, durationSeconds: numbe
     words: rawWords,
     phrases: rawCues.map((cue) => ({ start: cue.startSeconds, end: cue.endSeconds, text: cue.text, confidence: cue.confidence }))
   };
+  options.onEvent?.({ type: "whisper-output", stage: "whisper", progress: 48, document });
+  return document;
+}
+
+export async function generateSubtitles(audioUrl: string, durationSeconds: number, options: { lyrics: string; maxWords: number; maxCueDuration?: number; maxCharsPerLine?: number; maxReadingSpeed?: number; language: string; whisperModel: WhisperModelId; llmEnabled: boolean; llmModel: LlmModelId; llmPasses: number; onWhisperJson?: (document: WhisperTranscriptDocument) => void; onEvent?: SubtitleGenerationEventHandler }, progress: (message: string) => void): Promise<SubtitleCue[]> {
+  const whisperDocument = await transcribeTimestampedAudio(audioUrl, durationSeconds, { language: options.language, whisperModel: options.whisperModel, phraseWords: options.maxWords, ...(options.onEvent ? { onEvent: options.onEvent } : {}) }, progress);
+  progress("Montaggio professionale · pause, timestamp e leggibilità…");
+  const segmentation = segmentationOptions(options.maxWords, {
+    preferredWords: options.maxWords,
+    ...(options.maxCueDuration === undefined ? {} : { maxCueDuration: options.maxCueDuration }),
+    ...(options.maxCharsPerLine === undefined ? {} : { maxCharsPerLine: options.maxCharsPerLine }),
+    ...(options.maxReadingSpeed === undefined ? {} : { maxReadingSpeed: options.maxReadingSpeed })
+  });
+  const rawWords = whisperDocument.words;
   options.onWhisperJson?.(whisperDocument);
-  options.onEvent?.({ type: "whisper-output", stage: "whisper", progress: 48, document: whisperDocument });
   const cleanedLyrics = cleanReferenceLyrics(options.lyrics);
   const aligned = cleanedLyrics ? reconcileWithLyrics(rawWords, cleanedLyrics) : rawWords; const cues = phraseCues(aligned, options.maxWords, segmentation);
   if (!options.llmEnabled || !options.lyrics.trim()) {

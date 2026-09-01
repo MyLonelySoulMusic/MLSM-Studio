@@ -5,6 +5,7 @@ import { useProjectStore } from "../store/project-store";
 import { extractPaletteFromImage, extractPaletteFromVideo } from "../services/image-palette";
 import { SongPlayerInspector } from "./SongPlayerInspector";
 import { CassetteDeskInspector } from "./CassetteDeskInspector";
+import { OverlaySpectralInspector } from "./OverlaySpectralInspector";
 
 type MusicEvent = RhythmBallProject["events"][number];
 interface InspectorProps { name: string; aspectRatio: RhythmBallProject["canvas"]["aspectRatio"]; event: MusicEvent | undefined; events: MusicEvent[]; duration: number; availableObjectTypes: readonly SceneObjectType[]; onRename: (value: string) => void; onAspectRatio: (ratio: RhythmBallProject["canvas"]["aspectRatio"]) => void; onSelectObject: (id: string) => void; onChangeObjectType: (id: string, type: SceneObjectType) => void; onUpdateEvent: (id: string, patch: Partial<MusicEvent>) => void; onDeleteEvent: (id: string) => void; }
@@ -20,6 +21,7 @@ export function InspectorPanel({ name, aspectRatio, event, events, duration, ava
 
   if (animationModeId === "songPlayer") return <SongPlayerInspector aspectRatio={aspectRatio} onAspectRatio={onAspectRatio} />;
   if (animationModeId === "cassetteDesk") return <CassetteDeskInspector aspectRatio={aspectRatio} onAspectRatio={onAspectRatio} />;
+  if (animationModeId === "overlaySpectral") return <OverlaySpectralInspector aspectRatio={aspectRatio} onAspectRatio={onAspectRatio} />;
 
   if (animationModeId === "proSubtitles") return <aside className="panel inspector subtitle-video-inspector pro-subtitles-inspector" aria-label="Inspector">
     <div className="panel-heading"><strong>Layer professionale</strong><span className="type-badge">Pro Subtitles</span></div>

@@ -35,6 +35,7 @@ export type ProSubtitleExportFormatId =
   | "webmVp9Alpha"
   | "movProRes4444"
   | "mp4H264Solid"
+  | "mp4HevcSolid"
   | "webmVp9Solid";
 
 export interface ProSubtitleExportSettings {
@@ -75,7 +76,7 @@ export interface ProSubtitleFormatDescriptor {
   label: string;
   mimeType: "video/webm" | "video/mp4" | "video/quicktime";
   extension: ".webm" | ".mp4" | ".mov";
-  codec: "vp9" | "avc" | "prores-4444";
+  codec: "vp9" | "avc" | "hevc" | "prores-4444";
   alpha: boolean;
   desktopRequired: boolean;
 }
@@ -93,6 +94,7 @@ export type ProSubtitleExportCapabilities = Readonly<Record<
 export interface ProSubtitleCodecSupport {
   vp9Alpha: boolean;
   avcSolid: boolean;
+  hevcSolid?: boolean;
   vp9Solid: boolean;
 }
 
@@ -153,6 +155,15 @@ export const PRO_SUBTITLE_FORMAT_DESCRIPTORS: Readonly<Record<
     alpha: false,
     desktopRequired: false
   }),
+  mp4HevcSolid: Object.freeze({
+    id: "mp4HevcSolid",
+    label: "MP4 · H.265/HEVC su sfondo pieno",
+    mimeType: "video/mp4",
+    extension: ".mp4",
+    codec: "hevc",
+    alpha: false,
+    desktopRequired: false
+  }),
   webmVp9Solid: Object.freeze({
     id: "webmVp9Solid",
     label: "WebM · VP9 su sfondo pieno",
@@ -195,6 +206,13 @@ export function createProSubtitleExportCapabilities(
         ? null
         : "Questo browser non dispone di un encoder H.264/AVC utilizzabile per l’export MP4."
     ),
+    mp4HevcSolid: capability(
+      "mp4HevcSolid",
+      Boolean(support.hevcSolid),
+      support.hevcSolid
+        ? null
+        : "Questo dispositivo non dispone di un encoder H.265/HEVC utilizzabile per l’export MP4."
+    ),
     webmVp9Solid: capability(
       "webmVp9Solid",
       support.vp9Solid,
@@ -210,10 +228,10 @@ function encodingQuality(quality: ExportQuality): Quality {
 }
 
 async function safeCanEncode(
-  codec: "vp9" | "avc",
+  codec: "vp9" | "avc" | "hevc",
   width: number,
   height: number,
-  quality: Quality,
+  quality: Quality | number,
   alpha: "keep" | "discard"
 ): Promise<boolean> {
   try {
@@ -235,12 +253,26 @@ export async function probeProSubtitleExportCapabilities(
   quality: ExportQuality = "maximum"
 ): Promise<ProSubtitleExportCapabilities> {
   const bitrate = encodingQuality(quality);
-  const [vp9Alpha, avcSolid, vp9Solid] = await Promise.all([
+  const [vp9Alpha, avcSolid, hevcSolid, vp9Solid] = await Promise.all([
     safeCanEncode("vp9", width, height, bitrate, "keep"),
     safeCanEncode("avc", width, height, bitrate, "discard"),
+    safeCanEncode("hevc", width, height, bitrate, "discard"),
     safeCanEncode("vp9", width, height, bitrate, "discard")
   ]);
-  return createProSubtitleExportCapabilities({ vp9Alpha, avcSolid, vp9Solid });
+  return createProSubtitleExportCapabilities({ vp9Alpha, avcSolid, hevcSolid, vp9Solid });
+}
+
+export async function resolveCompleteProSubtitleVideoCodec(
+  width: number,
+  height: number,
+  bitrate: number
+): Promise<"avc" | "hevc"> {
+  if (await safeCanEncode("avc", width, height, bitrate, "discard")) return "avc";
+  if (await safeCanEncode("hevc", width, height, bitrate, "discard")) return "hevc";
+  throw new Error(
+    `Nessun encoder MP4 compatibile con la risoluzione originale ${width} × ${height}. `
+    + "Sono stati verificati H.264/AVC e H.265/HEVC."
+  );
 }
 
 export function resolveProSubtitleExportPlan(
@@ -250,7 +282,7 @@ export function resolveProSubtitleExportPlan(
   if (settings.format === "movProRes4444") throw new Error(PRORES_WEB_REASON);
 
   if (settings.backgroundMode === "transparent") {
-    if (settings.format === "mp4H264Solid" || settings.format === "webmVp9Solid") {
+    if (settings.format === "mp4H264Solid" || settings.format === "mp4HevcSolid" || settings.format === "webmVp9Solid") {
       throw new Error(
         "Il formato opaco selezionato non conserva la trasparenza. Scegli WebM VP9 con alpha."
       );
@@ -262,6 +294,12 @@ export function resolveProSubtitleExportPlan(
       alpha: "keep",
       usedOpaqueWebmFallback: false
     };
+  }
+
+  if (settings.format === "mp4HevcSolid") {
+    const selected = capabilities.mp4HevcSolid;
+    if (!selected.supported) throw new Error(selected.reason ?? "Encoder H.265/HEVC non disponibile.");
+    return { descriptor: selected, alpha: "discard", usedOpaqueWebmFallback: false };
   }
 
   if (capabilities.mp4H264Solid.supported) {
@@ -667,7 +705,7 @@ function beginCompleteVideoDirectSaveRequest(
   const handlePromise = picker.call(window, {
     suggestedName: buildCompleteProSubtitleFileName(settings.projectName),
     types: [{
-      description: "MP4 · H.264 con audio originale",
+      description: "MP4 · H.264/H.265 con audio originale",
       accept: { [descriptor.mimeType]: [descriptor.extension] }
     }]
   }).catch((error: unknown) => {
@@ -919,10 +957,7 @@ async function exportCompleteProSubtitleVideo(
   let exportTarget: ExportTarget | null = null;
   let finalized = false;
   const startedAt = performance.now();
-  const descriptor: ProSubtitleFormatDescriptor = {
-    ...PRO_SUBTITLE_FORMAT_DESCRIPTORS.mp4H264Solid,
-    label: "MP4 · H.264 con audio originale"
-  };
+  let descriptor: ProSubtitleFormatDescriptor = PRO_SUBTITLE_FORMAT_DESCRIPTORS.mp4H264Solid;
 
   try {
     const sourceVideoUrl = settings.sourceVideoUrl?.trim();
@@ -1023,6 +1058,19 @@ async function exportCompleteProSubtitleVideo(
       recordingBitrate(sourceWidth, sourceHeight, settings.fps, settings.quality),
       inputBitrate * (settings.quality === "maximum" ? 1.35 : 1.1)
     ));
+    const completeVideoCodec = await resolveCompleteProSubtitleVideoCodec(
+      sourceWidth,
+      sourceHeight,
+      targetBitrate
+    );
+    descriptor = {
+      ...PRO_SUBTITLE_FORMAT_DESCRIPTORS[
+        completeVideoCodec === "avc" ? "mp4H264Solid" : "mp4HevcSolid"
+      ],
+      label: completeVideoCodec === "avc"
+        ? "MP4 · H.264 con audio originale"
+        : "MP4 · H.265/HEVC con audio originale"
+    };
     const fileName = buildCompleteProSubtitleFileName(settings.projectName);
     exportTarget = await createExportTarget(
       fileName,
@@ -1080,11 +1128,11 @@ async function exportCompleteProSubtitleVideo(
       tracks: "primary",
       trim: { start: sourceStartTimestamp, end: sourceEndTimestamp },
       video: {
-        codec: "avc",
+        codec: completeVideoCodec,
         bitrate: targetBitrate,
         alpha: "discard",
         keyFrameInterval: 2,
-        hardwareAcceleration: "prefer-hardware",
+        hardwareAcceleration: "no-preference",
         forceTranscode: true,
         frameRate: settings.fps,
         allowRotationMetadata: false,
@@ -1147,7 +1195,10 @@ async function exportCompleteProSubtitleVideo(
       showWarnings: false
     });
     if (!conversion.isValid || !conversion.utilizedTracks.includes(videoTrack)) {
-      throw new Error("L’encoder H.264 non è disponibile per la risoluzione originale del video.");
+      throw new Error(
+        `L’encoder ${completeVideoCodec === "avc" ? "H.264/AVC" : "H.265/HEVC"} `
+        + `non è disponibile per la risoluzione originale ${sourceWidth} × ${sourceHeight}.`
+      );
     }
     onProgress({
       currentFrame: 0,
@@ -1362,7 +1413,7 @@ export async function exportProSubtitleVideo(
     context.imageSmoothingQuality = "high";
 
     const source = new CanvasSource(composite, {
-      codec: plan.descriptor.codec === "avc" ? "avc" : "vp9",
+      codec: plan.descriptor.codec === "prores-4444" ? "vp9" : plan.descriptor.codec,
       bitrate: encodingQuality(settings.quality),
       alpha: plan.alpha,
       latencyMode: "quality",

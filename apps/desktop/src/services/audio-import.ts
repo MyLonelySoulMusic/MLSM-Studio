@@ -132,7 +132,7 @@ export async function importAudio(ownership?: AudioImportOwnership): Promise<Imp
   const status = await invoke<{ ffmpeg: boolean; ffprobe: boolean }>("detect_audio_tools");
   assertImportOwnership(ownership);
   if (!status.ffmpeg || !status.ffprobe) throw new Error("FFmpeg e FFprobe sono necessari per importare l’audio.");
-  const path = await open({ multiple: false, filters: [{ name: "Audio supportato", extensions: ["mp3", "wav"] }] });
+  const path = await open({ multiple: false, filters: [{ name: "Audio supportato", extensions: ["mp3", "wav", "flac", "m4a", "aac", "ogg", "opus"] }] });
   assertImportOwnership(ownership);
   if (typeof path !== "string") return null;
   const audio = await loadAudioFromPath(path);
@@ -165,7 +165,7 @@ export async function importFullTrackLocal(ownership?: AudioImportOwnership): Pr
   const status = await invoke<{ ffmpeg: boolean; ffprobe: boolean }>("detect_audio_tools");
   assertImportOwnership(ownership);
   if (!status.ffmpeg || !status.ffprobe) throw new Error("FFmpeg e FFprobe sono necessari per importare l’audio.");
-  const path = await open({ multiple: false, filters: [{ name: "Audio supportato", extensions: ["mp3", "wav"] }] });
+  const path = await open({ multiple: false, filters: [{ name: "Audio supportato", extensions: ["mp3", "wav", "flac", "m4a", "aac", "ogg", "opus"] }] });
   assertImportOwnership(ownership);
   if (typeof path !== "string") return null;
   const audio = await loadAudioFromPath(path);

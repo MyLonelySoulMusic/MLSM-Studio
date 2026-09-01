@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ChangeEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { useProjectStore } from "../store/project-store";
 import { backendLabel, detectUpscalerHardware, effectiveUpscalerBackend, upscalerModels, type UpscalerHardware } from "../services/upscaler-runtime";
 import { fitUpscalerPreset, resolveUpscalerTarget, resolvedUpscalerDimensions } from "../services/upscaler-renderer";
@@ -9,6 +9,96 @@ import { useUpscalerBatchStore, type UpscalerImportOwner } from "../store/upscal
 import { RemoteUpscalerPanel } from "./RemoteUpscalerPanel";
 
 const adjustmentLabels = { exposure: "Esposizione", contrast: "Contrasto", highlights: "Luci", shadows: "Ombre", whites: "Bianchi", blacks: "Neri", saturation: "Saturazione", vibrance: "Vividezza", temperature: "Temperatura", tint: "Tinta", sharpness: "Nitidezza", denoise: "Riduzione rumore" } as const;
+type AdjustmentKey = keyof typeof adjustmentLabels;
+
+const adjustmentRanges: Record<AdjustmentKey, { min: number; max: number; step: number }> = {
+  exposure: { min: -2, max: 2, step: 0.05 },
+  contrast: { min: -100, max: 100, step: 1 },
+  highlights: { min: -100, max: 100, step: 1 },
+  shadows: { min: -100, max: 100, step: 1 },
+  whites: { min: -100, max: 100, step: 1 },
+  blacks: { min: -100, max: 100, step: 1 },
+  saturation: { min: -100, max: 100, step: 1 },
+  vibrance: { min: -100, max: 100, step: 1 },
+  temperature: { min: -100, max: 100, step: 1 },
+  tint: { min: -100, max: 100, step: 1 },
+  sharpness: { min: 0, max: 100, step: 1 },
+  denoise: { min: 0, max: 100, step: 1 },
+};
+
+interface UpscalerRangeControlProps {
+  label: string;
+  ariaLabel: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  formatValue: (value: number) => string;
+  onChange: (value: number) => void;
+}
+
+/** Keeps the thumb responsive while expensive preview updates are coalesced. */
+function UpscalerRangeControl({ label, ariaLabel, value, min, max, step, formatValue, onChange }: UpscalerRangeControlProps) {
+  const [draftValue, setDraftValue] = useState(value);
+  const draggingRef = useRef(false);
+  const pendingValueRef = useRef<number | null>(null);
+  const updateTimerRef = useRef<number | null>(null);
+
+  const publishPendingValue = useCallback(() => {
+    if (updateTimerRef.current !== null) {
+      window.clearTimeout(updateTimerRef.current);
+      updateTimerRef.current = null;
+    }
+    const pendingValue = pendingValueRef.current;
+    pendingValueRef.current = null;
+    if (pendingValue !== null) onChange(pendingValue);
+  }, [onChange]);
+
+  const scheduleValue = (nextValue: number) => {
+    setDraftValue(nextValue);
+    pendingValueRef.current = nextValue;
+    if (updateTimerRef.current === null) {
+      // Roughly 30 preview updates per second are enough for visual feedback
+      // and avoid saturating React/canvas with every native pointer event.
+      updateTimerRef.current = window.setTimeout(publishPendingValue, 32);
+    }
+  };
+
+  useEffect(() => {
+    if (!draggingRef.current) setDraftValue(value);
+  }, [value]);
+
+  useEffect(() => () => {
+    if (updateTimerRef.current !== null) window.clearTimeout(updateTimerRef.current);
+  }, []);
+
+  const finishDrag = () => {
+    draggingRef.current = false;
+    publishPendingValue();
+  };
+
+  return <label className="upscaler-range-control">
+    <span><span>{label}</span><output>{formatValue(draftValue)}</output></span>
+    <input
+      aria-label={ariaLabel}
+      type="range"
+      min={min}
+      max={max}
+      step={step}
+      value={draftValue}
+      onPointerDown={() => { draggingRef.current = true; }}
+      onChange={(event) => scheduleValue(Number(event.currentTarget.value))}
+      onPointerUp={finishDrag}
+      onPointerCancel={finishDrag}
+      onBlur={finishDrag}
+    />
+  </label>;
+}
+
+function formatSignedAdjustment(key: AdjustmentKey, value: number) {
+  const formatted = key === "exposure" ? value.toFixed(2) : Math.round(value).toString();
+  return value > 0 ? `+${formatted}` : formatted;
+}
 
 export function UpscalerPanel() {
   const settings = useProjectStore((state) => state.project.animation.upscaler); const update = useProjectStore((state) => state.updateUpscaler);
@@ -102,6 +192,11 @@ export function UpscalerPanel() {
     const dimensions = fitUpscalerPreset(settings.sourceWidth || landscapeWidth, settings.sourceHeight || landscapeHeight, landscapeWidth, landscapeHeight);
     update({ finalWidth: dimensions.width, finalHeight: dimensions.height, lockAspectRatio: true, scale: settings.sourceWidth ? dimensions.width / settings.sourceWidth : 1 });
   };
+  const updateAdjustment = useCallback((key: AdjustmentKey, value: number) => {
+    const current = useProjectStore.getState().project.animation.upscaler.adjustments;
+    if (current[key] === value) return;
+    update({ adjustments: { ...current, [key]: value } });
+  }, [update]);
   const effective = hardware ? effectiveUpscalerBackend(settings.backend, hardware) : null;
   const outputMegapixels = settings.finalWidth * settings.finalHeight / 1_000_000;
   const demandingVideoProfile = settings.sourceKind === "video" && Boolean(settings.sourceUrl) && (selectedModel.speed === "slow" || settings.tta || outputMegapixels > 8.4);
@@ -120,7 +215,7 @@ export function UpscalerPanel() {
       {demandingVideoProfile ? <div className="upscaler-performance-warning"><strong>Elaborazione video molto pesante</strong><span>{selectedModel.label} · {outputMegapixels.toFixed(1)} MP per frame{settings.tta ? " · doppio passaggio TTA" : ""}. Su video reali può richiedere decine di secondi per fotogramma. L’avanzamento mostrerà una stima attendibile dopo il primo frame.</span><button type="button" onClick={() => { const model = upscalerModels.find((item) => item.id === "realesr-general-x4v3")!; update({ model: model.id, scale: model.nativeScale, tta: false, tileSize: 256 }); }}>Usa profilo video veloce · General x4v3 senza TTA</button></div> : null}
     </> : <RemoteUpscalerPanel settings={settings} update={update} />}
     <h2>Risoluzione finale</h2><label className="teddy-dance-toggle"><span>Mantieni proporzioni</span><input aria-label="Mantieni proporzioni Upscaler" type="checkbox" checked={settings.lockAspectRatio} onChange={(event) => update({ lockAspectRatio: event.target.checked })} /></label><div className="upscaler-resolution"><label>Larghezza<input aria-label="Larghezza finale Upscaler" type="number" min="64" max="16384" value={settings.finalWidth} onChange={(event) => setResolution("width", Number(event.target.value))} /></label><span>×</span><label>Altezza<input aria-label="Altezza finale Upscaler" type="number" min="64" max="16384" value={settings.finalHeight} onChange={(event) => setResolution("height", Number(event.target.value))} /></label></div><div className="upscaler-presets">{[[1920,1080,"Full HD"],[2560,1440,"QHD"],[3840,2160,"4K"],[7680,4320,"8K"]].map(([width,height,label]) => <button type="button" key={label} onClick={() => selectPreset(width as number, height as number)}>{label}</button>)}</div><p className="muted">I preset ruotano automaticamente per sorgenti verticali e adattano i lati senza deformare o tagliare l’immagine.</p>
-    <h2>Confronto e fusione</h2><label>Vista<select aria-label="Modalità confronto Upscaler" value={settings.comparisonMode} onChange={(event) => update({ comparisonMode: event.target.value as typeof settings.comparisonMode })}><option value="split">Prima / dopo</option><option value="enhanced">Solo migliorato</option><option value="original">Solo originale</option><option value="blend">Fusione</option></select></label>{settings.comparisonMode === "split" ? <label>Separatore: {Math.round(settings.comparisonPosition * 100)}%<input aria-label="Separatore confronto Upscaler" type="range" min="0" max="1" step=".01" value={settings.comparisonPosition} onChange={(event) => update({ comparisonPosition: Number(event.target.value) })} /></label> : null}<label>Originale sovrapposto: {Math.round(settings.originalBlend * 100)}%<input aria-label="Fusione originale Upscaler" type="range" min="0" max="1" step=".01" value={settings.originalBlend} onChange={(event) => update({ originalBlend: Number(event.target.value) })} /></label>
-    <h2>Regolazioni immagine</h2><div className="upscaler-adjustments">{(Object.keys(adjustmentLabels) as Array<keyof typeof adjustmentLabels>).map((key) => { const positiveOnly = key === "sharpness" || key === "denoise"; return <label key={key}>{adjustmentLabels[key]}: {settings.adjustments[key]}<input aria-label={`${adjustmentLabels[key]} Upscaler`} type="range" min={positiveOnly ? 0 : key === "exposure" ? -2 : -100} max={key === "exposure" ? 2 : 100} step={key === "exposure" ? .05 : 1} value={settings.adjustments[key]} onChange={(event) => update({ adjustments: { ...settings.adjustments, [key]: Number(event.target.value) } })} /></label>; })}</div><button type="button" onClick={() => update({ adjustments: { exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, saturation: 0, vibrance: 0, temperature: 0, tint: 0, sharpness: 12, denoise: 0 } })}>Ripristina regolazioni</button>
+    <h2>Confronto e fusione</h2><label>Vista<select aria-label="Modalità confronto Upscaler" value={settings.comparisonMode} onChange={(event) => update({ comparisonMode: event.target.value as typeof settings.comparisonMode })}><option value="split">Prima / dopo</option><option value="enhanced">Solo migliorato</option><option value="original">Solo originale</option><option value="blend">Fusione</option></select></label><div className="upscaler-comparison-ranges">{settings.comparisonMode === "split" ? <UpscalerRangeControl label="Separatore" ariaLabel="Separatore confronto Upscaler" min={0} max={1} step={0.01} value={settings.comparisonPosition} formatValue={(value) => `${Math.round(value * 100)}%`} onChange={(value) => update({ comparisonPosition: value })} /> : null}<UpscalerRangeControl label="Originale sovrapposto" ariaLabel="Fusione originale Upscaler" min={0} max={1} step={0.01} value={settings.originalBlend} formatValue={(value) => `${Math.round(value * 100)}%`} onChange={(value) => update({ originalBlend: value })} /></div>
+    <h2>Regolazioni immagine</h2><div className="upscaler-adjustments">{(Object.keys(adjustmentLabels) as AdjustmentKey[]).map((key) => <UpscalerRangeControl key={key} label={adjustmentLabels[key]} ariaLabel={`${adjustmentLabels[key]} Upscaler`} {...adjustmentRanges[key]} value={settings.adjustments[key]} formatValue={(value) => formatSignedAdjustment(key, value)} onChange={(value) => updateAdjustment(key, value)} />)}</div><button type="button" onClick={() => update({ adjustments: { exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, saturation: 0, vibrance: 0, temperature: 0, tint: 0, sharpness: 12, denoise: 0 } })}>Ripristina regolazioni</button>
     </fieldset><UpscalerBatchPanel settings={settings} /></section>;
 }

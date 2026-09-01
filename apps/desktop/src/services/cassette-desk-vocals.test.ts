@@ -32,6 +32,12 @@ describe("Cassette Desk vocal separation", () => {
     expect(native.startSongPlayerJob).toHaveBeenCalledWith({ kind: "separateVocals", inputPath: "/music/track.wav" });
     expect(native.waitForSongPlayerJob).not.toHaveBeenCalled();
   });
+  it("separates only the selected master excerpt and rejects invalid bounds", async () => {
+    native.startSongPlayerJob.mockResolvedValue({ jobId: "vocal-trim", status: "completed", result: { kind: "separateVocals", path: "/jobs/vocals.wav", model: "htdemucs", pitchAlgorithm: "pyin", pitch: [] } });
+    await separateCassetteDeskVocals(audio, undefined, undefined, { startSeconds: 30, endSeconds: 42.5 });
+    expect(native.startSongPlayerJob).toHaveBeenCalledWith({ kind: "separateVocals", inputPath: "/music/track.wav", startSeconds: 30, endSeconds: 42.5 });
+    await expect(separateCassetteDeskVocals(audio, undefined, undefined, { startSeconds: 50, endSeconds: 40 })).rejects.toThrow(/intervallo/iu);
+  });
   it("installs the missing runtime automatically before separating vocals", async () => {
     native.getSongPlayerCapabilities.mockResolvedValueOnce({ desktop: true, vocalSeparation: false }).mockResolvedValueOnce({ desktop: true, vocalSeparation: true });
     native.ensureSongPlayerRuntime.mockResolvedValue({ status: "ready", progress: 100, message: "Runtime pronto", error: null });
@@ -60,5 +66,12 @@ describe("Cassette Desk vocal separation", () => {
     await expect(separateCassetteDeskVocals({...audio,metadata:{...audio.metadata,path:""}})).resolves.toMatchObject({stemPath:"browser://vocals.wav",notes:[{timeSeconds:.4,midi:67,confidence:.91}]});
     expect(browser.separateBrowserCassetteDeskVocals).toHaveBeenCalledOnce();
     expect(native.startSongPlayerJob).not.toHaveBeenCalled();
+  });
+  it("passes the same selected excerpt to the browser service", async () => {
+    native.getSongPlayerCapabilities.mockResolvedValue({ desktop:false,vocalSeparation:true });
+    browser.separateBrowserCassetteDeskVocals.mockResolvedValue({kind:"separateVocals",path:"browser://vocals.wav",model:"htdemucs",pitchAlgorithm:"pyin",pitch:[]});
+    const browserAudio={...audio,metadata:{...audio.metadata,path:""}};
+    await separateCassetteDeskVocals(browserAudio, undefined, undefined, { startSeconds: 12, endSeconds: 19 });
+    expect(browser.separateBrowserCassetteDeskVocals).toHaveBeenCalledWith(browserAudio, undefined, undefined, { startSeconds: 12, endSeconds: 19 });
   });
 });

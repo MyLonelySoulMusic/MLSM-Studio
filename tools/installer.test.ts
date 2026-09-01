@@ -18,6 +18,18 @@ describe("installer multipiattaforma", () => {
     expect(venvPython(".venv", "win32")).toMatch(/\.venv[\\/]Scripts[\\/]python\.exe$/);
     expect(venvPython(".venv", "darwin")).toMatch(/\.venv[\\/]bin[\\/]python$/);
   });
+  it("installa e verifica l'intero runtime visuale Auto-AVSR", () => {
+    const requirements = readFileSync(resolve(root, "tools/song-player/requirements.txt"), "utf8");
+    const setup = readFileSync(resolve(root, "tools/setup_python_runtime.cjs"), "utf8");
+    expect(requirements).toContain("torchaudio>=2.7,<3");
+    expect(requirements).toContain("mediapipe==0.10.21");
+    expect(requirements).toContain("opencv-contrib-python>=4.10,<5");
+    expect(requirements).not.toContain("opencv-python-headless");
+    expect(setup).toContain('features?.analyzeVisemes !== true');
+    expect(setup).toContain('"opencv-python-headless"');
+    const tauri = JSON.parse(readFileSync(resolve(root, "apps/desktop/src-tauri/tauri.conf.json"), "utf8"));
+    expect(tauri.bundle.resources["../../../tools/song-player/auto_avsr_runtime.py"]).toBe("song-player/auto_avsr_runtime.py");
+  });
   it("include l’intera catena macOS", () => {
     const script = readFileSync(resolve(root, "install.sh"), "utf8");
     for (const command of ["xcode-select", "brew install", "npm ci", "setup_python_runtime.cjs upscaler", "cargo fetch", "verify_installation.cjs"]) expect(script).toContain(command);

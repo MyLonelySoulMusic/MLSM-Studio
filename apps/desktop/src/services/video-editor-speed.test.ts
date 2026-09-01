@@ -53,7 +53,7 @@ describe("Video Editor speed mapping", () => {
   });
 
   it("maps constant speed to source time deterministically", () => {
-    const clip = { id: "clip", assetId: "asset", trackId: "track", startSeconds: 0, sourceInSeconds: 0, durationSeconds: 2, fadeInSeconds: 0, fadeOutSeconds: 0, fadeCurve: "smooth" as const, audioFadeInSeconds: 0, audioFadeOutSeconds: 0, blendMode: "normal" as const, blendIntensity: 1, adjustments: { exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, saturation: 0, vibrance: 0, temperature: 0, tint: 0, hue: 0, sharpness: 0, denoise: 0, opacity: 1 }, fit: "cover" as const, muted: false, volume: 1, speed: { mode: "constant" as const, constant: 2, points: [], preservePitch: true } } as VideoEditorClip;
+    const clip = { id: "clip", assetId: "asset", trackId: "track", startSeconds: 0, sourceInSeconds: 0, durationSeconds: 2, fadeInSeconds: 0, fadeOutSeconds: 0, fadeCurve: "smooth" as const, audioFadeInSeconds: 0, audioFadeOutSeconds: 0, blendMode: "normal" as const, blendIntensity: 1, adjustments: { exposure: 0, brightness: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, clarity: 0, saturation: 0, vibrance: 0, temperature: 0, tint: 0, hue: 0, sharpness: 0, denoise: 0, blur: 0, grayscale: 0, sepia: 0, fade: 0, vignette: 0, opacity: 1 }, fit: "cover" as const, muted: false, volume: 1, speed: { mode: "constant" as const, constant: 2, points: [], preservePitch: true } } as VideoEditorClip;
     expect(videoEditorClipSourceTimeAtFrame(clip, 30, { fpsNumerator: 60, fpsDenominator: 1, dropFrame: false })).toBe(1);
     expect(videoEditorClipTimelineDurationForSource(4, clip.speed, { fpsNumerator: 60, fpsDenominator: 1, dropFrame: false })).toBe(2);
   });

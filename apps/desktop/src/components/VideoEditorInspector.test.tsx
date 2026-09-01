@@ -123,4 +123,30 @@ describe("VideoEditorInspector · tracce bloccate", () => {
     expect(screen.queryByLabelText("Preserva altezza audio")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Attacco nella sorgente")).not.toBeInTheDocument();
   });
+
+  it("offre le regolazioni avanzate con barre uniformi e trascinamento fluido", () => {
+    const clipId = useProjectStore.getState().addVideoEditorClip(asset.id, { trackId: "video-editor-track-main" })!;
+    useProjectStore.getState().selectVideoEditorClip(clipId);
+    render(<VideoEditorInspector />);
+
+    const names = [
+      "Esposizione", "Luminosità", "Contrasto", "Luci", "Ombre", "Bianchi", "Neri", "Chiarezza",
+      "Saturazione", "Vividezza", "Temperatura", "Tinta", "Tonalità", "Nitidezza", "Riduzione rumore",
+      "Sfocatura", "Scala di grigi", "Seppia", "Neri sbiaditi", "Vignettatura"
+    ];
+    const controls = names.map((name) => screen.getByLabelText(`${name} clip`) as HTMLInputElement);
+    expect(controls).toHaveLength(20);
+    controls.forEach((control) => expect(control.closest("label")).toHaveClass("video-editor-adjustment-control"));
+
+    const brightness = screen.getByLabelText("Luminosità clip") as HTMLInputElement;
+    fireEvent.pointerDown(brightness);
+    fireEvent.change(brightness, { target: { value: "18" } });
+    fireEvent.change(brightness, { target: { value: "37" } });
+    expect(brightness.value).toBe("37");
+    expect(brightness.closest("label")?.querySelector("output")).toHaveTextContent("+37");
+    fireEvent.pointerUp(brightness);
+
+    const clip = useProjectStore.getState().project.animation.videoEditor.clips.find((candidate) => candidate.id === clipId)!;
+    expect(clip.adjustments.brightness).toBe(37);
+  });
 });

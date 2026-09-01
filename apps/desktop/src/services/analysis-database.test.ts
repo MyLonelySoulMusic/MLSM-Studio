@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ANALYSIS_DATABASE_NAME, ANALYSIS_STORE_NAME, openAnalysisDatabase, SONG_PLAYER_ANALYSIS_STORE_NAME } from "./analysis-database";
+import { ANALYSIS_DATABASE_NAME, ANALYSIS_STORE_NAME, MLSM_POST_LIPSYNC_STORE_NAME, openAnalysisDatabase, SONG_PLAYER_ANALYSIS_STORE_NAME } from "./analysis-database";
 
 const originalIndexedDb = globalThis.indexedDB;
 
@@ -29,7 +29,7 @@ afterEach(() => {
 
 describe("analysis database", () => {
   it("adotta una cache già alla versione 2 senza richiedere il downgrade alla versione 1", async () => {
-    const existing = database(2, [ANALYSIS_STORE_NAME, SONG_PLAYER_ANALYSIS_STORE_NAME]);
+    const existing = database(2, [ANALYSIS_STORE_NAME, SONG_PLAYER_ANALYSIS_STORE_NAME, MLSM_POST_LIPSYNC_STORE_NAME]);
     const open = vi.fn(() => successfulRequest(existing));
     Object.defineProperty(globalThis, "indexedDB", { configurable: true, value: { open } });
 
@@ -50,5 +50,6 @@ describe("analysis database", () => {
     expect(existing.close).toHaveBeenCalledOnce();
     expect(open.mock.calls).toEqual([[ANALYSIS_DATABASE_NAME], [ANALYSIS_DATABASE_NAME, 8]]);
     expect(upgraded.objectStoreNames.contains(SONG_PLAYER_ANALYSIS_STORE_NAME)).toBe(true);
+    expect(upgraded.objectStoreNames.contains(MLSM_POST_LIPSYNC_STORE_NAME)).toBe(true);
   });
 });

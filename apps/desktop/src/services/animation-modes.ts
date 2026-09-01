@@ -5,8 +5,8 @@ export interface AnimationModeDefinition {
   id: string;
   label: string;
   description: string;
-  generator: "instrumentalFalling" | "newYorkStreets" | "coverSphere" | "stereoUnfold" | "walkingCube" | "portraitLandscape" | "commentsInvasion" | "teddyWalk" | "teddySing" | "proSubtitles" | "pixelsSub" | "backgroundAuto" | "staticWatermark" | "upscaler" | "frameBooster" | "videoEditor" | "songPlayer" | "cassetteDesk" | "aiQuantizer";
-  panel: "instrumentalObjects" | "newYorkStreets" | "coverSphere" | "stereoUnfold" | "walkingCube" | "portraitLandscape" | "commentsInvasion" | "teddyWalk" | "teddySing" | "proSubtitles" | "pixelsSub" | "backgroundAuto" | "staticWatermark" | "upscaler" | "frameBooster" | "videoEditor" | "songPlayer" | "cassetteDesk" | "aiQuantizer";
+  generator: "instrumentalFalling" | "newYorkStreets" | "coverSphere" | "stereoUnfold" | "walkingCube" | "portraitLandscape" | "commentsInvasion" | "teddyWalk" | "teddySing" | "proSubtitles" | "pixelsSub" | "backgroundAuto" | "staticWatermark" | "upscaler" | "frameBooster" | "videoEditor" | "songPlayer" | "cassetteDesk" | "overlaySpectral" | "aiQuantizer" | "mlsmPostLipsync";
+  panel: "instrumentalObjects" | "newYorkStreets" | "coverSphere" | "stereoUnfold" | "walkingCube" | "portraitLandscape" | "commentsInvasion" | "teddyWalk" | "teddySing" | "proSubtitles" | "pixelsSub" | "backgroundAuto" | "staticWatermark" | "upscaler" | "frameBooster" | "videoEditor" | "songPlayer" | "cassetteDesk" | "overlaySpectral" | "aiQuantizer" | "mlsmPostLipsync";
   objectTypes: readonly AnimationModeObjectType[];
   defaultBaseObjectTypes: readonly SceneObjectType[];
 }
@@ -148,6 +148,14 @@ export const animationModes: readonly AnimationModeDefinition[] = [{
   objectTypes: [],
   defaultBaseObjectTypes: ["platform"]
 }, {
+  id: "overlaySpectral",
+  label: "Overlay Spectral",
+  description: "Un visualizzatore spettrale immersivo sovrappone geometrie audio-reattive, scie e simmetrie alla cover o a uno sfondo, usando l’FFT reale e la palette del progetto.",
+  generator: "overlaySpectral",
+  panel: "overlaySpectral",
+  objectTypes: [],
+  defaultBaseObjectTypes: ["platform"]
+}, {
   id: "cassetteDesk",
   label: "Cassette Desk",
   description: "Una musicassetta prende vita su una scrivania indie, entra nello stereo e avvia il brano con waveform, tonalità, BPM e tastiera della voce.",
@@ -171,13 +179,21 @@ export const animationModes: readonly AnimationModeDefinition[] = [{
   panel: "aiQuantizer",
   objectTypes: [],
   defaultBaseObjectTypes: ["platform"]
+}, {
+  id: "mlsmPostLipsync",
+  label: "MLSM POST LIPSYNC",
+  description: "Riallinea un video già cantato alla voce del master definitivo usando separazione vocale, trascrizione temporale, anchor parola-per-parola e una time-map monotona.",
+  generator: "mlsmPostLipsync",
+  panel: "mlsmPostLipsync",
+  objectTypes: [],
+  defaultBaseObjectTypes: ["platform"]
 }];
 
 // La modalità urbana resta leggibile nei vecchi progetti e utilizzabile dai
 // relativi generatori, ma non viene più proposta per crearne di nuovi.
 export const visibleAnimationModes: readonly AnimationModeDefinition[] = animationModes.filter((mode) => mode.id !== "newYorkStreets");
-export type AnimationModeGroupId = "visualizers" | "stories" | "typography" | "restoration" | "editing" | "musicTools";
-export type AnimationCategoryId = "soundAnimation" | "photoVideoStudio" | "videoEditor" | "music";
+export type AnimationModeGroupId = "visualizers" | "stories" | "typography" | "restoration" | "editing" | "musicTools" | "lipsyncTools";
+export type AnimationCategoryId = "soundAnimation" | "photoVideoStudio" | "videoEditor" | "music" | "lipsync";
 export interface AnimationModeGroup { id: AnimationModeGroupId; modeIds: readonly string[]; }
 export interface AnimationCategory { id: AnimationCategoryId; groups: readonly AnimationModeGroup[]; }
 
@@ -185,7 +201,7 @@ export interface AnimationCategory { id: AnimationCategoryId; groups: readonly A
 export const animationCategories: readonly AnimationCategory[] = [{
   id: "soundAnimation",
   groups: [
-    { id: "visualizers", modeIds: ["instrumentalFalling", "coverSphere", "stereoUnfold", "walkingCube", "portraitLandscape", "commentsInvasion", "backgroundAuto", "cassetteDesk", "songPlayer"] },
+    { id: "visualizers", modeIds: ["instrumentalFalling", "coverSphere", "stereoUnfold", "walkingCube", "portraitLandscape", "commentsInvasion", "backgroundAuto", "overlaySpectral", "cassetteDesk", "songPlayer"] },
     { id: "stories", modeIds: ["teddyWalk", "teddySing"] },
     { id: "typography", modeIds: ["proSubtitles", "pixelsSub"] }
   ]
@@ -198,6 +214,9 @@ export const animationCategories: readonly AnimationCategory[] = [{
 }, {
   id: "music",
   groups: [{ id: "musicTools", modeIds: ["aiQuantizer"] }]
+}, {
+  id: "lipsync",
+  groups: [{ id: "lipsyncTools", modeIds: ["mlsmPostLipsync"] }]
 }];
 export function getAnimationMode(modeId: string): AnimationModeDefinition { return animationModes.find((mode) => mode.id === modeId) ?? animationModes[0]!; }
 export function getAnimationCategory(modeId: string): AnimationCategory { return animationCategories.find((category) => category.groups.some((group) => group.modeIds.includes(modeId))) ?? animationCategories[0]!; }

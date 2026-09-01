@@ -50,7 +50,7 @@ function clip(overrides: Partial<VideoEditorClip> & { id: string; assetId: strin
     startSeconds: 0, durationSeconds: 2, sourceInSeconds: 0,
     fadeInSeconds: 0, fadeOutSeconds: 0, fadeCurve: "smooth", audioFadeInSeconds: 0, audioFadeOutSeconds: 0,
     blendMode: "normal", blendIntensity: 1,
-    adjustments: { exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, saturation: 0, vibrance: 0, temperature: 0, tint: 0, hue: 0, sharpness: 0, denoise: 0, opacity: 1 },
+    adjustments: { exposure: 0, brightness: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, clarity: 0, saturation: 0, vibrance: 0, temperature: 0, tint: 0, hue: 0, sharpness: 0, denoise: 0, blur: 0, grayscale: 0, sepia: 0, fade: 0, vignette: 0, opacity: 1 },
     fit: "cover", muted: false, volume: 1,
     ...overrides
   };

@@ -8,6 +8,7 @@ import { useProjectStore } from "./store/project-store";
 import { useUpscalerBatchStore } from "./store/upscaler-batch-store";
 import { resetUpscalerRuntimeForProjectReplacement } from "./services/upscaler-batch-lifecycle";
 import { getUpscalerSourceFile, registerUpscalerSourceFile } from "./services/upscaler-source-file";
+import { clearOverlaySpectralBackground, registerOverlaySpectralBackground } from "./services/overlay-spectral-background-runtime";
 const viewportMock = vi.hoisted(() => ({
   props: null as { subtitles?: { enabled?: boolean } } | null
 }));
@@ -31,6 +32,9 @@ vi.mock("./components/Viewport", () => ({
 vi.mock("./components/PortraitLandscapePreview", () => ({
   PortraitLandscapePreview: () => <main aria-label="Vista From 9:16 to 16:9" />
 }));
+vi.mock("./components/OverlaySpectralPreview", () => ({
+  OverlaySpectralPreview: () => <main aria-label="Vista Overlay Spectral" />
+}));
 vi.mock("./components/VideoEditorPreview", () => ({
   VideoEditorPreview: () => {
     useEffect(() => { videoEditorPreviewMock.mounts += 1; }, []);
@@ -45,14 +49,17 @@ describe("App", () => {
     const picker = screen.getByRole("combobox", { name: "Modalità animazione" });
     expect(within(picker).queryByRole("option", { name: "New York Streets" })).not.toBeInTheDocument();
   });
-  beforeEach(() => { viewportMock.props = null; videoEditorPreviewMock.mounts = 0; projectRepositoryMock.filePath = null; projectRepositoryMock.chooseForLoad.mockReset(); projectRepositoryMock.load.mockReset(); resetUpscalerRuntimeForProjectReplacement(); useProjectStore.getState().newProject(); localStorage.clear(); });
-  afterEach(() => { cleanup(); useAudioStore.getState().reset(); useSceneStore.getState().reset(); resetUpscalerRuntimeForProjectReplacement(); });
+  it("espone Overlay Spectral con catalogo, palette e anteprima dedicata", () => { render(<App />); const modes = screen.getByRole("complementary", { name: "Modalità animazione" }); const picker = within(modes).getByRole("combobox", { name: "Modalità animazione" }); expect(within(picker).getByRole("option", { name: "Overlay Spectral" })).toBeInTheDocument(); fireEvent.change(picker, { target: { value: "overlaySpectral" } }); expect(screen.getByRole("main", { name: "Vista Overlay Spectral" })).toBeInTheDocument(); expect(within(modes).getByText("Catalogo MilkDrop adattato")).toBeInTheDocument(); fireEvent.change(within(modes).getByLabelText("Effetto"), { target: { value: "milkdrop-kaleidoscope" } }); fireEvent.change(within(modes).getByLabelText(/Simmetria/), { target: { value: "12" } }); expect(useProjectStore.getState().project.animation.overlaySpectral).toMatchObject({ presetId: "milkdrop-kaleidoscope", symmetry: 12 }); expect(screen.getByRole("complementary", { name: "Inspector Overlay Spectral" })).toBeInTheDocument(); });
+  beforeEach(() => { viewportMock.props = null; videoEditorPreviewMock.mounts = 0; projectRepositoryMock.filePath = null; projectRepositoryMock.chooseForLoad.mockReset(); projectRepositoryMock.load.mockReset(); resetUpscalerRuntimeForProjectReplacement(); clearOverlaySpectralBackground(); useProjectStore.getState().newProject(); localStorage.clear(); });
+  afterEach(() => { vi.useRealTimers(); cleanup(); useAudioStore.getState().reset(); useSceneStore.getState().reset(); resetUpscalerRuntimeForProjectReplacement(); clearOverlaySpectralBackground(); });
 
   it("preserva il pool se Nuovo viene annullato e lo termina dopo la sostituzione confermata", () => {
     vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
     const revoke = vi.fn(); Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revoke });
     const controller = new AbortController(); const abort = vi.spyOn(controller, "abort");
     const sourceFile = new File(["single"], "single.jpg"); registerUpscalerSourceFile("blob:single-source", sourceFile);
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:overlay-video") });
+    registerOverlaySpectralBackground(useProjectStore.getState().project.project.id, new File(["video"], "background.mp4", { type: "video/mp4" }));
     useProjectStore.getState().updateUpscaler({ sourceUrl: "blob:single-source", sourceName: sourceFile.name, sourceKind: "image" });
     useUpscalerBatchStore.setState({ items: [{ id: "photo", file: new File(["x"], "photo.jpg"), url: "blob:photo", thumbnailUrl: "blob:photo-thumb", name: "photo.jpg", sourceWidth: 10, sourceHeight: 5, target: { width: 20, height: 10 }, outputName: "photo.png", selected: true, status: "processing", progress: .5, error: null }], previewItemId: "photo", running: true, controller });
     useProjectStore.getState().renameProject("Da conservare");
@@ -62,7 +69,7 @@ describe("App", () => {
     expect(useUpscalerBatchStore.getState().items).toHaveLength(1); expect(abort).not.toHaveBeenCalled(); expect(revoke).not.toHaveBeenCalled(); expect(getUpscalerSourceFile("blob:single-source")).toBe(sourceFile);
     fireEvent.click(screen.getByRole("button", { name: "Nuovo" }));
     expect(confirm).toHaveBeenCalledTimes(2); expect(abort).toHaveBeenCalledOnce();
-    expect(revoke.mock.calls.map(([url]) => url)).toEqual(["blob:single-source", "blob:photo", "blob:photo-thumb"]);
+    expect(revoke.mock.calls.map(([url]) => url)).toEqual(["blob:single-source", "blob:photo", "blob:photo-thumb", "blob:overlay-video"]);
     expect(getUpscalerSourceFile("blob:single-source")).toBeNull();
     expect(useUpscalerBatchStore.getState()).toMatchObject({ items: [], previewItemId: null, running: false });
   });
@@ -70,6 +77,8 @@ describe("App", () => {
   it("preserva il pool se Apri viene annullato o fallisce e lo elimina solo dopo un caricamento valido", async () => {
     const revoke = vi.fn(); Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revoke });
     const sourceFile = new File(["single"], "single.jpg"); registerUpscalerSourceFile("blob:single-source", sourceFile);
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:overlay-video") });
+    registerOverlaySpectralBackground(useProjectStore.getState().project.project.id, new File(["video"], "background.mp4", { type: "video/mp4" }));
     useProjectStore.getState().updateUpscaler({ sourceUrl: "blob:single-source", sourceName: sourceFile.name, sourceKind: "image" });
     useUpscalerBatchStore.setState({ items: [{ id: "photo", file: new File(["x"], "photo.jpg"), url: "blob:photo", thumbnailUrl: "blob:photo-thumb", name: "photo.jpg", sourceWidth: 10, sourceHeight: 5, target: { width: 20, height: 10 }, outputName: "photo.png", selected: true, status: "queued", progress: 0, error: null }], previewItemId: "photo" });
     projectRepositoryMock.chooseForLoad.mockResolvedValueOnce(false).mockResolvedValueOnce(true).mockResolvedValueOnce(true);
@@ -84,7 +93,7 @@ describe("App", () => {
     expect(useUpscalerBatchStore.getState().items).toHaveLength(1); expect(revoke).not.toHaveBeenCalled(); expect(getUpscalerSourceFile("blob:single-source")).toBe(sourceFile);
     fireEvent.click(screen.getByRole("button", { name: "Apri" }));
     await waitFor(() => expect(useUpscalerBatchStore.getState().items).toHaveLength(0));
-    expect(revoke.mock.calls.map(([url]) => url)).toEqual(["blob:single-source", "blob:photo", "blob:photo-thumb"]);
+    expect(revoke.mock.calls.map(([url]) => url)).toEqual(["blob:single-source", "blob:photo", "blob:photo-thumb", "blob:overlay-video"]);
     expect(getUpscalerSourceFile("blob:single-source")).toBeNull();
   });
   it("applica solo l’ultima apertura progetto quando due letture terminano fuori ordine", async () => { projectRepositoryMock.filePath = "project.rbs.json"; projectRepositoryMock.chooseForLoad.mockResolvedValue(true); let resolveFirst!: (value: string) => void; const firstLoad = new Promise<string>((resolve) => { resolveFirst = resolve; }); const first = createProject(); first.project.name = "Progetto A"; const second = createProject(); second.project.name = "Progetto B"; projectRepositoryMock.load.mockReturnValueOnce(firstLoad).mockResolvedValueOnce(JSON.stringify(second)); render(<App />); fireEvent.click(screen.getByRole("button", { name: "Apri" })); await waitFor(() => expect(projectRepositoryMock.load).toHaveBeenCalledTimes(1)); fireEvent.click(screen.getByRole("button", { name: "Apri" })); await waitFor(() => expect(useProjectStore.getState().project.project.name).toBe("Progetto B")); resolveFirst(JSON.stringify(first)); await act(async () => { await Promise.resolve(); }); expect(useProjectStore.getState().project.project.name).toBe("Progetto B"); });
@@ -121,6 +130,16 @@ describe("App", () => {
     const navigation = screen.getByRole("region", { name: "Navigazione creativa" });
     expect(within(navigation).queryByRole("combobox", { name: "Area applicazione" })).not.toBeInTheDocument();
     const picker = within(navigation).getByRole("combobox", { name: "Modalità animazione" });
+    const typePicker = within(navigation).getByRole("combobox", { name: "Tipo animazione" });
+    expect(typePicker.closest("label")).toHaveClass("mode-picker");
+    expect(typePicker.closest("label")).not.toHaveClass("mode-picker-accessible");
+    expect(picker.closest("label")).toHaveClass("mode-picker");
+    expect(picker.closest("label")).not.toHaveClass("mode-picker-accessible");
+    expect(typePicker).toHaveValue("visualizers");
+    fireEvent.change(typePicker, { target: { value: "stories" } });
+    expect(useProjectStore.getState().project.animation.modeId).toBe("teddyWalk");
+    expect(typePicker).toHaveValue("stories");
+    fireEvent.change(typePicker, { target: { value: "visualizers" } });
     expect(picker.querySelector('optgroup[label="Visualizer"]')).toBeInTheDocument();
     expect(picker.querySelector('optgroup[label="Storie e personaggi"]')).toBeInTheDocument();
     expect(picker.querySelector('optgroup[label="Testo e sottotitoli"]')).toBeInTheDocument();
@@ -198,6 +217,87 @@ describe("App", () => {
     useAudioStore.getState().setImported({ url: "demo.mp3", waveform: [], metadata: { path: "demo.mp3", fileName: "demo.mp3", hash: "a".repeat(64), durationSeconds: 30, sampleRate: 48_000, channels: 2, codec: "audio/mpeg", fileSize: 1024 } });
     render(<App />); const name = screen.getByLabelText("Nome"); fireEvent.keyDown(name, { code: "Space", key: " " }); expect(play).not.toHaveBeenCalled();
     fireEvent.keyDown(window, { code: "Space", key: " " }); await waitFor(() => expect(play).toHaveBeenCalledOnce()); play.mockRestore();
+  });
+
+  it("recupera la race play-pause della WebView senza mostrare un falso errore", async () => {
+    const playingStateAtRequest: boolean[] = [];
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play")
+      .mockImplementationOnce(() => { playingStateAtRequest.push(useAudioStore.getState().playing); return Promise.reject(new DOMException("The play() request was interrupted by a call to pause().", "AbortError")); })
+      .mockImplementationOnce(() => { playingStateAtRequest.push(useAudioStore.getState().playing); return Promise.resolve(); });
+    useAudioStore.getState().setImported({ url: "demo.mp3", waveform: [], metadata: { path: "demo.mp3", fileName: "demo.mp3", hash: "b".repeat(64), durationSeconds: 30, sampleRate: 48_000, channels: 2, codec: "audio/mpeg", fileSize: 1024 } });
+    render(<App />);
+    fireEvent.click(screen.getByTitle("Play/Pausa (Spazio)"));
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(2));
+    expect(playingStateAtRequest).toEqual([false, false]);
+    expect(useAudioStore.getState()).toMatchObject({ playing: true, error: null });
+    play.mockRestore();
+  });
+
+  it("avvia tutte le animazioni sull'evento playing anche se la WebView lascia pendente la Promise", async () => {
+    const pending = new Promise<void>(() => undefined);
+    const playingStateAtRequest: boolean[] = [];
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(() => {
+      playingStateAtRequest.push(useAudioStore.getState().playing);
+      return pending;
+    });
+    useAudioStore.getState().setImported({ url: "demo.mp3", waveform: [], metadata: { path: "demo.mp3", fileName: "demo.mp3", hash: "c".repeat(64), durationSeconds: 30, sampleRate: 48_000, channels: 2, codec: "audio/mpeg", fileSize: 1024 } });
+    render(<App />);
+
+    fireEvent.click(screen.getByTitle("Play/Pausa (Spazio)"));
+
+    expect(play).toHaveBeenCalledOnce();
+    expect(playingStateAtRequest).toEqual([false]);
+    expect(useAudioStore.getState()).toMatchObject({ playing: false, error: null });
+    const media = document.querySelector("audio");
+    expect(media).not.toBeNull();
+    Object.defineProperty(media, "currentTime", { configurable: true, writable: true, value: 1.25 });
+    media?.dispatchEvent(new Event("playing"));
+    media?.dispatchEvent(new Event("timeupdate"));
+    await waitFor(() => expect(useAudioStore.getState()).toMatchObject({ playing: true, currentTime: 1.25, error: null }));
+    play.mockRestore();
+  });
+
+  it("un secondo click annulla uno start pendente senza riavviare il media", async () => {
+    let resolvePlay!: () => void;
+    const pending = new Promise<void>((resolve) => { resolvePlay = resolve; });
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockReturnValue(pending);
+    const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
+    useAudioStore.getState().setImported({ url: "demo.mp3", waveform: [], metadata: { path: "demo.mp3", fileName: "demo.mp3", hash: "d".repeat(64), durationSeconds: 30, sampleRate: 48_000, channels: 2, codec: "audio/mpeg", fileSize: 1024 } });
+    render(<App />);
+    pause.mockClear();
+    const transport = screen.getByTitle("Play/Pausa (Spazio)");
+
+    fireEvent.click(transport);
+    fireEvent.click(transport);
+
+    expect(play).toHaveBeenCalledOnce();
+    expect(pause).toHaveBeenCalledOnce();
+    expect(useAudioStore.getState().playing).toBe(false);
+    document.querySelector("audio")?.dispatchEvent(new Event("playing"));
+    resolvePlay();
+    await act(async () => { await Promise.resolve(); });
+    expect(useAudioStore.getState().playing).toBe(false);
+    play.mockRestore(); pause.mockRestore();
+  });
+
+  it("neutralizza i Play nativi tardivi dopo il timeout terminale", async () => {
+    vi.useFakeTimers();
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(() => new Promise<void>(() => undefined));
+    const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
+    useAudioStore.getState().setImported({ url: "demo.mp3", waveform: [], metadata: { path: "demo.mp3", fileName: "demo.mp3", hash: "e".repeat(64), durationSeconds: 30, sampleRate: 48_000, channels: 2, codec: "audio/mpeg", fileSize: 1024 } });
+    render(<App />);
+    pause.mockClear();
+
+    fireEvent.click(screen.getByTitle("Play/Pausa (Spazio)"));
+    await act(async () => { await vi.runAllTimersAsync(); });
+
+    expect(play).toHaveBeenCalledTimes(4);
+    expect(pause).toHaveBeenCalledOnce();
+    expect(useAudioStore.getState().playing).toBe(false);
+    expect(useAudioStore.getState().error).toContain("tempo previsto");
+    document.querySelector("audio")?.dispatchEvent(new Event("playing"));
+    expect(useAudioStore.getState().playing).toBe(false);
+    play.mockRestore(); pause.mockRestore();
   });
 
   it("seleziona e sostituisce un elemento dal pannello destro", () => {

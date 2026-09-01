@@ -51,6 +51,13 @@ function setup(name, { dryRun = false } = {}) {
   }
   progress(28, "Aggiornamento degli strumenti Python");
   run(target, ["-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"], { dryRun });
+  if (name === "song-player") {
+    // MediaPipe requires the contrib build. Keeping another OpenCV wheel in
+    // the same environment makes both distributions overwrite the same cv2
+    // package and can produce non-deterministic native-library crashes.
+    progress(36, "Rimozione di distribuzioni OpenCV incompatibili");
+    run(target, ["-m", "pip", "uninstall", "--yes", "opencv-python", "opencv-python-headless"], { dryRun });
+  }
   progress(42, "Installazione delle dipendenze Python");
   run(target, ["-m", "pip", "install", "--requirement", config.requirements], { dryRun });
   if (name === "upscaler" && !dryRun) {
@@ -72,8 +79,8 @@ function setup(name, { dryRun = false } = {}) {
       const lastLine = check.stdout.trim().split(/\r?\n/).filter(Boolean).at(-1);
       capability = JSON.parse(lastLine);
     } catch { capability = null; }
-    if (check.status !== 0 || capability?.type !== "result" || capability?.result?.ready !== true || capability?.result?.features?.separateVocals !== true) {
-      throw new Error("Il worker Song Player non ha superato la verifica capabilities.");
+    if (check.status !== 0 || capability?.type !== "result" || capability?.result?.ready !== true || capability?.result?.features?.separateVocals !== true || capability?.result?.features?.analyzeVisemes !== true) {
+      throw new Error("Il worker Song Player non ha superato la verifica Demucs/Auto-AVSR.");
     }
     progress(91, "Download e verifica del modello Demucs htdemucs");
     const model = spawnSync(target, ["-c", "from demucs.pretrained import get_model; get_model('htdemucs'); print('Demucs htdemucs pronto')"], { cwd: root, encoding: "utf8", stdio: "inherit" });
