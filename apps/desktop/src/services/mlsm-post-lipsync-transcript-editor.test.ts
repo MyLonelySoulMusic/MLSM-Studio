@@ -52,7 +52,7 @@ describe("MLSM Whisper word correction", () => {
     expect(corrected.anchors).toHaveLength(5);
     expect(corrected.anchors.every((anchor) => anchor.manuallyEdited && anchor.origin === "manual")).toBe(true);
     expect(corrected.anchors.find((anchor) => anchor.text === "Fallen")?.sourceStart).toBeCloseTo(.75, 3);
-    expect(corrected.timeMap.points.find((point) => point.canonicalIndex === 1)?.sourceTime).toBeCloseTo(1.05, 2);
+    expect(corrected.timeMap.points.find((point) => point.canonicalIndex === 1)?.sourceTime).toBeCloseTo(.75, 2);
     expect(corrected.targetAudioStartSeconds).toBeCloseTo(current.targetAnalysisStartSeconds, 3);
     expect(corrected.whisperTranscripts.target.words).toHaveLength(5);
     expect(corrected.alignmentSource).toBe("whisper");

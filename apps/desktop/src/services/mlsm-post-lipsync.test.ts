@@ -149,6 +149,19 @@ describe("MLSM POST LIPSYNC · HARD GATE core", () => {
     expect(() => parseMlsmPostLipsyncAnalysis(JSON.stringify(serialized))).toThrow(/non è valido/);
   });
 
+  it("persists both complete Whisper word lists and rejects corrupt manual timing", () => {
+    const source = transcript(targetTimes);
+    const target = transcript([...targetTimes, [4.2, 4.6]], [...lyricWords, "again"], 5);
+    const analysis = createMlsmPostLipsyncAnalysis({ subtitles, sourceTranscript: source, targetTranscript: target, sourceDurationSeconds: 4, targetDurationSeconds: 5, whisperTranscripts: { source, target } });
+    const serialized = JSON.parse(serializeMlsmPostLipsyncAnalysis(analysis)) as Record<string, unknown>;
+    const whisperTranscripts = serialized.whisperTranscripts as Record<string, unknown>;
+    expect((whisperTranscripts.target as { words: unknown[] }).words).toHaveLength(target.words.length);
+    const reopened = parseMlsmPostLipsyncAnalysis(JSON.stringify(serialized));
+    expect(reopened.whisperTranscripts.target.words.at(-1)?.text).toBe("again");
+    (whisperTranscripts.target as { words: Array<Record<string, unknown>> }).words[1]!.start = -1;
+    expect(() => parseMlsmPostLipsyncAnalysis(JSON.stringify(serialized))).toThrow(/non è valido/u);
+  });
+
   it("rejects degenerate Whisper timestamps and keeps words as low-confidence DTW seeds", () => {
     const words = timestampedWords({ text: "Fallen Still loves me", chunks: [
       { text: "Fallen", timestamp: [29.98, 29.98] },

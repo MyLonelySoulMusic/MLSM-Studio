@@ -18,7 +18,7 @@ interface DraftWord {
 const labels = {
   it: {
     title: "Timestamp Whisper parola per parola",
-    hint: "Questi sono i valori reali di words restituiti da Whisper. Modifica testo, ordine e intervalli; ascolta ogni parola sul video o sul master. Correggi ricostruisce davvero anchor, time-map, anteprima ed export.",
+    hint: "Questi sono i valori reali di words restituiti da Whisper. Il master definisce la sequenza finale; il video descrive ciò che pronuncia la bocca. Modifica testo, ordine e intervalli, poi Correggi ricostruisce davvero anchor, time-map, anteprima ed export.",
     source: "Video originale",
     target: "Brano master",
     word: "Parola",
@@ -38,7 +38,7 @@ const labels = {
   },
   en: {
     title: "Word-level Whisper timestamps",
-    hint: "These are the real values from Whisper’s words property. Edit text, order and ranges, then audition each word in the video or master. Apply correction rebuilds the actual anchors, time-map, preview and export.",
+    hint: "These are the real values from Whisper’s words property. The master defines the final sequence; the video describes what the mouth says. Edit text, order and ranges, then Apply correction rebuilds the actual anchors, time-map, preview and export.",
     source: "Original video",
     target: "Audio master",
     word: "Word",

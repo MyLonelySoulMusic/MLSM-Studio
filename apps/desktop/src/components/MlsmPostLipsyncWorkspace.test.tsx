@@ -24,7 +24,8 @@ describe("MlsmPostLipsyncWorkspace", () => {
     const visualSpeech = screen.getByRole("checkbox", { name: /Analisi visiva del labiale/u });
     const exactLyrics = screen.getByLabelText("Parole esatte pronunciate") as HTMLTextAreaElement;
     expect(llmCorrection).toBeChecked();
-    expect(visualSpeech).toBeChecked();
+    expect(visualSpeech).not.toBeChecked();
+    expect(screen.getByText(/Disattivata di default/u)).toBeInTheDocument();
     fireEvent.change(exactLyrics, { target: { value: "The Fallen, still loves me" } });
     expect(exactLyrics.value).toBe("The Fallen, still loves me");
     fireEvent.click(llmCorrection);

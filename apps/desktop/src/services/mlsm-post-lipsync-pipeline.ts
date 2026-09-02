@@ -96,7 +96,7 @@ export async function analyzeMlsmPostLipsync(input: {
     const subtitleText = input.subtitles?.trim() ?? "";
     const alignmentSource = subtitleText ? "subtitles" : "whisper";
     const localLlmCorrectionEnabled = input.localLlmCorrection !== false;
-    const visualSpeechEnabled = input.visualSpeechAnalysis !== false;
+    const visualSpeechEnabled = input.visualSpeechAnalysis === true;
     const exactSungLyrics = input.exactSungLyrics?.trim().replace(/\s+/gu, " ") ?? "";
     const cacheKey = await mlsmPostLipsyncCacheKey({
       sourceVideoHash: sourceAudio.metadata.hash,
