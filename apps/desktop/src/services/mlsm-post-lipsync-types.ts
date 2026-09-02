@@ -1,6 +1,6 @@
 import type { WhisperTranscriptDocument } from "./subtitle-generation";
 
-export const MLSM_POST_LIPSYNC_ANALYSIS_VERSION = "mlsm-post-lipsync-v12";
+export const MLSM_POST_LIPSYNC_ANALYSIS_VERSION = "mlsm-post-lipsync-v13";
 
 export type LipsyncConfidenceBand = "high" | "medium" | "low" | "unresolved";
 export type LipsyncAnchorOrigin = "automatic" | "subtitle" | "manual";
@@ -46,6 +46,35 @@ export interface LipsyncAlignmentEvidence {
     confidence: number;
     originalSourceCenter: number;
   };
+}
+
+/** Global overlay of the two isolated vocal waveforms.
+ *
+ * Measured before any transcript is read, so it is the only timing evidence in
+ * the pipeline that neither Whisper nor the local LLM can skew. The mapping is
+ * expressed in vocal-stem coordinates:
+ * `sourceStemSeconds = scale * targetStemSeconds + offsetSeconds`. */
+export interface MlsmWaveformAlignment {
+  method: string;
+  /** `measured` when the evidence clears every trust threshold, `ambiguous`
+   * when it correlates but a bar-length shift explains it equally well. */
+  status: "measured" | "ambiguous" | "unmeasurable" | "unavailable" | "disabled";
+  detail: string | null;
+  trusted: boolean;
+  offsetSeconds: number;
+  scale: number;
+  /** Pearson correlation of the two envelopes over their overlapping span. */
+  confidence: number;
+  /** How far the winning lag beats the best unrelated one; low on looped music. */
+  clarity: number;
+  residualMs: number;
+  /** 90th-percentile per-window deviation from the global fit. */
+  spreadMs: number;
+  localAgreement: number;
+  windows: number;
+  overlapSeconds: number;
+  /** Radius the MFCC pass may search once seeded by this overlay; 0 when untrusted. */
+  searchRadiusMs: number;
 }
 
 export interface LipsyncVisualWordEvent {
@@ -152,6 +181,7 @@ export interface MlsmPostLipsyncAnalysis {
     model: string | null;
     exactLyrics: string | null;
   };
+  waveformAlignment: MlsmWaveformAlignment;
   visualSpeech: {
     enabled: boolean;
     applied: boolean;

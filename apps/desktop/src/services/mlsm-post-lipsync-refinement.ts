@@ -1,5 +1,6 @@
 import { replaceMlsmPostLipsyncAnchors } from "./mlsm-post-lipsync-analysis";
-import type { MlsmPostLipsyncAnalysis, WordAnchor } from "./mlsm-post-lipsync-types";
+import type { MlsmPostLipsyncAnalysis, MlsmWaveformAlignment, WordAnchor } from "./mlsm-post-lipsync-types";
+import { predictMlsmWaveformSourceSeconds } from "./mlsm-post-lipsync-waveform";
 import { fetchBrowserVocalService } from "./cassette-desk-vocals-browser";
 import { isSongPlayerJobTerminal, startSongPlayerJob, waitForSongPlayerJob, type SongPlayerRefineAnchorRequest } from "./song-player-native";
 import { isTauri } from "@tauri-apps/api/core";
@@ -44,18 +45,18 @@ function decode(value: unknown): RefinedAnchorResult[] {
   });
 }
 
-function request(anchor: WordAnchor, maxShiftMs: number, targetAudioStartSeconds: number): SongPlayerRefineAnchorRequest {
-  return {
-    id: anchor.id,
-    cueIndex: anchor.cueIndex,
-    sourceStart: anchor.sourceStart,
-    sourceCenter: anchor.sourceCenter,
-    sourceEnd: anchor.sourceEnd,
-    targetStart: anchor.targetStart + targetAudioStartSeconds,
-    targetCenter: anchor.targetCenter + targetAudioStartSeconds,
-    targetEnd: anchor.targetEnd + targetAudioStartSeconds,
-    maxShiftMs
-  };
+function request(anchor: WordAnchor, maxShiftMs: number, targetAudioStartSeconds: number, waveform?: MlsmWaveformAlignment): SongPlayerRefineAnchorRequest {
+  const targetStart = anchor.targetStart + targetAudioStartSeconds;
+  const targetCenter = anchor.targetCenter + targetAudioStartSeconds;
+  const targetEnd = anchor.targetEnd + targetAudioStartSeconds;
+  // A recovery anchor is one whose source timing nobody trusts, so seeding the
+  // search with that same timing only decides which wrong place to search
+  // around. The measured waveform overlay is transcript-free evidence of where
+  // this master instant lives in the video, so it becomes the seed instead.
+  const source = waveform
+    ? { sourceStart: predictMlsmWaveformSourceSeconds(waveform, targetStart), sourceCenter: predictMlsmWaveformSourceSeconds(waveform, targetCenter), sourceEnd: predictMlsmWaveformSourceSeconds(waveform, targetEnd) }
+    : { sourceStart: anchor.sourceStart, sourceCenter: anchor.sourceCenter, sourceEnd: anchor.sourceEnd };
+  return { id: anchor.id, cueIndex: anchor.cueIndex, ...source, targetStart, targetCenter, targetEnd, maxShiftMs };
 }
 
 export function applyMlsmPostLipsyncRefinements(
@@ -125,6 +126,7 @@ export async function refineMlsmPostLipsyncAlignment(input: {
   maxShiftMs?: number;
   detailedTiming?: boolean;
   focusCanonicalIndexes?: readonly number[];
+  waveform?: MlsmWaveformAlignment;
   signal?: AbortSignal;
   onProgress?: (progress: number | null, message: string) => void;
 }): Promise<MlsmPostLipsyncAnalysis> {
@@ -136,14 +138,21 @@ export async function refineMlsmPostLipsyncAlignment(input: {
   // separate worker request: one recovered opening must not give the already
   // reliable words (for example "Still loves me") a 30-second search radius.
   const reliableMaxShiftMs = input.maxShiftMs ?? (input.detailedTiming ? 350 : 50);
-  const recoveryMaxShiftMs = input.maxShiftMs ?? Math.min(30_000, input.analysis.sourceDurationSeconds * 1_000);
+  // A trusted waveform overlay replaces the blind hunt. Seeded by measured
+  // audio instead of a transcript nobody believes, the recovery pass only has
+  // to cover how much the performance breathes: hundreds of milliseconds, not
+  // the whole clip. Without that evidence the legacy wide radius stays, because
+  // then there genuinely is no better guess than "somewhere in the video".
+  const waveform = input.waveform?.trusted ? input.waveform : undefined;
+  const recoveryMaxShiftMs = input.maxShiftMs ?? (waveform ? waveform.searchRadiusMs : Math.min(30_000, input.analysis.sourceDurationSeconds * 1_000));
   const groups = needsPhraseRecovery ? [
-    { label: "parole misurate", maxShiftMs: reliableMaxShiftMs, anchors: input.analysis.anchors.filter((anchor) => !isRecoveryAnchor(anchor)) },
-    { label: focused.size ? "revisione fonetica/MFCC mirata" : "parole recuperate", maxShiftMs: recoveryMaxShiftMs, anchors: input.analysis.anchors.filter(isRecoveryAnchor) }
-  ] : [{ label: "parole misurate", maxShiftMs: reliableMaxShiftMs, anchors: [...input.analysis.anchors] }];
+    { label: "parole misurate", maxShiftMs: reliableMaxShiftMs, anchors: input.analysis.anchors.filter((anchor) => !isRecoveryAnchor(anchor)), waveform: undefined },
+    { label: waveform ? "parole recuperate · seed dalle onde sovrapposte" : focused.size ? "revisione fonetica/MFCC mirata" : "parole recuperate", maxShiftMs: recoveryMaxShiftMs, anchors: input.analysis.anchors.filter(isRecoveryAnchor), waveform }
+  ] : [{ label: "parole misurate", maxShiftMs: reliableMaxShiftMs, anchors: [...input.analysis.anchors], waveform: undefined }];
   const jobs = groups.flatMap((group) => Array.from({ length: Math.ceil(group.anchors.length / batchSize) }, (_, batchIndex) => ({
     label: group.label,
     maxShiftMs: group.maxShiftMs,
+    waveform: group.waveform,
     anchors: group.anchors.slice(batchIndex * batchSize, (batchIndex + 1) * batchSize)
   })));
   const refinements = new Map<string, RefinedAnchorResult>();
@@ -151,7 +160,7 @@ export async function refineMlsmPostLipsyncAlignment(input: {
     if (input.signal?.aborted) throw new DOMException("Micro allineamento annullato", "AbortError");
     const job = jobs[jobIndex]!;
     const targetStemOffsetSeconds = input.analysis.targetAudioStartSeconds - input.analysis.targetAnalysisStartSeconds;
-    const anchors = job.anchors.map((anchor) => request(anchor, job.maxShiftMs, targetStemOffsetSeconds));
+    const anchors = job.anchors.map((anchor) => request(anchor, job.maxShiftMs, targetStemOffsetSeconds, job.waveform));
     let result: unknown;
     if (!isTauri()) {
       input.onProgress?.(jobIndex / Math.max(1, jobs.length), `Micro allineamento browser · ${job.label} · ${jobIndex + 1}/${jobs.length}`);

@@ -1,6 +1,6 @@
 import { alignCanonicalWordSequence, lipsyncTimedWords } from "./mlsm-post-lipsync-alignment";
 import { normalizeLipsyncWord, tokenizeCanonicalLyricText } from "./mlsm-post-lipsync-lyrics";
-import type { CanonicalLyricWord, LipsyncTimedWord } from "./mlsm-post-lipsync-types";
+import type { CanonicalLyricWord, LipsyncTimedWord, MlsmWaveformAlignment } from "./mlsm-post-lipsync-types";
 import {
   getLocalTextGenerator,
   localGeneratedAnswer,
@@ -176,7 +176,15 @@ function median(values: readonly number[]): number | null {
   return ordered.length % 2 ? ordered[middle]! : (ordered[middle - 1]! + ordered[middle]!) / 2;
 }
 
-function measuredScale(context: RecoveryContext): number {
+/** Source seconds per target second used to stretch a recovered phrase.
+ *
+ * A trusted waveform overlay wins over the transcript-derived median: the
+ * overlay measured this ratio on the two isolated vocals, while the median is
+ * computed from the very Whisper timings the recovery exists to compensate for.
+ * Keeping the LLM out of this number is the point — it chooses *which* words
+ * were dropped, the measured audio decides *where* they sit. */
+function measuredScale(context: RecoveryContext, waveform?: MlsmWaveformAlignment): number {
+  if (waveform?.trusted && Number.isFinite(waveform.scale) && waveform.scale >= .35 && waveform.scale <= 3) return waveform.scale;
   const ratios = context.matches.slice(1).flatMap((match, index) => {
     const previous = context.matches[index]!;
     const sourceDelta = context.sourceWords[match.canonicalIndex]!.centerSeconds - context.sourceWords[previous.canonicalIndex]!.centerSeconds;
@@ -230,6 +238,7 @@ export async function repairMlsmPostLipsyncTranscriptWithLocalLlm(input: {
   sourceTranscript: WhisperTranscriptDocument;
   targetTranscript: WhisperTranscriptDocument;
   exactSungLyrics?: string;
+  waveform?: MlsmWaveformAlignment;
   onProgress?: (message: string) => void;
 }): Promise<MlsmPostLipsyncLlmRepairResult> {
   const exactSungLyrics = input.exactSungLyrics?.trim().replace(/\s+/gu, " ") ?? "";
@@ -257,7 +266,7 @@ export async function repairMlsmPostLipsyncTranscriptWithLocalLlm(input: {
   input.onProgress?.("LLM locale · controllo delle parole saltate da Whisper");
   const output = await runLocalTextGeneration(generator, conversation, { max_new_tokens: 96, do_sample: false, repetition_penalty: 1.14, no_repeat_ngram_size: 4 }, 22_000);
   const selection = validatedSelection(localGeneratedAnswer(output), context);
-  const scale = measuredScale(context);
+  const scale = measuredScale(context, input.waveform);
   const recovered = [
     ...inferredPrefixWords(selection.prepend, context, scale),
     ...inferredSuffixWords(selection.append, context, scale)

@@ -29,7 +29,7 @@ interface TimelinePointerEdit { pointerId: number; startClientX: number; trackWi
 interface LipsyncReviewMenu { canonicalIndex: number; x: number; y: number }
 
 const stageOrder: readonly MlsmPostLipsyncPipelineStage[] = [
-  "extract-source-audio", "cache", "separate-source-vocal", "separate-target-vocal",
+  "extract-source-audio", "cache", "separate-source-vocal", "separate-target-vocal", "overlay-waveforms",
   "transcribe-source", "transcribe-target", "llm-correct", "align", "micro-align", "visual-align"
 ];
 
@@ -43,6 +43,29 @@ const copy = {
     progress: "Pipeline reale", anchors: "Anchor vocali", source: "Sorgente", target: "Target", correction: "Correzione", confidence: "Affidabilità", state: "Stato", locked: "Bloccato", auto: "Auto", manual: "Manuale", editable: "Modificabile",
     report: "Controllo qualità", matched: "Parole allineate", unresolved: "Da verificare", average: "Correzione media", critical: "Segmenti critici", monotonic: "Time-map monotona", masterSegment: "Porzione riconosciuta nel master", yes: "Sì", no: "No", download: "Scarica report JSON",
     speedMap: "Mappa retiming", safe: "Sicuro", moderate: "Moderato", criticalBand: "Critico", interpolation: "interpolazione", subtitlePreview: "Testo allineato", alignmentMode: "Base allineamento", whisperOnly: "Solo Whisper", subtitleGuided: "Whisper + SRT/VTT",
+    guide: {
+      title: "Come funziona · ogni passo dell’analisi",
+      intro: "MLSM POST LIPSYNC non ritocca il video a occhio: misura dove cade ogni parola nel master, dove cade nel video generato e costruisce una time-map monotona che riscala il video su quei punti. Ogni passo qui sotto viene eseguito in locale, nell’ordine mostrato.",
+      steps: {
+        "extract-source-audio": "FFmpeg locale estrae la traccia audio del video cantato in un WAV PCM temporaneo. Il file video non viene mai riscritto.",
+        cache: "Impronta SHA-256 di video, master, testo, modello Whisper e di ogni parametro di allineamento. Se la stessa richiesta è già stata analizzata il risultato viene riusato, altrimenti parte un’analisi nuova.",
+        "separate-source-vocal": "Demucs (htdemucs) isola la voce dal video: la base strumentale non falsa nessuna misura successiva.",
+        "separate-target-vocal": "Stessa separazione sul master definitivo, limitata alla porzione scelta nel taglio.",
+        "overlay-waveforms": "Le due voci isolate vengono sovrapposte. MLSM costruisce l’inviluppo di energia (attacchi + RMS) a 100 punti al secondo e cerca, con cross-correlazione normalizzata via FFT, lo scarto e il rapporto di tempo che le fanno combaciare, affinando la griglia dei rapporti in tre passaggi. Il risultato è accettato solo se la corrispondenza è ≥ 55%, l’unicità del picco ≥ 20%, l’accordo tra finestre ≥ 60% e almeno 3 finestre concordano: su una base in loop un picco identico a una battuta di distanza viene rifiutato. È l’unica misura del processo che né Whisper né l’LLM possono spostare.",
+        "transcribe-source": "Whisper trascrive la voce del video con timestamp parola per parola (o per fonema in modalità approfondita). Decodifica deterministica: nessun campionamento, nessuna temperatura.",
+        "transcribe-target": "Stessa trascrizione sulla voce del master: è il riferimento delle parole realmente cantate.",
+        "llm-correct": "Qwen2.5 in locale confronta le due liste e indica quali parole Whisper ha perso all’inizio o alla fine della frase. Può scegliere soltanto tra parole già misurate nel master, non inventa testo e non scrive nessun timestamp: la posizione delle parole recuperate deriva dal rapporto misurato al passo delle onde sovrapposte.",
+        align: "Le parole canoniche (SRT/VTT quando presente, altrimenti Whisper) vengono agganciate alla trascrizione con confronto di sottosequenza e somiglianza: nascono gli anchor, l’elenco delle parole da verificare e la time-map monotona.",
+        "micro-align": "Per ogni parola MFCC + delta-MFCC e DTW sulle voci isolate. Due passaggi separati: le parole già misurate possono spostarsi al massimo di 50 ms (350 ms in modalità fonemi), le parole recuperate partono dal punto indicato dalle onde sovrapposte con un raggio misurato di 150–900 ms invece di cercare in tutto il video. Anche le correzioni a frase intera restano dentro quel raggio.",
+        "visual-align": "Opzionale: Auto-AVSR legge la bocca frame per frame e i visemi vengono fusi con il timing audio solo quando sono affidabili e non rompono la monotonia. Se non è disponibile resta il timing audio."
+      },
+      notes: [
+        "Nessun passo riscrive i file originali: video e master vengono soltanto letti.",
+        "Se la sovrapposizione delle onde non è affidabile MLSM lo dichiara e torna al comportamento precedente, invece di fingere una misura.",
+        "Il video viene ricostruito sulla linea del tempo del master: la durata finale coincide con la porzione selezionata.",
+        "L’export è bloccato se meno del 70% delle parole è allineato o se la time-map non è monotona."
+      ]
+    },
     editHint: "Ogni parola è modificabile. Nella colonna Correzione, − ritarda il video e + lo anticipa di 10 ms; apri i dettagli per regolare inizio, centro e fine. Tasto destro su una parola incerta per riesaminarla.", error: "Analisi non riuscita", freshAnalysis: "Ogni clic esegue una nuova analisi", clearCache: "Svuota cache LIP SYNC", cacheCleared: "Cache analisi LIP SYNC svuotata", unresolvedWord: "Da verificare", unsafeExport: "Export bloccato: devono essere allineate almeno il 70% delle parole e la time-map deve essere monotona.", reviewWrong: "Segnala errato e approfondisci", reviewWrongHint: "Rianalizza questa parola con vincolo fonetico e finestra DTW mirata", boundaries: "Dettagli temporali", sourceStart: "Inizio sorgente", sourceCenter: "Centro sorgente", sourceEnd: "Fine sorgente", targetStart: "Inizio master", targetCenter: "Centro master", targetEnd: "Fine master", createManual: "Crea anchor manuale", nudgeEarlier: "Anticipa video", nudgeLater: "Ritarda video", detailTab: "Dettaglio parole", waveformTab: "Timeline grafica", whisperTab: "Timestamp Whisper", waveformHint: "La corsia superiore conserva il risultato automatico. Nella corsia inferiore trascina le parole, usa le maniglie laterali per accorciarle o allungarle e Shift/Cmd/Ctrl per selezioni multiple.", selectedWords: "Parole selezionate", moveSelection: "Sposta la selezione", automaticLane: "Risultato automatico", editableLane: "Video editabile", dragWord: "Trascina per spostare · maniglie per ridimensionare", expandPreview: "Espandi anteprima", collapsePreview: "Riduci anteprima", promptTool: "Generatore prompt video", promptToolHint: "Funzione indipendente · usa soltanto SRT/VTT e LLM locale", openPromptTool: "Apri generatore prompt", exportVideo: "Esporta MP4", cancelExport: "Annulla export", exportPreparing: "Preparazione export con time-map corrente…", exportDone: "Export completato", phoneticPoints: "punti fonetici", visualSpeech: "Analisi visiva del labiale · Auto-AVSR", visualSpeechHint: "Disattivata di default: se la abiliti, legge la bocca frame per frame e fonde i visemi con Whisper/MFCC soltanto quando sono affidabili e monotoni.", visualApplied: "Timing migliorato con i visemi", visualNoChange: "Nessun visema abbastanza affidabile: timing audio mantenuto", visualUnavailable: "Auto-AVSR non disponibile: timing audio mantenuto", faceCoverage: "copertura volto"
   },
   en: {
@@ -54,13 +77,36 @@ const copy = {
     progress: "Real pipeline", anchors: "Vocal anchors", source: "Source", target: "Target", correction: "Correction", confidence: "Confidence", state: "State", locked: "Locked", auto: "Auto", manual: "Manual", editable: "Editable",
     report: "Quality control", matched: "Aligned words", unresolved: "Needs review", average: "Average correction", critical: "Critical segments", monotonic: "Monotonic time-map", masterSegment: "Segment recognized in the master", yes: "Yes", no: "No", download: "Download JSON report",
     speedMap: "Retiming map", safe: "Safe", moderate: "Moderate", criticalBand: "Critical", interpolation: "interpolation", subtitlePreview: "Aligned text", alignmentMode: "Alignment basis", whisperOnly: "Whisper only", subtitleGuided: "Whisper + SRT/VTT",
+    guide: {
+      title: "How it works · every analysis step",
+      intro: "MLSM POST LIPSYNC does not nudge the video by eye: it measures where every word lands in the master, where it lands in the generated video, and builds a monotonic time-map that rescales the video onto those points. Every step below runs locally, in the order shown.",
+      steps: {
+        "extract-source-audio": "Local FFmpeg extracts the sung video’s audio track into a temporary PCM WAV. The video file is never rewritten.",
+        cache: "A SHA-256 fingerprint of video, master, lyrics, Whisper model and every alignment parameter. If the same request was analysed before the result is reused, otherwise a fresh analysis starts.",
+        "separate-source-vocal": "Demucs (htdemucs) isolates the voice from the video, so the backing track cannot skew any later measurement.",
+        "separate-target-vocal": "The same separation on the final master, limited to the excerpt chosen in the trim.",
+        "overlay-waveforms": "The two isolated vocals are overlaid. MLSM builds an energy envelope (onsets + RMS) at 100 points per second and uses FFT normalised cross-correlation to find the offset and tempo ratio that make them coincide, refining the ratio grid in three passes. The result is accepted only when the match is ≥ 55%, peak uniqueness ≥ 20%, agreement across windows ≥ 60% and at least 3 windows agree: on a looped backing track a peak that is identical one bar away is rejected. This is the only measurement in the process that neither Whisper nor the LLM can move.",
+        "transcribe-source": "Whisper transcribes the video’s voice with word-level timestamps (phoneme-level in deep mode). Deterministic decoding: no sampling, no temperature.",
+        "transcribe-target": "The same transcription on the master’s voice: this is the reference for the words actually sung.",
+        "llm-correct": "Qwen2.5 running locally compares the two lists and reports which words Whisper dropped at the start or the end of the phrase. It may only pick words already measured in the master, it never invents text and it never writes a timestamp: recovered words are positioned from the ratio measured in the waveform-overlay step.",
+        align: "The canonical words (SRT/VTT when present, otherwise Whisper) are matched to the transcript by subsequence and similarity: this produces the anchors, the list of words needing review and the monotonic time-map.",
+        "micro-align": "MFCC + delta-MFCC and DTW per word on the isolated vocals. Two separate passes: already-measured words may move at most 50 ms (350 ms in phoneme mode), recovered words start from the point indicated by the overlaid waveforms with a measured radius of 150–900 ms instead of searching the whole video. Phrase-wide corrections stay inside that radius too.",
+        "visual-align": "Optional: Auto-AVSR reads the mouth frame by frame and visemes are fused with the audio timing only when they are reliable and do not break monotonicity. If it is unavailable, the audio timing stands."
+      },
+      notes: [
+        "No step rewrites the original files: the video and master are only read.",
+        "If the waveform overlay is not trustworthy MLSM says so and falls back to the previous behaviour instead of faking a measurement.",
+        "The video is rebuilt on the master’s timeline: the final duration matches the selected excerpt exactly.",
+        "Export is blocked if fewer than 70% of the words are aligned or the time-map is not monotonic."
+      ]
+    },
     editHint: "Every word is editable. In Correction, − delays the video and + advances it by 10 ms; open the details to adjust start, centre and end. Right-click an uncertain word to inspect it again.", error: "Analysis failed", freshAnalysis: "Every click runs a fresh analysis", clearCache: "Clear LIP SYNC cache", cacheCleared: "LIP SYNC analysis cache cleared", unresolvedWord: "Needs review", unsafeExport: "Export blocked: at least 70% of the words must be aligned and the time-map must be monotonic.", reviewWrong: "Mark wrong and inspect deeper", reviewWrongHint: "Reanalyze this word with phonetic constraints and a focused DTW window", boundaries: "Timing details", sourceStart: "Source start", sourceCenter: "Source centre", sourceEnd: "Source end", targetStart: "Master start", targetCenter: "Master centre", targetEnd: "Master end", createManual: "Create manual anchor", nudgeEarlier: "Advance video", nudgeLater: "Delay video", detailTab: "Word detail", waveformTab: "Graphic timeline", whisperTab: "Whisper timestamps", waveformHint: "The upper lane preserves the automatic result. In the lower lane drag words, use the edge handles to shorten or extend them, and Shift/Cmd/Ctrl for multi-selection.", selectedWords: "Selected words", moveSelection: "Move selection", automaticLane: "Automatic result", editableLane: "Editable video", dragWord: "Drag to move · handles to resize", expandPreview: "Expand preview", collapsePreview: "Collapse preview", promptTool: "Video prompt generator", promptToolHint: "Independent tool · uses only SRT/VTT and the local LLM", openPromptTool: "Open prompt generator", exportVideo: "Export MP4", cancelExport: "Cancel export", exportPreparing: "Preparing export with the current time-map…", exportDone: "Export complete", phoneticPoints: "phonetic points", visualSpeech: "Visual lip analysis · Auto-AVSR", visualSpeechHint: "Disabled by default: when enabled, it reads the mouth frame by frame and fuses visemes with Whisper/MFCC only when confidence and monotonicity are safe.", visualApplied: "Timing refined with visemes", visualNoChange: "No reliable viseme: audio timing preserved", visualUnavailable: "Auto-AVSR unavailable: audio timing preserved", faceCoverage: "face coverage"
   }
 } as const;
 
 const stageLabels = {
-  it: { "extract-source-audio": "Estrazione voce dal video", cache: "Nuova analisi", "separate-source-vocal": "Separazione voce sorgente", "separate-target-vocal": "Separazione voce target", "transcribe-source": "Trascrizione sorgente", "transcribe-target": "Trascrizione target", "llm-correct": "Correzione sequenza LLM", align: "Allineamento parole", "micro-align": "Rifinitura MFCC / DTW", "visual-align": "Lettura labiale Auto-AVSR" },
-  en: { "extract-source-audio": "Extracting video audio", cache: "Fresh analysis", "separate-source-vocal": "Separating source vocal", "separate-target-vocal": "Separating target vocal", "transcribe-source": "Transcribing source", "transcribe-target": "Transcribing target", "llm-correct": "LLM sequence correction", align: "Aligning words", "micro-align": "MFCC / DTW refinement", "visual-align": "Auto-AVSR lip reading" }
+  it: { "extract-source-audio": "Estrazione voce dal video", cache: "Nuova analisi", "separate-source-vocal": "Separazione voce sorgente", "separate-target-vocal": "Separazione voce target", "overlay-waveforms": "Sovrapposizione delle onde", "transcribe-source": "Trascrizione sorgente", "transcribe-target": "Trascrizione target", "llm-correct": "Correzione sequenza LLM", align: "Allineamento parole", "micro-align": "Rifinitura MFCC / DTW", "visual-align": "Lettura labiale Auto-AVSR" },
+  en: { "extract-source-audio": "Extracting video audio", cache: "Fresh analysis", "separate-source-vocal": "Separating source vocal", "separate-target-vocal": "Separating target vocal", "overlay-waveforms": "Waveform overlay", "transcribe-source": "Transcribing source", "transcribe-target": "Transcribing target", "llm-correct": "LLM sequence correction", align: "Aligning words", "micro-align": "MFCC / DTW refinement", "visual-align": "Auto-AVSR lip reading" }
 } as const;
 
 function chooseBrowserFile(accept: string): Promise<File | null> {
@@ -544,6 +590,12 @@ export function MlsmPostLipsyncWorkspace({ onHome }: { onHome?: () => void }) {
           <header><span><small>LIPSYNC / ANALYSIS</small><strong>{t.progress}</strong></span><output>{Math.round(progressValue * 100)}%</output></header>
           <div className="lipsync-progress-track"><i style={{ width: `${progressValue * 100}%` }} /></div>
           <div className="lipsync-stage-grid">{stageOrder.map((stage, index) => { const activeIndex = progress ? stageOrder.indexOf(progress.stage) : -1; const state = analysis || index < activeIndex ? "done" : index === activeIndex ? "active" : "waiting"; return <div key={stage} data-state={state}><i>{state === "done" ? "✓" : String(index + 1).padStart(2, "0")}</i><span><strong>{stageLabels[uiLanguage][stage]}</strong><small>{index === activeIndex ? progress?.message : state === "done" ? "OK" : "—"}</small></span></div>; })}</div>
+          <details className="lipsync-guide">
+            <summary>{t.guide.title}</summary>
+            <p>{t.guide.intro}</p>
+            <ol>{stageOrder.map((stage, index) => <li key={stage}><strong>{String(index + 1).padStart(2, "0")} · {stageLabels[uiLanguage][stage]}</strong><span>{t.guide.steps[stage]}</span></li>)}</ol>
+            <ul>{t.guide.notes.map((note) => <li key={note}>{note}</li>)}</ul>
+          </details>
           {exportMessage ? <div className="lipsync-export-status" data-running={exporting}><span><strong>{exporting ? t.exportVideo : t.exportDone}</strong><small>{exportMessage}</small></span><output>{Math.round(exportProgress * 100)}%</output><div><i style={{ width: `${exportProgress * 100}%` }} /></div></div> : null}
           {error ? <div className="lipsync-error"><strong>{t.error}</strong><span>{error}</span></div> : null}
         </section>

@@ -44,6 +44,7 @@ ALLOWED_REQUEST_KEYS = {
     "match": {"protocolVersion", "action", "referencePath", "targetPath", "jobRoot"},
     "separateVocals": {"protocolVersion", "action", "inputPath", "jobRoot", "startSeconds", "endSeconds"},
     "extractAudio": {"protocolVersion", "action", "inputPath", "jobRoot"},
+    "alignWaveform": {"protocolVersion", "action", "sourcePath", "targetPath", "minimumScale", "maximumScale", "jobRoot"},
     "refineAlignment": {"protocolVersion", "action", "sourcePath", "targetPath", "anchors", "jobRoot"},
     "analyzeVisemes": {"protocolVersion", "action", "inputPath", "anchors", "language", "jobRoot"},
 }
@@ -446,6 +447,7 @@ def capabilities() -> dict[str, Any]:
             "match": bool(numpy_version and ffmpeg and ffprobe),
             "separateVocals": bool(demucs_ready and librosa_ready and ffmpeg and ffprobe),
             "extractAudio": bool(ffmpeg and ffprobe),
+            "alignWaveform": bool(librosa_ready and ffmpeg and ffprobe),
             "refineAlignment": bool(librosa_ready and ffmpeg and ffprobe),
             "analyzeVisemes": bool(auto_avsr_ready),
         },
@@ -694,6 +696,264 @@ def _delayed_target_cue_onsets(
     return overrides
 
 
+def _alignment_envelope(samples: Any, sample_rate: int, hop_length: int, librosa: Any, np: Any) -> Any:
+    """Build the envelope used to overlay two vocal waveforms.
+
+    Onset strength marks consonant attacks, RMS keeps sustained sung vowels
+    visible.  Singing needs both: a purely percussive envelope drifts across
+    legato phrases, a purely energetic one cannot separate adjacent syllables.
+    """
+    if samples.size < hop_length * 8:
+        return np.zeros(0, dtype=np.float64)
+    onset = librosa.onset.onset_strength(y=samples, sr=sample_rate, hop_length=hop_length).astype(np.float64)
+    loudness = librosa.feature.rms(y=samples, frame_length=4 * hop_length, hop_length=hop_length)[0].astype(np.float64)
+    length = min(onset.size, loudness.size)
+    if length < 16:
+        return np.zeros(0, dtype=np.float64)
+
+    def unit(values: Any) -> Any:
+        peak = float(np.max(values)) if values.size else 0.0
+        return values / peak if peak > 1e-9 else np.zeros_like(values)
+
+    return unit(onset[:length]) + 0.6 * unit(loudness[:length])
+
+
+def _resample_envelope(values: Any, length: int, np: Any) -> Any:
+    """Stretch an envelope onto another timebase by linear interpolation."""
+    if length < 2 or values.size < 2:
+        return np.zeros(max(0, length), dtype=np.float64)
+    return np.interp(np.linspace(0.0, 1.0, num=length), np.linspace(0.0, 1.0, num=values.size), values)
+
+
+def _correlation_curve(probe: Any, reference: Any, minimum_overlap: int, np: Any) -> Any:
+    """Matched-filter score of ``probe`` at every integer lag of ``reference``.
+
+    Index ``k`` of the result scores the hypothesis ``probe[n] == reference[n + k
+    - (probe.size - 1)]``.  Lags with too little overlap are masked rather than
+    trimmed so the caller's index arithmetic stays valid.
+    """
+    from scipy import signal as scipy_signal
+
+    if probe.size < 8 or reference.size < 8:
+        return None
+    centred_probe = probe - probe.mean()
+    centred_reference = reference - reference.mean()
+    probe_norm = math.sqrt(float(np.dot(centred_probe, centred_probe)))
+    reference_norm = math.sqrt(float(np.dot(centred_reference, centred_reference)))
+    if probe_norm <= 1e-9 or reference_norm <= 1e-9:
+        return None
+    scores = scipy_signal.correlate(centred_reference, centred_probe, mode="full", method="fft") / (probe_norm * reference_norm)
+    overlap = scipy_signal.correlate(np.ones(reference.size), np.ones(probe.size), mode="full", method="fft")
+    usable = overlap >= max(8.0, float(minimum_overlap)) - 0.5
+    if not bool(np.any(usable)):
+        return None
+    return np.where(usable, scores, -np.inf)
+
+
+def _overlap_correlation(probe: Any, reference: Any, lag: int, np: Any) -> float:
+    """Pearson coefficient of the two envelopes on their overlapping span.
+
+    The matched-filter peak is normalised globally, so it only ranks candidates.
+    This recomputes the honest coefficient on the region that actually overlaps,
+    which is what the pipeline is allowed to treat as a confidence.
+    """
+    start = max(0, lag)
+    end = min(reference.size, probe.size + lag)
+    if end - start < 16:
+        return 0.0
+    left = probe[start - lag:end - lag]
+    right = reference[start:end]
+    left = left - left.mean()
+    right = right - right.mean()
+    denominator = math.sqrt(float(np.dot(left, left)) * float(np.dot(right, right)))
+    if denominator <= 1e-9:
+        return 0.0
+    return float(np.dot(left, right) / denominator)
+
+
+def _peak_clarity(scores: Any, best_index: int, exclusion_frames: int, np: Any) -> float:
+    """How much the winning lag beats the best unrelated lag.
+
+    A looped backing track produces near-equal peaks one bar apart.  Reporting
+    that ambiguity is the point: the pipeline must not trust a global offset
+    that a bar-length shift would explain just as well.
+    """
+    best = float(scores[best_index])
+    if not math.isfinite(best) or best <= 1e-6:
+        return 0.0
+    masked = np.array(scores, dtype=np.float64, copy=True)
+    low = max(0, best_index - exclusion_frames)
+    masked[low:best_index + exclusion_frames + 1] = -np.inf
+    finite = masked[np.isfinite(masked)]
+    if finite.size == 0:
+        return 1.0
+    runner_up = float(np.max(finite))
+    if runner_up <= 0.0:
+        return 1.0
+    return max(0.0, min(1.0, (best - runner_up) / best))
+
+
+def _local_alignment_deviations(probe: Any, reference: Any, lag: int, radius_frames: int, np: Any) -> list[int]:
+    """Per-window lag deviation from the global fit, in frames.
+
+    A single global offset cannot express the breathing of a sung performance.
+    Measuring how far each window wanders from the fit yields the physical
+    search radius the later MFCC pass is allowed to use, instead of a guess.
+    """
+    window_frames = 150
+    step_frames = 75
+    deviations: list[int] = []
+    start = max(0, lag)
+    end = min(reference.size, probe.size + lag)
+    position = start
+    while position + window_frames <= end:
+        window = probe[position - lag:position - lag + window_frames]
+        low = max(0, position - radius_frames)
+        high = min(reference.size, position + window_frames + radius_frames)
+        # Demanding full overlap keeps the admissible lags inside ±radius.
+        scores = _correlation_curve(window, reference[low:high], window_frames, np)
+        if scores is not None:
+            best_index = int(np.argmax(scores))
+            if math.isfinite(float(scores[best_index])):
+                deviations.append(best_index - (window.size - 1) + low - position)
+        position += step_frames
+    return deviations
+
+
+def align_waveform(request: dict[str, Any]) -> dict[str, Any]:
+    """Overlay two vocal waveforms and report the global time mapping.
+
+    This is the only stage that measures ``source`` against ``target`` without
+    trusting a single transcript timestamp.  It searches a geometric grid of
+    tempo ratios, cross-correlating the two envelopes at every integer lag, and
+    returns ``sourceSeconds = scale * targetSeconds + offsetSeconds`` together
+    with the evidence for it.  Downstream stages use that mapping to bound
+    their search window, so a transcript that is wrong by seconds can no longer
+    send the MFCC pass hunting across the whole clip.
+    """
+    _validate_root(request.get("jobRoot"), "Job root")
+    source_value = request.get("sourcePath")
+    target_value = request.get("targetPath")
+    if not isinstance(source_value, str) or not isinstance(target_value, str):
+        raise WorkerError("invalid_input", "Stem vocali non validi")
+    source = Path(source_value)
+    target = Path(target_value)
+    if any(not path.is_absolute() or path.is_symlink() or not path.is_file() for path in (source, target)):
+        raise WorkerError("invalid_input", "Gli stem vocali devono essere file locali validi")
+    source = source.resolve(strict=True)
+    target = target.resolve(strict=True)
+    minimum_scale, maximum_scale = 0.5, 2.0
+    for key, low, high in (("minimumScale", 0.2, 1.0), ("maximumScale", 1.0, 5.0)):
+        if key not in request:
+            continue
+        try:
+            value = float(request[key])
+        except (TypeError, ValueError) as error:
+            raise WorkerError("invalid_input", "Intervallo di scala non valido") from error
+        if not math.isfinite(value) or not low <= value <= high:
+            raise WorkerError("invalid_input", "Intervallo di scala fuori dai limiti")
+        if key == "minimumScale":
+            minimum_scale = value
+        else:
+            maximum_scale = value
+    if minimum_scale >= maximum_scale:
+        raise WorkerError("invalid_input", "Intervallo di scala non ordinato")
+
+    prepare_librosa_import()
+    import librosa
+    import numpy as np
+    sample_rate = 16_000
+    hop_length = 160
+    frame_seconds = hop_length / sample_rate
+    progress(0.05, "Decodifica stem vocali per la sovrapposizione delle onde")
+    source_samples, _ = librosa.load(str(source), sr=sample_rate, mono=True)
+    target_samples, _ = librosa.load(str(target), sr=sample_rate, mono=True)
+    progress(0.3, "Estrazione inviluppi di attacco e intensità")
+    source_envelope = _alignment_envelope(source_samples, sample_rate, hop_length, librosa, np)
+    target_envelope = _alignment_envelope(target_samples, sample_rate, hop_length, librosa, np)
+    unmeasurable = {
+        "kind": "alignWaveform",
+        "aligned": False,
+        "reason": "envelope_too_short",
+        "method": "onset-rms-xcorr-v1",
+        "sourceDurationSeconds": round(source_samples.size / sample_rate, 4),
+        "targetDurationSeconds": round(target_samples.size / sample_rate, 4),
+    }
+    if source_envelope.size < 32 or target_envelope.size < 32:
+        return unmeasurable
+
+    minimum_overlap = max(100, int(0.5 * min(source_envelope.size, target_envelope.size)))
+    best: dict[str, Any] | None = None
+
+    def evaluate(scale: float) -> dict[str, Any] | None:
+        probe_length = int(round(source_envelope.size / scale))
+        if probe_length < 32:
+            return None
+        probe = _resample_envelope(source_envelope, probe_length, np)
+        scores = _correlation_curve(probe, target_envelope, minimum_overlap, np)
+        if scores is None:
+            return None
+        best_index = int(np.argmax(scores))
+        peak = float(scores[best_index])
+        if not math.isfinite(peak):
+            return None
+        return {"scale": scale, "peak": peak, "lag": best_index - (probe.size - 1), "probe": probe, "scores": scores, "bestIndex": best_index}
+
+    # Three geometric refinements: ±7% per coarse step down to ±0.07%, which is
+    # 7 ms of drift over a ten second clip. Deterministic by construction.
+    low, high, steps = minimum_scale, maximum_scale, 21
+    for stage in range(3):
+        stage_best = None
+        for scale in np.geomspace(low, high, num=steps):
+            candidate = evaluate(float(scale))
+            if candidate is not None and (stage_best is None or candidate["peak"] > stage_best["peak"]):
+                stage_best = candidate
+        if stage_best is None:
+            break
+        if best is None or stage_best["peak"] >= best["peak"]:
+            best = stage_best
+        ratio = (high / low) ** (1.0 / (steps - 1))
+        low = max(minimum_scale, best["scale"] / ratio)
+        high = min(maximum_scale, best["scale"] * ratio)
+        progress(0.35 + 0.15 * stage, "Ricerca del rapporto di tempo migliore")
+    if best is None:
+        return {**unmeasurable, "reason": "no_admissible_lag"}
+
+    lag = int(best["lag"])
+    scale = float(best["scale"])
+    offset_seconds = -scale * lag * frame_seconds
+    confidence = _overlap_correlation(best["probe"], target_envelope, lag, np)
+    clarity = _peak_clarity(best["scores"], int(best["bestIndex"]), int(round(0.25 / frame_seconds)), np)
+    progress(0.85, "Verifica della stabilità locale dell'allineamento")
+    deviations = _local_alignment_deviations(best["probe"], target_envelope, lag, int(round(0.4 / frame_seconds)), np)
+    if deviations:
+        absolute = np.abs(np.array(deviations, dtype=np.float64))
+        residual_ms = float(np.median(absolute)) * frame_seconds * 1_000.0
+        spread_ms = float(np.percentile(absolute, 90)) * frame_seconds * 1_000.0
+        agreement = float(np.mean(absolute <= 0.12 / frame_seconds))
+    else:
+        residual_ms, spread_ms, agreement = 0.0, 0.0, 0.0
+    overlap_frames = max(0, min(target_envelope.size, best["probe"].size + lag) - max(0, lag))
+    return {
+        "kind": "alignWaveform",
+        "aligned": True,
+        "method": "onset-rms-xcorr-v1",
+        "offsetSeconds": round(offset_seconds, 4),
+        "scale": round(scale, 6),
+        "confidence": round(max(0.0, min(1.0, confidence)), 4),
+        "clarity": round(clarity, 4),
+        "residualMs": round(residual_ms, 2),
+        "spreadMs": round(spread_ms, 2),
+        "localAgreement": round(agreement, 4),
+        "windows": len(deviations),
+        "overlapSeconds": round(overlap_frames * frame_seconds, 4),
+        "sourceDurationSeconds": round(source_samples.size / sample_rate, 4),
+        "targetDurationSeconds": round(target_samples.size / sample_rate, 4),
+        "sampleRate": sample_rate,
+        "hopLength": hop_length,
+    }
+
+
 def refine_alignment(request: dict[str, Any]) -> dict[str, Any]:
     """Refine lyric boundaries against isolated vocals.
 
@@ -844,17 +1104,29 @@ def refine_alignment(request: dict[str, Any]) -> dict[str, Any]:
             if global_alignment is not None and maximum_shift > 0.1 and item["cueIndex"] in cue_bounds:
                 first_id, last_id = cue_anchor_ids[item["cueIndex"]]
                 phrase_start, phrase_end = cue_bounds[item["cueIndex"]]
+
+                def within_shift(value: float, seed: float) -> float:
+                    """Keep a phrase-boundary override inside the caller's radius.
+
+                    ``librosa.effects.split`` boundaries used to be written
+                    straight into the result, so a phrase-wide pass ignored
+                    ``maxShiftMs`` entirely and one mis-grouped activity segment
+                    could drag a whole cue seconds away from its seed. The
+                    radius is the caller's contract: honour it here too.
+                    """
+                    return min(seed + maximum_shift, max(seed - maximum_shift, value))
+
                 if item["id"] == first_id:
-                    candidate_start = phrase_start
+                    candidate_start = within_shift(phrase_start, source_start)
                 elif candidate_start is not None and source_onsets:
                     # DTW is authoritative near an onset. If it misses one by
                     # over 90 ms, snap to the acoustic attack rather than
                     # carrying the error into every following word.
-                    candidate_start = _snap_to_acoustic_onset(candidate_start, source_onsets)
+                    candidate_start = within_shift(_snap_to_acoustic_onset(candidate_start, source_onsets), source_start)
                 if item["id"] == last_id:
-                    candidate_end = phrase_end
+                    candidate_end = within_shift(phrase_end, source_end)
                 if first_id == last_id:
-                    candidate = (phrase_start + phrase_end) / 2
+                    candidate = within_shift((phrase_start + phrase_end) / 2, source_center)
             if candidate_start is not None and candidate is not None and candidate_end is not None and candidate_start <= candidate_end:
                 candidate = min(candidate_end, max(candidate_start, candidate))
                 source_frame = int(round((candidate - source_window_start) * sample_rate / hop_length))
@@ -914,6 +1186,8 @@ def dispatch(request: Any) -> dict[str, Any]:
             _cleanup_staging(request)
     if action == "extractAudio":
         return extract_audio(request)
+    if action == "alignWaveform":
+        return align_waveform(request)
     if action == "refineAlignment":
         return refine_alignment(request)
     if action == "analyzeVisemes":

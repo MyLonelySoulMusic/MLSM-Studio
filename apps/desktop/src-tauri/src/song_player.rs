@@ -92,6 +92,12 @@ pub enum SongPlayerStartRequest {
         #[serde(rename = "inputPath")]
         input_path: String,
     },
+    AlignWaveform {
+        #[serde(rename = "sourcePath")]
+        source_path: String,
+        #[serde(rename = "targetPath")]
+        target_path: String,
+    },
     RefineAlignment {
         #[serde(rename = "sourcePath")]
         source_path: String,
@@ -154,6 +160,10 @@ enum ValidatedRequest {
     ExtractAudio {
         input_path: PathBuf,
     },
+    AlignWaveform {
+        source_path: PathBuf,
+        target_path: PathBuf,
+    },
     RefineAlignment {
         source_path: PathBuf,
         target_path: PathBuf,
@@ -174,6 +184,7 @@ impl ValidatedRequest {
             Self::Match { .. } => "match",
             Self::SeparateVocals { .. } => "separateVocals",
             Self::ExtractAudio { .. } => "extractAudio",
+            Self::AlignWaveform { .. } => "alignWaveform",
             Self::RefineAlignment { .. } => "refineAlignment",
             Self::AnalyzeVisemes { .. } => "analyzeVisemes",
         }
@@ -220,6 +231,16 @@ impl ValidatedRequest {
                 "protocolVersion": PROTOCOL_VERSION,
                 "action": "extractAudio",
                 "inputPath": input_path,
+                "jobRoot": job_root,
+            }),
+            Self::AlignWaveform {
+                source_path,
+                target_path,
+            } => json!({
+                "protocolVersion": PROTOCOL_VERSION,
+                "action": "alignWaveform",
+                "sourcePath": source_path,
+                "targetPath": target_path,
                 "jobRoot": job_root,
             }),
             Self::RefineAlignment {
@@ -298,6 +319,13 @@ fn validate_start_request(
         }
         SongPlayerStartRequest::ExtractAudio { input_path } => Ok(ValidatedRequest::ExtractAudio {
             input_path: validate_local_media(Path::new(&input_path))?,
+        }),
+        SongPlayerStartRequest::AlignWaveform {
+            source_path,
+            target_path,
+        } => Ok(ValidatedRequest::AlignWaveform {
+            source_path: validate_local_media(Path::new(&source_path))?,
+            target_path: validate_local_media(Path::new(&target_path))?,
         }),
         SongPlayerStartRequest::RefineAlignment {
             source_path,
@@ -423,7 +451,7 @@ impl SongPlayerCapabilities {
             ready: false,
             runtime_ready,
             worker_ready,
-            features: json!({ "download": false, "analyze": false, "match": false, "separateVocals": false, "extractAudio": false, "refineAlignment": false, "analyzeVisemes": false }),
+            features: json!({ "download": false, "analyze": false, "match": false, "separateVocals": false, "extractAudio": false, "alignWaveform": false, "refineAlignment": false, "analyzeVisemes": false }),
             dependencies: json!({}),
             limits: json!({}),
             reason: Some(reason),

@@ -59,6 +59,18 @@ function valid(value: unknown): value is MlsmPostLipsyncAnalysis {
     && Array.isArray(candidate.localLlmCorrection?.recoveredWords)
     && (candidate.localLlmCorrection?.model === null || typeof candidate.localLlmCorrection?.model === "string")
     && (candidate.localLlmCorrection?.exactLyrics === null || typeof candidate.localLlmCorrection?.exactLyrics === "string")
+    && typeof candidate.waveformAlignment?.method === "string"
+    && ["measured", "ambiguous", "unmeasurable", "unavailable", "disabled"].includes(candidate.waveformAlignment?.status)
+    && typeof candidate.waveformAlignment?.trusted === "boolean"
+    && (candidate.waveformAlignment?.detail === null || typeof candidate.waveformAlignment?.detail === "string")
+    && finite(candidate.waveformAlignment?.offsetSeconds)
+    && finite(candidate.waveformAlignment?.scale) && candidate.waveformAlignment.scale > 0
+    && unit(candidate.waveformAlignment?.confidence) && unit(candidate.waveformAlignment?.clarity) && unit(candidate.waveformAlignment?.localAgreement)
+    && finite(candidate.waveformAlignment?.residualMs) && candidate.waveformAlignment.residualMs >= 0
+    && finite(candidate.waveformAlignment?.spreadMs) && candidate.waveformAlignment.spreadMs >= 0
+    && finite(candidate.waveformAlignment?.overlapSeconds) && candidate.waveformAlignment.overlapSeconds >= 0
+    && Number.isInteger(candidate.waveformAlignment?.windows) && candidate.waveformAlignment.windows >= 0
+    && finite(candidate.waveformAlignment?.searchRadiusMs) && candidate.waveformAlignment.searchRadiusMs >= 0
     && typeof candidate.visualSpeech?.enabled === "boolean"
     && typeof candidate.visualSpeech?.applied === "boolean"
     && ["applied", "no-confident-visemes", "unavailable", "disabled"].includes(candidate.visualSpeech?.status)

@@ -6,6 +6,7 @@ import { constrainMlsmPostLipsyncTranscriptToExactLyrics } from "./mlsm-post-lip
 import { repairMlsmPostLipsyncTranscriptWithLocalLlm } from "./mlsm-post-lipsync-llm";
 import { mlsmPostLipsyncCache, mlsmPostLipsyncCacheKey } from "./mlsm-post-lipsync-cache";
 import { refineMlsmPostLipsyncAlignment } from "./mlsm-post-lipsync-refinement";
+import { measureMlsmPostLipsyncWaveformAlignment, unmeasuredMlsmWaveformAlignment } from "./mlsm-post-lipsync-waveform";
 import { markMlsmVisualSpeechUnavailable, refineMlsmPostLipsyncWithVisualSpeech } from "./mlsm-post-lipsync-visual";
 import type { MlsmPostLipsyncAnalysis } from "./mlsm-post-lipsync-types";
 import {
@@ -19,7 +20,7 @@ import { transcribeTimestampedAudio, type WhisperModelId } from "./subtitle-gene
 import { isTauri } from "@tauri-apps/api/core";
 import { releaseBrowserVocalStem } from "./cassette-desk-vocals-browser";
 
-export type MlsmPostLipsyncPipelineStage = "extract-source-audio" | "cache" | "separate-source-vocal" | "separate-target-vocal" | "transcribe-source" | "transcribe-target" | "llm-correct" | "align" | "micro-align" | "visual-align";
+export type MlsmPostLipsyncPipelineStage = "extract-source-audio" | "cache" | "separate-source-vocal" | "separate-target-vocal" | "overlay-waveforms" | "transcribe-source" | "transcribe-target" | "llm-correct" | "align" | "micro-align" | "visual-align";
 
 export interface MlsmPostLipsyncPipelineProgress {
   stage: MlsmPostLipsyncPipelineStage;
@@ -103,7 +104,7 @@ export async function analyzeMlsmPostLipsync(input: {
       targetAudioHash: input.targetMaster.metadata.hash,
       subtitleHash: await textHash(subtitleText || "__MLSM_WHISPER_ONLY__"),
       whisperModel: input.whisperModel,
-      alignmentParameters: { language: input.language, alignmentSource, localLlmCorrection: localLlmCorrectionEnabled, visualSpeech: visualSpeechEnabled ? "auto-avsr-ctc-v1" : "disabled", exactLyricsHash: await textHash(exactSungLyrics || "__NO_EXACT_LYRICS__"), targetRangeStartMs: Math.round(targetMasterRange.startSeconds * 1_000), targetRangeEndMs: Math.round(targetMasterRange.endSeconds * 1_000), focusCanonicalIndexes: [...(input.focusCanonicalIndexes ?? [])].sort((left, right) => left - right), microAlignment: "phrase-dtw-v2", maxShiftMs: input.deepPhonemeAnalysis ? 350 : 50, detailMode: input.deepPhonemeAnalysis ? "phoneme" : "word" }
+      alignmentParameters: { language: input.language, alignmentSource, localLlmCorrection: localLlmCorrectionEnabled, visualSpeech: visualSpeechEnabled ? "auto-avsr-ctc-v1" : "disabled", exactLyricsHash: await textHash(exactSungLyrics || "__NO_EXACT_LYRICS__"), targetRangeStartMs: Math.round(targetMasterRange.startSeconds * 1_000), targetRangeEndMs: Math.round(targetMasterRange.endSeconds * 1_000), focusCanonicalIndexes: [...(input.focusCanonicalIndexes ?? [])].sort((left, right) => left - right), waveformOverlay: "onset-rms-xcorr-v1", microAlignment: "phrase-dtw-v2", maxShiftMs: input.deepPhonemeAnalysis ? 350 : 50, detailMode: input.deepPhonemeAnalysis ? "phoneme" : "word" }
     });
     if (input.reuseCachedAnalysis) {
       const cached = await mlsmPostLipsyncCache.get(cacheKey);
@@ -122,6 +123,24 @@ export async function analyzeMlsmPostLipsync(input: {
     throwIfAborted(input.signal);
     if (isTauri()) [sourceVocalAudio, targetVocalAudio] = await Promise.all([loadAudioFromPath(sourceVocal.stemPath), loadAudioFromPath(targetVocal.stemPath)]);
     const sourceVocalUrl = sourceVocalAudio?.url ?? sourceVocal.stemPath; const targetVocalUrl = targetVocalAudio?.url ?? targetVocal.stemPath;
+    // Overlay the two isolated vocals before a single word is transcribed. This
+    // is the only measurement in the pipeline that no transcript and no LLM can
+    // skew, and it is what later bounds the recovery search to the right place
+    // instead of letting it hunt across the whole video.
+    let waveformAlignment = unmeasuredMlsmWaveformAlignment("unavailable");
+    try {
+      waveformAlignment = await measureMlsmPostLipsyncWaveformAlignment({
+        sourceVocalPath: sourceVocal.stemPath,
+        targetVocalPath: targetVocal.stemPath,
+        ...(input.signal ? { signal: input.signal } : {}),
+        onProgress: (progress, message) => report("overlay-waveforms", progress, message)
+      });
+    } catch (reason) {
+      if (reason instanceof DOMException && reason.name === "AbortError") throw reason;
+      waveformAlignment = unmeasuredMlsmWaveformAlignment("unavailable", reason instanceof Error ? reason.message : String(reason));
+      report("overlay-waveforms", 1, `Sovrapposizione delle onde non disponibile · si prosegue con i tempi del trascritto: ${waveformAlignment.detail}`);
+    }
+    throwIfAborted(input.signal);
     const rawSourceTranscript = await transcribeTimestampedAudio(sourceVocalUrl, sourceAudio.metadata.durationSeconds, {
       language: input.language,
       whisperModel: input.whisperModel,
@@ -157,6 +176,7 @@ export async function analyzeMlsmPostLipsync(input: {
           sourceTranscript,
           targetTranscript,
           ...(exactSungLyrics ? { exactSungLyrics } : {}),
+          waveform: waveformAlignment,
           onProgress: (message) => report("llm-correct", null, message)
         });
         effectiveSourceTranscript = repaired.sourceTranscript;
@@ -185,6 +205,7 @@ export async function analyzeMlsmPostLipsync(input: {
       targetAnalysisStartSeconds: targetMasterRange.startSeconds,
       detailMode: input.deepPhonemeAnalysis ? "phoneme" : "word",
       localLlmCorrection,
+      waveformAlignment,
       whisperTranscripts: { source: rawSourceTranscript, target: rawTargetTranscript }
     });
     report("align", 1, "Anchor e time map verificati");
@@ -194,6 +215,7 @@ export async function analyzeMlsmPostLipsync(input: {
       targetVocalPath: targetVocal.stemPath,
       ...(input.deepPhonemeAnalysis === undefined ? {} : { detailedTiming: input.deepPhonemeAnalysis }),
       ...(input.focusCanonicalIndexes?.length ? { focusCanonicalIndexes: input.focusCanonicalIndexes } : {}),
+      waveform: waveformAlignment,
       ...(input.signal ? { signal: input.signal } : {}),
       onProgress: (progress, message) => report("micro-align", progress, message)
     }) : analysis;

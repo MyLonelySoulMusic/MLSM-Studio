@@ -1,6 +1,7 @@
 import { alignCanonicalWordSequence, buildWordAnchors, lipsyncTimedWords } from "./mlsm-post-lipsync-alignment";
 import { normalizeLipsyncWord, parseCanonicalLipsyncSubtitles } from "./mlsm-post-lipsync-lyrics";
 import { buildLipsyncTimeMap, lipsyncMapIsMonotonic } from "./mlsm-post-lipsync-time-map";
+import { unmeasuredMlsmWaveformAlignment } from "./mlsm-post-lipsync-waveform";
 import {
   MLSM_POST_LIPSYNC_ANALYSIS_VERSION,
   type CanonicalLyricWord,
@@ -207,6 +208,7 @@ export function createMlsmPostLipsyncAnalysis(input: {
   targetAnalysisStartSeconds?: number;
   detailMode?: LipsyncAnalysisDetail;
   localLlmCorrection?: MlsmPostLipsyncAnalysis["localLlmCorrection"];
+  waveformAlignment?: MlsmPostLipsyncAnalysis["waveformAlignment"];
   visualSpeech?: MlsmPostLipsyncAnalysis["visualSpeech"];
   whisperTranscripts?: MlsmPostLipsyncAnalysis["whisperTranscripts"];
 }): MlsmPostLipsyncAnalysis {
@@ -248,6 +250,7 @@ export function createMlsmPostLipsyncAnalysis(input: {
     detailMode,
     alignmentSource,
     localLlmCorrection: input.localLlmCorrection ?? { enabled: false, applied: false, status: "disabled", recoveredWords: [], model: null, exactLyrics: null },
+    waveformAlignment: input.waveformAlignment ?? unmeasuredMlsmWaveformAlignment("disabled"),
     visualSpeech: input.visualSpeech ?? { enabled: false, applied: false, status: "disabled", provider: null, model: null, revision: null, device: null, visualTranscript: "", faceCoverage: null, words: [], visemes: [], error: null },
     sourceDurationSeconds: input.sourceDurationSeconds,
     targetMasterDurationSeconds,

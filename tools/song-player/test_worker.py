@@ -243,6 +243,187 @@ class AlignmentRefinementTests(unittest.TestCase):
             self.assertEqual(result["anchors"][0]["method"], "mfcc-dtw-unresolved")
 
 
+class WaveformOverlayTests(unittest.TestCase):
+    """The stage that overlays the two vocal waveforms without any transcript."""
+
+    SAMPLE_RATE = 16_000
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            import numpy as np
+        except ImportError:
+            raise unittest.SkipTest("NumPy non disponibile; integrazione DSP saltata")
+        try:
+            worker.prepare_librosa_import()
+            import librosa  # noqa: F401
+        except Exception:
+            raise unittest.SkipTest("librosa non disponibile; sovrapposizione onde saltata")
+        cls.np = np
+
+    def _syllables(self, scale, offset, duration, seed=11):
+        """A sung-like burst train on the axis ``source = scale * target + offset``."""
+        np = self.np
+        rng = np.random.default_rng(seed)
+        total = int(round(duration * self.SAMPLE_RATE))
+        signal = np.zeros(total, dtype=np.float64)
+        target_time = 0.35
+        while target_time < 12.0:
+            span = float(rng.uniform(0.14, 0.26))
+            pitch = float(rng.uniform(150.0, 330.0))
+            samples = int(round(scale * span * self.SAMPLE_RATE))
+            first = int(round((scale * target_time + offset) * self.SAMPLE_RATE))
+            target_time += span + float(rng.uniform(0.05, 0.35))
+            if first < 0 or samples < 32:
+                continue
+            if first + samples >= total:
+                break
+            clock = np.arange(samples) / self.SAMPLE_RATE
+            voiced = sum(gain * np.sin(2 * np.pi * pitch * harmonic * clock) for harmonic, gain in ((1, 1.0), (2, 0.5), (3, 0.28), (5, 0.12)))
+            signal[first:first + samples] += 0.6 * np.hanning(samples) * voiced / 1.9
+        return np.clip(signal + rng.normal(0.0, 0.004, total), -1.0, 1.0)
+
+    def _write(self, path, samples):
+        pcm = self.np.clip(samples * 32767, -32768, 32767).astype("<i2")
+        with wave.open(str(path), "wb") as destination:
+            destination.setnchannels(1)
+            destination.setsampwidth(2)
+            destination.setframerate(self.SAMPLE_RATE)
+            destination.writeframes(pcm.tobytes())
+
+    def _align(self, source_samples, target_samples):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            self._write(root / "source.wav", source_samples)
+            self._write(root / "target.wav", target_samples)
+            request = {
+                "protocolVersion": 1,
+                "action": "alignWaveform",
+                "sourcePath": str(root / "source.wav"),
+                "targetPath": str(root / "target.wav"),
+                "jobRoot": str(root),
+            }
+            self.assertEqual(worker.validate_request(request)[0], "alignWaveform")
+            with mock.patch.object(worker, "progress"):
+                return worker.align_waveform(request)
+
+    def test_recovers_a_known_offset_and_tempo_ratio_from_audio_alone(self):
+        target = self._syllables(1.0, 0.0, 13.0)
+        for scale, offset in ((1.0, 0.0), (1.0, 1.4), (1.08, 0.62), (0.93, 2.1), (1.0, -0.8)):
+            with self.subTest(scale=scale, offset=offset):
+                result = self._align(self._syllables(scale, offset, 13.0 * max(1.0, scale) + 3.0), target)
+                self.assertTrue(result["aligned"])
+                self.assertAlmostEqual(result["offsetSeconds"], offset, delta=0.05)
+                self.assertAlmostEqual(result["scale"], scale, delta=0.01)
+                self.assertGreater(result["confidence"], 0.9)
+                self.assertGreater(result["clarity"], 0.3)
+                self.assertLess(result["spreadMs"], 60.0)
+                self.assertEqual(result["localAgreement"], 1.0)
+
+    def test_reports_ambiguity_for_looped_material_instead_of_a_confident_guess(self):
+        motif = self._syllables(1.0, 0.0, 3.0, seed=5)
+        result = self._align(motif, self.np.tile(motif, 5))
+        # The lag it picks is correct, but a whole loop away scores the same:
+        # the pipeline must see that and refuse to anchor timings on it.
+        self.assertTrue(result["aligned"])
+        self.assertGreater(result["confidence"], 0.9)
+        self.assertLess(result["clarity"], 0.15)
+
+    def test_unrelated_vocals_stay_below_the_trust_threshold(self):
+        result = self._align(self._syllables(1.0, 0.0, 8.0, seed=77), self._syllables(1.0, 0.0, 13.0))
+        self.assertLess(result["confidence"], 0.7)
+        self.assertLess(result["clarity"], 0.25)
+
+    def test_material_too_short_to_measure_is_reported_not_invented(self):
+        result = self._align(self.np.zeros(400), self._syllables(1.0, 0.0, 13.0))
+        self.assertFalse(result["aligned"])
+        self.assertEqual(result["reason"], "envelope_too_short")
+        self.assertNotIn("offsetSeconds", result)
+
+    def test_request_rejects_unknown_fields_and_out_of_range_scales(self):
+        with self.assertRaisesRegex(worker.WorkerError, "Campi non consentiti"):
+            worker.validate_request({"protocolVersion": 1, "action": "alignWaveform", "sourcePath": "/tmp/a.wav", "targetPath": "/tmp/b.wav", "anchors": []})
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            (root / "a.wav").write_bytes(b"RIFF")
+            (root / "b.wav").write_bytes(b"RIFF")
+            base = {"protocolVersion": 1, "action": "alignWaveform", "sourcePath": str(root / "a.wav"), "targetPath": str(root / "b.wav"), "jobRoot": str(root)}
+            for invalid in ({"minimumScale": 0.05}, {"maximumScale": 9.0}, {"minimumScale": 1.0, "maximumScale": 1.0}):
+                with self.subTest(invalid=invalid), self.assertRaises(worker.WorkerError):
+                    worker.align_waveform({**base, **invalid})
+
+
+class PhraseShiftClampTests(unittest.TestCase):
+    """A phrase-wide pass must still honour the radius the caller asked for."""
+
+    SAMPLE_RATE = 16_000
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            import numpy as np
+        except ImportError:
+            raise unittest.SkipTest("NumPy non disponibile; integrazione DSP saltata")
+        try:
+            worker.prepare_librosa_import()
+            import librosa  # noqa: F401
+        except Exception:
+            raise unittest.SkipTest("librosa non disponibile; micro allineamento saltato")
+        cls.np = np
+
+    def _track(self, spans, duration, pitch=220.0):
+        np = self.np
+        signal = np.zeros(int(duration * self.SAMPLE_RATE), dtype=np.float64)
+        for start, end in spans:
+            samples = int((end - start) * self.SAMPLE_RATE)
+            clock = np.arange(samples) / self.SAMPLE_RATE
+            voiced = np.sin(2 * np.pi * pitch * clock) + 0.4 * np.sin(2 * np.pi * pitch * 2 * clock)
+            signal[int(start * self.SAMPLE_RATE):int(start * self.SAMPLE_RATE) + samples] = 0.6 * np.hanning(samples) * voiced / 1.4
+        return signal
+
+    def _write(self, path, samples):
+        pcm = self.np.clip(samples * 32767, -32768, 32767).astype("<i2")
+        with wave.open(str(path), "wb") as destination:
+            destination.setnchannels(1)
+            destination.setsampwidth(2)
+            destination.setframerate(self.SAMPLE_RATE)
+            destination.writeframes(pcm.tobytes())
+
+    def _refine(self, max_shift_ms):
+        """Seeds are deliberately ~4 s away from the real vocal activity."""
+        source = self._track([(1.0, 2.0), (6.0, 7.0)], 8.0)
+        target = self._track([(0.5, 1.5), (4.0, 5.0)], 5.5, pitch=233.0)
+        anchors = [
+            {"id": "cue-0", "cueIndex": 0, "sourceStart": 5.0, "sourceCenter": 5.2, "sourceEnd": 5.4, "targetStart": 0.5, "targetCenter": 1.0, "targetEnd": 1.5, "maxShiftMs": max_shift_ms},
+            {"id": "cue-1", "cueIndex": 1, "sourceStart": 5.5, "sourceCenter": 5.7, "sourceEnd": 5.9, "targetStart": 4.0, "targetCenter": 4.5, "targetEnd": 5.0, "maxShiftMs": max_shift_ms},
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            self._write(root / "source.wav", source)
+            self._write(root / "target.wav", target)
+            with mock.patch.object(worker, "progress"):
+                result = worker.refine_alignment({"jobRoot": str(root), "sourcePath": str(root / "source.wav"), "targetPath": str(root / "target.wav"), "anchors": anchors})
+        return {item["id"]: item for item in result["anchors"]}, result
+
+    def test_phrase_boundaries_cannot_escape_a_narrow_requested_radius(self):
+        refined, result = self._refine(350)
+        self.assertEqual(result["algorithm"], "subtitle-constrained-phrase-dtw-v2")
+        seeds = {"cue-0": (5.0, 5.2, 5.4), "cue-1": (5.5, 5.7, 5.9)}
+        for identifier, (start, center, end) in seeds.items():
+            item = refined[identifier]
+            self.assertEqual(item["method"], "phrase-dtw-v2")
+            # Before the clamp, ``candidate_start = phrase_start`` wrote the raw
+            # activity boundary (1.0 s / 6.0 s) into a 350 ms request.
+            self.assertLessEqual(abs(item["sourceStart"] - start), 0.351)
+            self.assertLessEqual(abs(item["sourceCenter"] - center), 0.351)
+            self.assertLessEqual(abs(item["sourceEnd"] - end), 0.351)
+
+    def test_wide_recovery_radius_still_reaches_the_real_activity_boundary(self):
+        refined, _ = self._refine(30_000)
+        self.assertAlmostEqual(refined["cue-0"]["sourceStart"], 1.0, delta=0.25)
+        self.assertAlmostEqual(refined["cue-1"]["sourceEnd"], 7.0, delta=0.25)
+
+
 class FakeYoutubeDL:
     options = None
 

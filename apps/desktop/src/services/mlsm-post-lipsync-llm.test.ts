@@ -11,6 +11,7 @@ vi.mock("./local-model-runtime", () => ({
 
 import { createMlsmPostLipsyncAnalysis } from "./mlsm-post-lipsync-analysis";
 import { repairMlsmPostLipsyncTranscriptWithLocalLlm } from "./mlsm-post-lipsync-llm";
+import type { MlsmWaveformAlignment } from "./mlsm-post-lipsync-types";
 import type { TimestampedWord, WhisperTranscriptDocument } from "./subtitle-generation";
 
 function transcript(words: readonly string[], times: readonly (readonly [number, number])[], durationSeconds: number): WhisperTranscriptDocument {
@@ -55,6 +56,32 @@ describe("MLSM POST LIPSYNC · local LLM omission repair", () => {
     const repaired = await repairMlsmPostLipsyncTranscriptWithLocalLlm({ sourceTranscript: source, targetTranscript: target, exactSungLyrics: "Ghost words still loves me" });
     expect(repaired.applied).toBe(false);
     expect(repaired.sourceTranscript.words.map((word) => word.text)).toEqual(["Still", "loves", "me"]);
+  });
+
+  it("stretches a recovered phrase with the measured overlay ratio instead of the transcript median", async () => {
+    const source = transcript(["Still", "loves", "me"], [[4.34, 4.9], [5.2, 6], [6.4, 7.36]], 7.5);
+    const target = transcript(["The", "fallen", "Still", "loves", "me"], [[.7, 1.1], [1.4, 2.3], [4.34, 4.9], [5.2, 6], [6.4, 7.36]], 60);
+    const call = { sourceTranscript: source, targetTranscript: target, exactSungLyrics: "The Fallen, still loves me" };
+    // The matched words carry identical source and target timing, so the
+    // transcript-derived median ratio is exactly 1 and lands "The" on .7 s.
+    runtime.generator.mockResolvedValue([{ generated_text: '{"prepend":[0,1],"append":[],"reason":"missing opening"}' }]);
+    const withoutOverlay = await repairMlsmPostLipsyncTranscriptWithLocalLlm(call);
+    expect(withoutOverlay.sourceTranscript.words[0]!.start).toBeCloseTo(.7, 6);
+
+    // A trusted overlay measured the video running 15% wider than the master:
+    // the recovered opening has to start earlier, and the LLM never gets a say.
+    const waveform: MlsmWaveformAlignment = {
+      method: "onset-rms-xcorr-v1", status: "measured", detail: null, trusted: true,
+      offsetSeconds: 0, scale: 1.15, confidence: .8, clarity: .35, residualMs: 20, spreadMs: 90, localAgreement: .85, windows: 8, overlapSeconds: 7, searchRadiusMs: 285
+    };
+    const withOverlay = await repairMlsmPostLipsyncTranscriptWithLocalLlm({ ...call, waveform });
+    expect(withOverlay.recoveredWords).toEqual(["The", "Fallen"]);
+    expect(withOverlay.sourceTranscript.words[0]!.start).toBeCloseTo(4.34 - 3.64 * 1.15, 6);
+    // An untrusted overlay must change nothing at all.
+    const untrusted = await repairMlsmPostLipsyncTranscriptWithLocalLlm({ ...call, waveform: { ...waveform, trusted: false, status: "ambiguous" } });
+    expect(untrusted.sourceTranscript.words[0]!.start).toBeCloseTo(.7, 6);
+    // Measured words keep their own Whisper timing under every branch.
+    for (const repaired of [withoutOverlay, withOverlay, untrusted]) expect(repaired.sourceTranscript.words[2]).toEqual(source.words[0]);
   });
 
   it("rejects indices outside the measured adjacent master words", async () => {

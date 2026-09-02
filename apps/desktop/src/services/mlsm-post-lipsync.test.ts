@@ -4,7 +4,8 @@ import { MlsmPostLipsyncCache, mlsmPostLipsyncCacheKey, parseMlsmPostLipsyncAnal
 import { createManualLipsyncAnchor, editLipsyncAnchor, buildLipsyncTimeMap, lipsyncPhoneticPointCount, lipsyncSourceToTarget, lipsyncTargetToSource, shiftLipsyncAnchors } from "./mlsm-post-lipsync-time-map";
 import { auditLipsyncRenderPlan, buildLipsyncRenderPlan } from "./mlsm-post-lipsync-render-plan";
 import { applyMlsmPostLipsyncRefinements, refineMlsmPostLipsyncAlignment, type RefinedAnchorResult } from "./mlsm-post-lipsync-refinement";
-import type { WordAnchor } from "./mlsm-post-lipsync-types";
+import { predictMlsmWaveformSourceSeconds } from "./mlsm-post-lipsync-waveform";
+import type { MlsmWaveformAlignment, WordAnchor } from "./mlsm-post-lipsync-types";
 import { fuseDetailedTimestampWords, timestampedWords, type TimestampedWord, type WhisperTranscriptDocument } from "./subtitle-generation";
 
 const lyricWords = ["I", "love", "you", "forever"];
@@ -59,6 +60,15 @@ function transcript(times: readonly (readonly [number, number])[], words = lyric
 }
 
 const targetTimes = [[.5, .72], [.82, 1.16], [1.52, 1.84], [1.92, 2.5]] as const;
+
+/** Overlay result strong enough to be trusted: the video runs 2% slower than
+ * the master and starts 300 ms into it. */
+const trustedWaveform: MlsmWaveformAlignment = {
+  method: "onset-rms-xcorr-v1", status: "measured", detail: null, trusted: true,
+  offsetSeconds: .3, scale: 1.02, confidence: .84, clarity: .38, residualMs: 21, spreadMs: 140, localAgreement: .9, windows: 11, overlapSeconds: 7.2, searchRadiusMs: 360
+};
+
+interface RefineRequestBody { maxShiftMs: number; anchors: Array<{ id: string; sourceStart: number; sourceCenter: number; sourceEnd: number }> }
 
 describe("MLSM POST LIPSYNC · HARD GATE core", () => {
   it("keeps identical source and target on an identity map", () => {
@@ -485,6 +495,60 @@ describe("MLSM POST LIPSYNC · HARD GATE core", () => {
     expect(requests).toHaveLength(2);
     expect(requests[0]).toMatchObject({ maxShiftMs: 50, anchors: [{ id: "lipsync-word-2" }, { id: "lipsync-word-3" }, { id: "lipsync-word-4" }] });
     expect(requests[1]).toMatchObject({ maxShiftMs: 7_500, anchors: [{ id: "lipsync-word-0" }, { id: "lipsync-word-1" }] });
+  });
+
+  it("replaces the blind recovery hunt with the measured waveform seed and keeps measured words untouched", async () => {
+    const words = ["The", "fallen", "Still", "loves", "me"];
+    const source = transcript([[.7, 1.1], [1.4, 2.3], [4.34, 4.9], [5.2, 6], [6.4, 7.36]], words, 7.5);
+    source.words[0] = { ...source.words[0]!, confidence: .34, confidenceSource: "estimated" };
+    source.words[1] = { ...source.words[1]!, confidence: .34, confidenceSource: "estimated" };
+    const analysis = createMlsmPostLipsyncAnalysis({ sourceTranscript: source, targetTranscript: transcript([[.7, 1.1], [1.4, 2.3], [4.34, 4.9], [5.2, 6], [6.4, 7.36]], words, 60), sourceDurationSeconds: 7.5, targetDurationSeconds: 60, waveformAlignment: trustedWaveform });
+    const requests: RefineRequestBody[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      requests.push(JSON.parse(String(init?.body)) as RefineRequestBody);
+      return new Response(JSON.stringify({ kind: "refineAlignment", anchors: [] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }));
+    try {
+      await refineMlsmPostLipsyncAlignment({ analysis, sourceVocalPath: "/source.wav", targetVocalPath: "/target.wav", waveform: analysis.waveformAlignment });
+    } finally { vi.unstubAllGlobals(); }
+    expect(requests).toHaveLength(2);
+    // Measured words keep their own Whisper timing and their narrow radius.
+    expect(requests[0]!.maxShiftMs).toBe(50);
+    for (const request of requests[0]!.anchors) {
+      const anchor = analysis.anchors.find((candidate) => candidate.id === request.id)!;
+      expect(request.sourceCenter).toBeCloseTo(anchor.sourceCenter, 9);
+    }
+    // Recovered words search a measured radius instead of 7.5 seconds of video,
+    // seeded by the overlay rather than by the timing nobody trusts.
+    expect(requests[1]!.maxShiftMs).toBe(analysis.waveformAlignment.searchRadiusMs);
+    expect(requests[1]!.maxShiftMs).toBeLessThan(1_000);
+    const stemOffset = analysis.targetAudioStartSeconds - analysis.targetAnalysisStartSeconds;
+    for (const request of requests[1]!.anchors) {
+      const anchor = analysis.anchors.find((candidate) => candidate.id === request.id)!;
+      expect(request.sourceStart).toBeCloseTo(predictMlsmWaveformSourceSeconds(trustedWaveform, anchor.targetStart + stemOffset), 9);
+      expect(request.sourceCenter).toBeCloseTo(predictMlsmWaveformSourceSeconds(trustedWaveform, anchor.targetCenter + stemOffset), 9);
+      expect(request.sourceEnd).toBeCloseTo(predictMlsmWaveformSourceSeconds(trustedWaveform, anchor.targetEnd + stemOffset), 9);
+      expect(request.sourceCenter).not.toBeCloseTo(anchor.sourceCenter, 3);
+    }
+  });
+
+  it("keeps the legacy wide recovery radius when the overlay is not trustworthy", async () => {
+    const words = ["The", "fallen", "Still", "loves", "me"];
+    const source = transcript([[.7, 1.1], [1.4, 2.3], [4.34, 4.9], [5.2, 6], [6.4, 7.36]], words, 7.5);
+    source.words[0] = { ...source.words[0]!, confidence: .34, confidenceSource: "estimated" };
+    const ambiguous = { ...trustedWaveform, trusted: false, status: "ambiguous" as const, searchRadiusMs: 0 };
+    const analysis = createMlsmPostLipsyncAnalysis({ sourceTranscript: source, targetTranscript: transcript([[.7, 1.1], [1.4, 2.3], [4.34, 4.9], [5.2, 6], [6.4, 7.36]], words, 60), sourceDurationSeconds: 7.5, targetDurationSeconds: 60, waveformAlignment: ambiguous });
+    const requests: RefineRequestBody[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      requests.push(JSON.parse(String(init?.body)) as RefineRequestBody);
+      return new Response(JSON.stringify({ kind: "refineAlignment", anchors: [] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }));
+    try {
+      await refineMlsmPostLipsyncAlignment({ analysis, sourceVocalPath: "/source.wav", targetVocalPath: "/target.wav", waveform: ambiguous });
+    } finally { vi.unstubAllGlobals(); }
+    expect(requests[1]!.maxShiftMs).toBe(7_500);
+    const anchor = analysis.anchors.find((candidate) => candidate.id === requests[1]!.anchors[0]!.id)!;
+    expect(requests[1]!.anchors[0]!.sourceCenter).toBeCloseTo(anchor.sourceCenter, 9);
   });
 
   it("ends exactly on the selected subtitle duration and never accumulates inverse-map drift", () => {

@@ -157,6 +157,20 @@ export function localSongPlayerVocalsService(): Plugin {
           } catch (cause) { return sendJson(response, 500, { error: cause instanceof Error ? cause.message : String(cause) }); }
           finally { await rm(session.root, { recursive: true, force: true }); }
         }
+        if (url.pathname === "/align-waveform" && request.method === "POST") {
+          if (separationProcess) return sendJson(response, 409, { error: "Il worker vocale è già occupato." });
+          let serialized = ""; for await (const chunk of request) { serialized += Buffer.from(chunk).toString("utf8"); if (serialized.length > 64_000) return sendJson(response, 413, { error: "Richiesta di sovrapposizione onde troppo grande." }); }
+          try {
+            const body = JSON.parse(serialized) as Record<string, unknown>; const sourceId = stemIdFromUrl(body.sourcePath); const targetId = stemIdFromUrl(body.targetPath); const source = sourceId ? stems.get(sourceId) : null; const target = targetId ? stems.get(targetId) : null;
+            if (!source || !target) return sendJson(response, 400, { error: "Stem sorgente o stem target non validi." });
+            const result = await new Promise<Record<string, unknown>>((resolveResult, reject) => {
+              const child = spawn(paths.python, [paths.worker], { cwd: paths.projectRoot, stdio: ["pipe", "pipe", "pipe"] }); separationProcess = child; let output = ""; let stderr = "";
+              child.stdout?.on("data", (chunk: Buffer) => { output = `${output}${chunk.toString("utf8")}`.slice(-2_000_000); }); child.stderr?.on("data", (chunk: Buffer) => { stderr = `${stderr}${chunk.toString("utf8")}`.slice(-8_000); }); child.once("error", reject); child.once("exit", (code) => { separationProcess = null; try { if (code !== 0 && !output) throw new Error(stderr || `Worker terminato con codice ${code}.`); resolveResult(decodeSongPlayerWorkerOutput(output)); } catch (cause) { reject(cause); } });
+              child.stdin?.end(`${JSON.stringify({ protocolVersion: 1, action: "alignWaveform", sourcePath: source.path, targetPath: target.path, jobRoot: source.root })}\n`); request.once("aborted", () => { if (child.exitCode === null) child.kill("SIGTERM"); });
+            });
+            return sendJson(response, 200, result);
+          } catch (cause) { return sendJson(response, 500, { error: cause instanceof Error ? cause.message : String(cause) }); }
+        }
         if (url.pathname === "/refine" && request.method === "POST") {
           if (separationProcess) return sendJson(response, 409, { error: "Il worker vocale è già occupato." });
           let serialized = ""; for await (const chunk of request) { serialized += Buffer.from(chunk).toString("utf8"); if (serialized.length > 2_000_000) return sendJson(response, 413, { error: "Richiesta di micro-allineamento troppo grande." }); }
