@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { alignLyricsToCues, cleanReferenceLyrics, phraseCues, reconcileWithLyrics, subtitleCueIssues, subtitleSrt, subtitleTranscriptJson, timestampedWords } from "./subtitle-generation";
+import { alignLyricsToCues, cleanReferenceLyrics, hasMeasuredWhisperWordTimeline, phraseCues, reconcileWithLyrics, subtitleCueIssues, subtitleSrt, subtitleTranscriptJson, timestampedWords } from "./subtitle-generation";
 
 describe("subtitle generation", () => {
   it("mantiene i timestamp Whisper ma corregge le parole con il testo ufficiale", () => {
@@ -32,6 +32,20 @@ describe("subtitle generation", () => {
     expect(result[0]?.start).toBe(1);
     expect(result[1]?.end).toBe(2);
     expect((result[1]?.end ?? 0) - (result[1]?.start ?? 0)).toBeGreaterThan((result[0]?.end ?? 0) - (result[0]?.start ?? 0));
+  });
+
+  it("riconosce come misurata la timeline Whisper reale del video e rifiuta la frase spalmata", () => {
+    const measured = [
+      ["I'm", 0, .56], ["scared", .56, .9], ["to", .9, 1.28], ["be", 1.28, 1.68], ["alone", 1.68, 2.6],
+      ["When", 3.17, 3.74], ["the", 3.74, 4.1], ["morning", 4.1, 4.68], ["never", 4.68, 5.4], ["comes", 5.4, 6.26],
+      ["When", 7.13, 7.7], ["the", 7.7, 8.02], ["people", 8.02, 8.68], ["that", 8.68, 9.14], ["I", 9.14, 9.72],
+      ["loved,", 9.72, 10.18], ["loved", 11.16, 11.3]
+    ] as const;
+    const result = { text: measured.map(([text]) => text).join(" "), chunks: measured.map(([text, start, end]) => ({ text, timestamp: [start, end] as [number, number] })) };
+    expect(hasMeasuredWhisperWordTimeline(result, 15.042)).toBe(true);
+    expect(timestampedWords(result, 15.042).map((word) => [word.text, word.start, word.end])).toEqual(measured.map(([text, start, end]) => [text, start, end]));
+    expect(hasMeasuredWhisperWordTimeline({ text: result.text, chunks: [{ text: result.text, timestamp: [0, 15.042] }] }, 15.042)).toBe(false);
+    expect(hasMeasuredWhisperWordTimeline({ text: result.text }, 15.042)).toBe(false);
   });
 
   it("preferisce pause e punteggiatura al numero indicativo di parole", () => {

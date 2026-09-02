@@ -79,8 +79,8 @@ function setup(name, { dryRun = false } = {}) {
       const lastLine = check.stdout.trim().split(/\r?\n/).filter(Boolean).at(-1);
       capability = JSON.parse(lastLine);
     } catch { capability = null; }
-    if (check.status !== 0 || capability?.type !== "result" || capability?.result?.ready !== true || capability?.result?.features?.separateVocals !== true || capability?.result?.features?.analyzeVisemes !== true) {
-      throw new Error("Il worker Song Player non ha superato la verifica Demucs/Auto-AVSR.");
+    if (check.status !== 0 || capability?.type !== "result" || capability?.result?.ready !== true || capability?.result?.features?.separateVocals !== true || capability?.result?.features?.analyzeVisemes !== true || capability?.result?.features?.transcribeWords !== true) {
+      throw new Error("Il worker Song Player non ha superato la verifica Demucs/Auto-AVSR/Whisper.");
     }
     progress(91, "Download e verifica del modello Demucs htdemucs");
     const model = spawnSync(target, ["-c", "from demucs.pretrained import get_model; get_model('htdemucs'); print('Demucs htdemucs pronto')"], { cwd: root, encoding: "utf8", stdio: "inherit" });

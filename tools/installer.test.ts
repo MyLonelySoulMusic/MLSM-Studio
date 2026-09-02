@@ -24,8 +24,10 @@ describe("installer multipiattaforma", () => {
     expect(requirements).toContain("torchaudio>=2.7,<3");
     expect(requirements).toContain("mediapipe==0.10.21");
     expect(requirements).toContain("opencv-contrib-python>=4.10,<5");
+    expect(requirements).toContain("faster-whisper>=1.2,<2");
     expect(requirements).not.toContain("opencv-python-headless");
     expect(setup).toContain('features?.analyzeVisemes !== true');
+    expect(setup).toContain('features?.transcribeWords !== true');
     expect(setup).toContain('"opencv-python-headless"');
     const tauri = JSON.parse(readFileSync(resolve(root, "apps/desktop/src-tauri/tauri.conf.json"), "utf8"));
     expect(tauri.bundle.resources["../../../tools/song-player/auto_avsr_runtime.py"]).toBe("song-player/auto_avsr_runtime.py");

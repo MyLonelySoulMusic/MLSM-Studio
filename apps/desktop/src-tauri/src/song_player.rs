@@ -111,6 +111,16 @@ pub enum SongPlayerStartRequest {
         anchors: Vec<LipsyncVisualAnchor>,
         language: String,
     },
+    TranscribeWords {
+        #[serde(rename = "inputPath")]
+        input_path: String,
+        language: String,
+        model: String,
+        #[serde(rename = "startSeconds")]
+        start_seconds: Option<f64>,
+        #[serde(rename = "endSeconds")]
+        end_seconds: Option<f64>,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -174,6 +184,13 @@ enum ValidatedRequest {
         anchors: Vec<LipsyncVisualAnchor>,
         language: String,
     },
+    TranscribeWords {
+        input_path: PathBuf,
+        language: String,
+        model: String,
+        start_seconds: Option<f64>,
+        end_seconds: Option<f64>,
+    },
 }
 
 impl ValidatedRequest {
@@ -187,6 +204,7 @@ impl ValidatedRequest {
             Self::AlignWaveform { .. } => "alignWaveform",
             Self::RefineAlignment { .. } => "refineAlignment",
             Self::AnalyzeVisemes { .. } => "analyzeVisemes",
+            Self::TranscribeWords { .. } => "transcribeWords",
         }
     }
 
@@ -265,6 +283,22 @@ impl ValidatedRequest {
                 "inputPath": input_path,
                 "anchors": anchors,
                 "language": language,
+                "jobRoot": job_root,
+            }),
+            Self::TranscribeWords {
+                input_path,
+                language,
+                model,
+                start_seconds,
+                end_seconds,
+            } => json!({
+                "protocolVersion": PROTOCOL_VERSION,
+                "action": "transcribeWords",
+                "inputPath": input_path,
+                "language": language,
+                "model": model,
+                "startSeconds": start_seconds,
+                "endSeconds": end_seconds,
                 "jobRoot": job_root,
             }),
         }
@@ -372,7 +406,9 @@ fn validate_start_request(
                 || anchors.len() > 128
                 || language.is_empty()
                 || language.len() > 16
-                || !language.chars().all(|value| value.is_ascii_alphabetic() || value == '-')
+                || !language
+                    .chars()
+                    .all(|value| value.is_ascii_alphabetic() || value == '-')
                 || anchors.iter().any(|anchor| {
                     anchor.id.is_empty()
                         || anchor.id.len() > 200
@@ -394,7 +430,9 @@ fn validate_start_request(
             }
             let mut ids = std::collections::HashSet::new();
             let mut indexes = std::collections::HashSet::new();
-            if anchors.iter().any(|anchor| !ids.insert(anchor.id.clone()) || !indexes.insert(anchor.canonical_index)) {
+            if anchors.iter().any(|anchor| {
+                !ids.insert(anchor.id.clone()) || !indexes.insert(anchor.canonical_index)
+            }) {
                 return Err(SongPlayerError::InvalidRequest(
                     "anchor Auto-AVSR duplicati".into(),
                 ));
@@ -403,6 +441,42 @@ fn validate_start_request(
                 input_path: validate_local_media(Path::new(&input_path))?,
                 anchors,
                 language,
+            })
+        }
+        SongPlayerStartRequest::TranscribeWords {
+            input_path,
+            language,
+            model,
+            start_seconds,
+            end_seconds,
+        } => {
+            if language.is_empty()
+                || language.len() > 16
+                || (language != "auto"
+                    && !language
+                        .chars()
+                        .all(|value| value.is_ascii_alphabetic() || value == '-'))
+                || !matches!(
+                    model.as_str(),
+                    "whisper-tiny_timestamped"
+                        | "whisper-base_timestamped"
+                        | "whisper-medium_timestamped"
+                )
+                || start_seconds.is_some() != end_seconds.is_some()
+                || start_seconds.is_some_and(|value| !value.is_finite() || value < 0.0)
+                || end_seconds.is_some_and(|value| !value.is_finite() || value <= 0.0)
+                || matches!((start_seconds, end_seconds), (Some(start), Some(end)) if end <= start + 0.05 || end - start > MAX_MEDIA_DURATION_SECONDS)
+            {
+                return Err(SongPlayerError::InvalidRequest(
+                    "parametri Whisper non validi".into(),
+                ));
+            }
+            Ok(ValidatedRequest::TranscribeWords {
+                input_path: validate_local_media(Path::new(&input_path))?,
+                language,
+                model,
+                start_seconds,
+                end_seconds,
             })
         }
     }
@@ -451,7 +525,7 @@ impl SongPlayerCapabilities {
             ready: false,
             runtime_ready,
             worker_ready,
-            features: json!({ "download": false, "analyze": false, "match": false, "separateVocals": false, "extractAudio": false, "alignWaveform": false, "refineAlignment": false, "analyzeVisemes": false }),
+            features: json!({ "download": false, "analyze": false, "match": false, "separateVocals": false, "extractAudio": false, "alignWaveform": false, "refineAlignment": false, "analyzeVisemes": false, "transcribeWords": false }),
             dependencies: json!({}),
             limits: json!({}),
             reason: Some(reason),
@@ -888,7 +962,7 @@ fn install_song_player_runtime(app: tauri::AppHandle, state: SongPlayerState) {
             &state,
             SongPlayerRuntimeSetupStatus::Installing,
             42,
-            "Installazione automatica di Demucs, pYIN e Auto-AVSR",
+            "Installazione automatica di Demucs, pYIN, Auto-AVSR e Whisper",
             None,
         );
         run_runtime_step(
@@ -952,9 +1026,13 @@ fn install_song_player_runtime(app: tauri::AppHandle, state: SongPlayerState) {
                 .pointer("/features/analyzeVisemes")
                 .and_then(Value::as_bool)
                 != Some(true)
+            || capability
+                .pointer("/features/transcribeWords")
+                .and_then(Value::as_bool)
+                != Some(true)
         {
             return Err(
-                "Il runtime installato non ha superato la verifica Demucs/pYIN/FFmpeg/Auto-AVSR".into(),
+                "Il runtime installato non ha superato la verifica Demucs/pYIN/FFmpeg/Auto-AVSR/Whisper".into(),
             );
         }
         Ok(())
@@ -1900,13 +1978,37 @@ mod tests {
             }]
         }))
         .expect("strict Auto-AVSR request");
-        assert!(matches!(visual, SongPlayerStartRequest::AnalyzeVisemes { .. }));
+        assert!(matches!(
+            visual,
+            SongPlayerStartRequest::AnalyzeVisemes { .. }
+        ));
         assert!(serde_json::from_value::<SongPlayerStartRequest>(json!({
             "kind": "analyzeVisemes",
             "inputPath": "/tmp/source.mp4",
             "language": "en",
             "anchors": [],
             "shellCommand": "anything"
+        }))
+        .is_err());
+        let transcription: SongPlayerStartRequest = serde_json::from_value(json!({
+            "kind": "transcribeWords",
+            "inputPath": "/tmp/source.wav",
+            "language": "en",
+            "model": "whisper-medium_timestamped",
+            "startSeconds": 4.0,
+            "endSeconds": 12.0
+        }))
+        .expect("strict Whisper word transcription request");
+        assert!(matches!(
+            transcription,
+            SongPlayerStartRequest::TranscribeWords { .. }
+        ));
+        assert!(serde_json::from_value::<SongPlayerStartRequest>(json!({
+            "kind": "transcribeWords",
+            "inputPath": "/tmp/source.wav",
+            "language": "en",
+            "model": "whisper-medium_timestamped",
+            "fallbackModel": "whisper-base_timestamped"
         }))
         .is_err());
 

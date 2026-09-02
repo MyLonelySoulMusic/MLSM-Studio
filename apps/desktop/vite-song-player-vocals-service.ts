@@ -12,6 +12,7 @@ import type { Plugin, ViteDevServer } from "vite";
 export const songPlayerVocalsRoutePrefix = "/__mlsm/song-player-vocals";
 const maxUploadBytes = 512 * 1024 * 1024;
 type RuntimePhase = "idle" | "installing" | "ready" | "failed";
+type RuntimeFeature = "separateVocals" | "analyzeVisemes" | "transcribeWords";
 
 export function songPlayerVocalRuntimePaths(root = process.cwd()) {
   const projectRoot = existsSync(resolve(root, "tools/song-player/worker.py")) ? root : resolve(root, "../..");
@@ -63,7 +64,8 @@ export function localSongPlayerVocalsService(): Plugin {
   const retainStem = (root: string, path: string) => { const id = randomUUID(); const timer = setTimeout(() => { void releaseStem(id); }, 60 * 60 * 1000); stems.set(id, { root, path, timer }); return `${songPlayerVocalsRoutePrefix}/stem/${id}`; };
   const status = () => ({ status: phase, progress, message, error, ready: phase === "ready" });
 
-  const verifyRuntimeFeature = (requiredFeature = "separateVocals") => new Promise<boolean>((resolveReady) => {
+  const runtimeReadyMessage = (feature: RuntimeFeature) => feature === "analyzeVisemes" ? "Auto-AVSR pronto" : feature === "transcribeWords" ? "Whisper Medium nativo pronto" : "Demucs htdemucs e pYIN pronti";
+  const verifyRuntimeFeature = (requiredFeature: RuntimeFeature = "separateVocals") => new Promise<boolean>((resolveReady) => {
     if (!existsSync(paths.python) || !existsSync(paths.worker)) return resolveReady(false);
     const child = spawn(paths.python, [paths.worker], { cwd: paths.projectRoot, stdio: ["pipe", "pipe", "ignore"] });
     let output = "";
@@ -79,9 +81,9 @@ export function localSongPlayerVocalsService(): Plugin {
     child.stdin?.end('{"protocolVersion":1,"action":"capabilities"}\n');
   });
 
-  const startSetup = (server: ViteDevServer, requiredFeature = "separateVocals") => {
+  const startSetup = (server: ViteDevServer, requiredFeature: RuntimeFeature = "separateVocals") => {
     if (setupProcess || phase === "installing") return;
-    phase = "installing"; progress = 2; message = "Preparazione automatica di Demucs e pYIN"; error = null;
+    phase = "installing"; progress = 2; message = requiredFeature === "transcribeWords" ? "Installazione automatica di Whisper Medium" : "Preparazione automatica di Demucs e pYIN"; error = null;
     setupProcess = spawn(process.execPath, [paths.setup, "song-player"], { cwd: paths.projectRoot, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
     const capture = (chunk: Buffer) => {
       for (const line of chunk.toString("utf8").split(/\r?\n/)) {
@@ -93,15 +95,15 @@ export function localSongPlayerVocalsService(): Plugin {
     setupProcess.once("error", (cause) => { phase = "failed"; error = cause.message; message = "Installazione automatica non riuscita"; setupProcess = null; });
     setupProcess.once("exit", async (code) => {
       setupProcess = null;
-      if (code === 0 && await verifyRuntimeFeature(requiredFeature)) { phase = "ready"; progress = 100; message = requiredFeature === "analyzeVisemes" ? "Auto-AVSR pronto" : "Demucs htdemucs e pYIN pronti"; }
+      if (code === 0 && await verifyRuntimeFeature(requiredFeature)) { phase = "ready"; progress = 100; message = runtimeReadyMessage(requiredFeature); }
       else { phase = "failed"; error = `Preparazione non riuscita (codice ${code ?? "sconosciuto"}).`; message = "Runtime vocale non disponibile"; }
     });
     server.config.logger.info("[Song Player] installazione automatica del runtime vocale avviata");
   };
 
-  const ensureRuntime = async (server: ViteDevServer, requiredFeature = "separateVocals") => {
+  const ensureRuntime = async (server: ViteDevServer, requiredFeature: RuntimeFeature = "separateVocals") => {
     if (phase === "ready" && await verifyRuntimeFeature(requiredFeature)) return;
-    if (await verifyRuntimeFeature(requiredFeature)) { phase = "ready"; progress = 100; message = requiredFeature === "analyzeVisemes" ? "Auto-AVSR pronto" : "Demucs htdemucs e pYIN pronti"; error = null; return; }
+    if (await verifyRuntimeFeature(requiredFeature)) { phase = "ready"; progress = 100; message = runtimeReadyMessage(requiredFeature); error = null; return; }
     startSetup(server, requiredFeature);
   };
 
@@ -123,7 +125,7 @@ export function localSongPlayerVocalsService(): Plugin {
         if (stemMatch && request.method === "GET") { const artifact = stems.get(stemMatch[1]!); if (!artifact) return sendJson(response, 404, { error: "Stem vocale scaduto o non disponibile." }); response.statusCode = 200; response.setHeader("Content-Type", "audio/wav"); response.setHeader("Cache-Control", "no-store"); createReadStream(artifact.path).once("error", () => { if (!response.headersSent) sendJson(response, 404, { error: "Stem vocale non leggibile." }); else response.destroy(); }).pipe(response); return; }
         if (stemMatch && request.method === "DELETE") { await releaseStem(stemMatch[1]!); return sendJson(response, 200, { released: true }); }
         if (url.pathname === "/status" && request.method === "GET") return sendJson(response, 200, status());
-        if (url.pathname === "/ensure" && request.method === "POST") { const requiredFeature = url.searchParams.get("feature") === "analyzeVisemes" ? "analyzeVisemes" : "separateVocals"; await ensureRuntime(server, requiredFeature); const current=status();return sendJson(response,current.status==="failed"?503:current.ready?200:202,current); }
+        if (url.pathname === "/ensure" && request.method === "POST") { const requested = url.searchParams.get("feature"); const requiredFeature: RuntimeFeature = requested === "analyzeVisemes" ? "analyzeVisemes" : requested === "transcribeWords" ? "transcribeWords" : "separateVocals"; await ensureRuntime(server, requiredFeature); const current=status();return sendJson(response,current.status==="failed"?503:current.ready?200:202,current); }
         if (url.pathname === "/visemes/session" && request.method === "POST") {
           let serialized = ""; for await (const chunk of request) { serialized += Buffer.from(chunk).toString("utf8"); if (serialized.length > 256_000) return sendJson(response, 413, { error: "Metadati Auto-AVSR troppo grandi." }); }
           const body = JSON.parse(serialized) as Record<string, unknown>;
@@ -186,6 +188,29 @@ export function localSongPlayerVocalsService(): Plugin {
             });
             return sendJson(response, 200, result);
           } catch (cause) { return sendJson(response, 500, { error: cause instanceof Error ? cause.message : String(cause) }); }
+        }
+        if (url.pathname === "/transcribe" && request.method === "POST") {
+          if (!await verifyRuntimeFeature("transcribeWords")) { await ensureRuntime(server, "transcribeWords"); const current = status(); return sendJson(response, 503, current); }
+          if (separationProcess) return sendJson(response, 409, { error: "Il worker audio è già occupato." });
+          const jobRoot = await mkdtemp(resolve(tmpdir(), "mlsm-whisper-words-"));
+          try {
+            const inputPath = resolve(jobRoot, safeSongPlayerAudioName(url.searchParams.get("filename")));
+            await receiveFile(request, inputPath);
+            const startParameter = url.searchParams.get("startSeconds"); const endParameter = url.searchParams.get("endSeconds");
+            const hasWindow = startParameter !== null || endParameter !== null;
+            const startSeconds = startParameter === null ? null : Number(startParameter); const endSeconds = endParameter === null ? null : Number(endParameter);
+            if (hasWindow && (startSeconds === null || endSeconds === null || !Number.isFinite(startSeconds) || !Number.isFinite(endSeconds))) return sendJson(response, 400, { error: "Intervallo Whisper non valido." });
+            const language = url.searchParams.get("language") || "auto"; const model = url.searchParams.get("model") || "whisper-medium_timestamped";
+            const result = await new Promise<Record<string, unknown>>((resolveResult, reject) => {
+              const child = spawn(paths.python, [paths.worker], { cwd: paths.projectRoot, env: { ...process.env, MLSM_WHISPER_CACHE: resolve(paths.projectRoot, ".transformers-cache/faster-whisper") }, stdio: ["pipe", "pipe", "pipe"] }); separationProcess = child; let output = ""; let stderr = "";
+              child.stdout?.on("data", (chunk: Buffer) => { output = `${output}${chunk.toString("utf8")}`.slice(-4_000_000); }); child.stderr?.on("data", (chunk: Buffer) => { stderr = `${stderr}${chunk.toString("utf8")}`.slice(-12_000); });
+              child.once("error", reject); child.once("exit", (code) => { separationProcess = null; try { if (code !== 0 && !output) throw new Error(stderr || `Whisper terminato con codice ${code}.`); resolveResult(decodeSongPlayerWorkerOutput(output)); } catch (cause) { reject(cause); } });
+              child.stdin?.end(`${JSON.stringify({ protocolVersion: 1, action: "transcribeWords", inputPath, language, model, jobRoot, ...(hasWindow ? { startSeconds, endSeconds } : {}) })}\n`);
+              request.once("aborted", () => { if (child.exitCode === null) child.kill("SIGTERM"); });
+            });
+            return sendJson(response, 200, result);
+          } catch (cause) { return sendJson(response, 500, { error: cause instanceof Error ? cause.message : String(cause) }); }
+          finally { await rm(jobRoot, { recursive: true, force: true }); }
         }
         if (url.pathname !== "/separate" || request.method !== "POST") return next();
         if (!status().ready) { await ensureRuntime(server); const current=status();if(!current.ready)return sendJson(response,503,current); }

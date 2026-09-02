@@ -16,9 +16,10 @@ import {
   startSongPlayerJob,
   waitForSongPlayerJob
 } from "./song-player-native";
-import { transcribeTimestampedAudio, type WhisperModelId } from "./subtitle-generation";
+import type { WhisperModelId } from "./subtitle-generation";
 import { isTauri } from "@tauri-apps/api/core";
 import { releaseBrowserVocalStem } from "./cassette-desk-vocals-browser";
+import { transcribeMlsmWhisperWords, type MlsmWhisperMedia } from "./mlsm-post-lipsync-whisper";
 
 export type MlsmPostLipsyncPipelineStage = "extract-source-audio" | "cache" | "separate-source-vocal" | "separate-target-vocal" | "overlay-waveforms" | "transcribe-source" | "transcribe-target" | "llm-correct" | "align" | "micro-align" | "visual-align";
 
@@ -65,6 +66,7 @@ export async function extractMlsmPostLipsyncSourceAudio(
 
 export async function analyzeMlsmPostLipsync(input: {
   sourceVideoPath: string;
+  sourceVideoHash?: string;
   sourceVideoUrl?: string;
   sourceVideoName?: string;
   sourceAudio?: ImportedAudio;
@@ -76,6 +78,7 @@ export async function analyzeMlsmPostLipsync(input: {
   deepPhonemeAnalysis?: boolean;
   focusCanonicalIndexes?: readonly number[];
   localLlmCorrection?: boolean;
+  separateVocals?: boolean;
   visualSpeechAnalysis?: boolean;
   exactSungLyrics?: string;
   reuseCachedAnalysis?: boolean;
@@ -97,14 +100,21 @@ export async function analyzeMlsmPostLipsync(input: {
     const subtitleText = input.subtitles?.trim() ?? "";
     const alignmentSource = subtitleText ? "subtitles" : "whisper";
     const localLlmCorrectionEnabled = input.localLlmCorrection !== false;
+    const vocalSeparationEnabled = input.separateVocals === true;
     const visualSpeechEnabled = input.visualSpeechAnalysis === true;
     const exactSungLyrics = input.exactSungLyrics?.trim().replace(/\s+/gu, " ") ?? "";
+    const sourceVideoHash = input.sourceVideoHash ?? await textHash(JSON.stringify({
+      path: input.sourceVideoPath,
+      name: input.sourceVideoName ?? "",
+      durationMs: Math.round(sourceAudio.metadata.durationSeconds * 1_000),
+      extractedAudioHash: sourceAudio.metadata.hash
+    }));
     const cacheKey = await mlsmPostLipsyncCacheKey({
-      sourceVideoHash: sourceAudio.metadata.hash,
+      sourceVideoHash,
       targetAudioHash: input.targetMaster.metadata.hash,
       subtitleHash: await textHash(subtitleText || "__MLSM_WHISPER_ONLY__"),
       whisperModel: input.whisperModel,
-      alignmentParameters: { language: input.language, alignmentSource, localLlmCorrection: localLlmCorrectionEnabled, visualSpeech: visualSpeechEnabled ? "auto-avsr-ctc-v1" : "disabled", exactLyricsHash: await textHash(exactSungLyrics || "__NO_EXACT_LYRICS__"), targetRangeStartMs: Math.round(targetMasterRange.startSeconds * 1_000), targetRangeEndMs: Math.round(targetMasterRange.endSeconds * 1_000), focusCanonicalIndexes: [...(input.focusCanonicalIndexes ?? [])].sort((left, right) => left - right), waveformOverlay: "onset-rms-xcorr-v1", microAlignment: "phrase-dtw-v2", maxShiftMs: input.deepPhonemeAnalysis ? 350 : 50, detailMode: input.deepPhonemeAnalysis ? "phoneme" : "word" }
+      alignmentParameters: { language: input.language, alignmentSource, localLlmCorrection: localLlmCorrectionEnabled, vocalSeparation: vocalSeparationEnabled ? "htdemucs" : "disabled", visualSpeech: visualSpeechEnabled ? "auto-avsr-ctc-v1" : "disabled", exactLyricsHash: await textHash(exactSungLyrics || "__NO_EXACT_LYRICS__"), targetRangeStartMs: Math.round(targetMasterRange.startSeconds * 1_000), targetRangeEndMs: Math.round(targetMasterRange.endSeconds * 1_000), focusCanonicalIndexes: [...(input.focusCanonicalIndexes ?? [])].sort((left, right) => left - right), waveformOverlay: vocalSeparationEnabled ? "onset-rms-xcorr-v1" : "disabled", microAlignment: vocalSeparationEnabled ? "phrase-dtw-v2" : "disabled", transcriptionProfile: "faster-whisper-native-singing-word-timestamps-v6", maxShiftMs: input.deepPhonemeAnalysis ? 350 : 50, detailMode: input.deepPhonemeAnalysis ? "phoneme" : "word" }
     });
     if (input.reuseCachedAnalysis) {
       const cached = await mlsmPostLipsyncCache.get(cacheKey);
@@ -114,45 +124,72 @@ export async function analyzeMlsmPostLipsync(input: {
       }
     }
     report("cache", 1, "Nuova analisi audio avviata");
-    const sourceVocal = await separateCassetteDeskVocals(sourceAudio, input.signal, (progress, message) => report("separate-source-vocal", progress, message));
-    if (!isTauri()) browserStemPaths.push(sourceVocal.stemPath);
-    throwIfAborted(input.signal);
     const analyzesFullMaster = targetMasterRange.startSeconds <= .001 && targetMasterRange.endSeconds >= input.targetMaster.metadata.durationSeconds - .05;
-    const targetVocal = await separateCassetteDeskVocals(input.targetMaster, input.signal, (progress, message) => report("separate-target-vocal", progress, message), analyzesFullMaster ? undefined : targetMasterRange);
-    if (!isTauri()) browserStemPaths.push(targetVocal.stemPath);
+    let sourceWhisperMedia: MlsmWhisperMedia = { path: sourceAudio.metadata.path, url: sourceAudio.url, fileName: sourceAudio.metadata.fileName, durationSeconds: sourceAudio.metadata.durationSeconds };
+    let targetWhisperMedia: MlsmWhisperMedia = { path: input.targetMaster.metadata.path, url: input.targetMaster.url, fileName: input.targetMaster.metadata.fileName, durationSeconds: input.targetMaster.metadata.durationSeconds };
+    let sourceWhisperRange = { startSeconds: 0, endSeconds: sourceAudio.metadata.durationSeconds };
+    let targetWhisperRange = targetMasterRange;
+    let sourceAlignmentPath: string | null = null; let targetAlignmentPath: string | null = null;
+    if (vocalSeparationEnabled) {
+      const sourceVocal = await separateCassetteDeskVocals(sourceAudio, input.signal, (progress, message) => report("separate-source-vocal", progress, message));
+      if (!isTauri()) browserStemPaths.push(sourceVocal.stemPath);
+      throwIfAborted(input.signal);
+      const targetVocal = await separateCassetteDeskVocals(input.targetMaster, input.signal, (progress, message) => report("separate-target-vocal", progress, message), analyzesFullMaster ? undefined : targetMasterRange);
+      if (!isTauri()) browserStemPaths.push(targetVocal.stemPath);
+      throwIfAborted(input.signal);
+      if (isTauri()) [sourceVocalAudio, targetVocalAudio] = await Promise.all([loadAudioFromPath(sourceVocal.stemPath), loadAudioFromPath(targetVocal.stemPath)]);
+      sourceWhisperMedia = sourceVocalAudio
+        ? { path: sourceVocalAudio.metadata.path, url: sourceVocalAudio.url, fileName: sourceVocalAudio.metadata.fileName, durationSeconds: sourceVocalAudio.metadata.durationSeconds }
+        : { path: sourceVocal.stemPath, url: sourceVocal.stemPath, fileName: "source-vocals.wav", durationSeconds: sourceAudio.metadata.durationSeconds };
+      targetWhisperMedia = targetVocalAudio
+        ? { path: targetVocalAudio.metadata.path, url: targetVocalAudio.url, fileName: targetVocalAudio.metadata.fileName, durationSeconds: targetVocalAudio.metadata.durationSeconds }
+        : { path: targetVocal.stemPath, url: targetVocal.stemPath, fileName: "target-vocals.wav", durationSeconds: targetAnalysisDurationSeconds };
+      sourceWhisperRange = { startSeconds: 0, endSeconds: sourceWhisperMedia.durationSeconds };
+      targetWhisperRange = { startSeconds: 0, endSeconds: targetWhisperMedia.durationSeconds };
+      sourceAlignmentPath = sourceVocal.stemPath; targetAlignmentPath = targetVocal.stemPath;
+    } else {
+      report("separate-source-vocal", 1, "Separazione voce disattivata · Whisper Medium usa l’audio originale del video");
+      report("separate-target-vocal", 1, analyzesFullMaster ? "Whisper Medium usa il master originale" : "Whisper Medium userà soltanto la porzione selezionata del master");
+    }
     throwIfAborted(input.signal);
-    if (isTauri()) [sourceVocalAudio, targetVocalAudio] = await Promise.all([loadAudioFromPath(sourceVocal.stemPath), loadAudioFromPath(targetVocal.stemPath)]);
-    const sourceVocalUrl = sourceVocalAudio?.url ?? sourceVocal.stemPath; const targetVocalUrl = targetVocalAudio?.url ?? targetVocal.stemPath;
     // Overlay the two isolated vocals before a single word is transcribed. This
     // is the only measurement in the pipeline that no transcript and no LLM can
     // skew, and it is what later bounds the recovery search to the right place
     // instead of letting it hunt across the whole video.
-    let waveformAlignment = unmeasuredMlsmWaveformAlignment("unavailable");
-    try {
-      waveformAlignment = await measureMlsmPostLipsyncWaveformAlignment({
-        sourceVocalPath: sourceVocal.stemPath,
-        targetVocalPath: targetVocal.stemPath,
-        ...(input.signal ? { signal: input.signal } : {}),
-        onProgress: (progress, message) => report("overlay-waveforms", progress, message)
-      });
-    } catch (reason) {
-      if (reason instanceof DOMException && reason.name === "AbortError") throw reason;
-      waveformAlignment = unmeasuredMlsmWaveformAlignment("unavailable", reason instanceof Error ? reason.message : String(reason));
-      report("overlay-waveforms", 1, `Sovrapposizione delle onde non disponibile · si prosegue con i tempi del trascritto: ${waveformAlignment.detail}`);
-    }
+    let waveformAlignment = unmeasuredMlsmWaveformAlignment(vocalSeparationEnabled ? "unavailable" : "disabled", vocalSeparationEnabled ? undefined : "Separazione vocale disattivata: autorità temporale affidata ai timestamp Whisper originali.");
+    if (sourceAlignmentPath && targetAlignmentPath) {
+      try {
+        waveformAlignment = await measureMlsmPostLipsyncWaveformAlignment({
+          sourceVocalPath: sourceAlignmentPath,
+          targetVocalPath: targetAlignmentPath,
+          ...(input.signal ? { signal: input.signal } : {}),
+          onProgress: (progress, message) => report("overlay-waveforms", progress, message)
+        });
+      } catch (reason) {
+        if (reason instanceof DOMException && reason.name === "AbortError") throw reason;
+        waveformAlignment = unmeasuredMlsmWaveformAlignment("unavailable", reason instanceof Error ? reason.message : String(reason));
+        report("overlay-waveforms", 1, `Sovrapposizione delle onde non disponibile · si prosegue con i tempi del trascritto: ${waveformAlignment.detail}`);
+      }
+    } else report("overlay-waveforms", 1, "Sovrapposizione stem disattivata · timestamp Whisper originali invariati");
     throwIfAborted(input.signal);
-    const rawSourceTranscript = await transcribeTimestampedAudio(sourceVocalUrl, sourceAudio.metadata.durationSeconds, {
+    const rawSourceTranscript = await transcribeMlsmWhisperWords({
+      media: sourceWhisperMedia,
+      range: sourceWhisperRange,
       language: input.language,
-      whisperModel: input.whisperModel,
-      timingDetail: input.deepPhonemeAnalysis ? "phoneme" : "word",
-      ...(input.signal ? { signal: input.signal } : {})
-    }, (message) => report("transcribe-source", null, message));
-    const rawTargetTranscript = await transcribeTimestampedAudio(targetVocalUrl, targetAnalysisDurationSeconds, {
+      model: input.whisperModel,
+      role: "source",
+      ...(input.signal ? { signal: input.signal } : {}),
+      onProgress: (progress, message) => report("transcribe-source", progress, message)
+    });
+    const rawTargetTranscript = await transcribeMlsmWhisperWords({
+      media: targetWhisperMedia,
+      range: targetWhisperRange,
       language: input.language,
-      whisperModel: input.whisperModel,
-      timingDetail: input.deepPhonemeAnalysis ? "phoneme" : "word",
-      ...(input.signal ? { signal: input.signal } : {})
-    }, (message) => report("transcribe-target", null, message));
+      model: input.whisperModel,
+      role: "target",
+      ...(input.signal ? { signal: input.signal } : {}),
+      onProgress: (progress, message) => report("transcribe-target", progress, message)
+    });
     throwIfAborted(input.signal);
     const sourceTranscript = exactSungLyrics
       ? constrainMlsmPostLipsyncTranscriptToExactLyrics(rawSourceTranscript, exactSungLyrics)
@@ -209,16 +246,17 @@ export async function analyzeMlsmPostLipsync(input: {
       whisperTranscripts: { source: rawSourceTranscript, target: rawTargetTranscript }
     });
     report("align", 1, "Anchor e time map verificati");
-    const refined = analysis.anchors.length ? await refineMlsmPostLipsyncAlignment({
+    const refined = analysis.anchors.length && sourceAlignmentPath && targetAlignmentPath ? await refineMlsmPostLipsyncAlignment({
       analysis,
-      sourceVocalPath: sourceVocal.stemPath,
-      targetVocalPath: targetVocal.stemPath,
+      sourceVocalPath: sourceAlignmentPath,
+      targetVocalPath: targetAlignmentPath,
       ...(input.deepPhonemeAnalysis === undefined ? {} : { detailedTiming: input.deepPhonemeAnalysis }),
       ...(input.focusCanonicalIndexes?.length ? { focusCanonicalIndexes: input.focusCanonicalIndexes } : {}),
       waveform: waveformAlignment,
       ...(input.signal ? { signal: input.signal } : {}),
       onProgress: (progress, message) => report("micro-align", progress, message)
     }) : analysis;
+    if (!sourceAlignmentPath || !targetAlignmentPath) report("micro-align", 1, "MFCC/DTW stem disattivato · time-map costruita dai timestamp Whisper originali");
     throwIfAborted(input.signal);
     let visuallyRefined = refined;
     if (visualSpeechEnabled) {

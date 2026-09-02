@@ -156,6 +156,37 @@ class YoutubeValidationTests(unittest.TestCase):
             with self.assertRaisesRegex(worker.WorkerError, "Campi non consentiti"):
                 worker.validate_request({**request, "shellCommand": "anything"})
 
+    def test_word_transcription_dispatches_the_requested_medium_model_and_range(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            job = Path(temporary) / "job"
+            job.mkdir()
+            audio = Path(temporary) / "master.wav"
+            audio.write_bytes(b"audio")
+            request = {
+                "protocolVersion": 1,
+                "action": "transcribeWords",
+                "inputPath": str(audio),
+                "jobRoot": str(job),
+                "language": "en",
+                "model": "whisper-medium_timestamped",
+                "startSeconds": 4.0,
+                "endSeconds": 12.0,
+            }
+            expected = {"kind": "transcribeWords", "model": "whisper-medium_timestamped", "words": []}
+            self.assertEqual(worker.validate_request(request)[0], "transcribeWords")
+            with mock.patch.object(worker, "transcribe_words", return_value=expected) as transcribe:
+                self.assertEqual(worker.dispatch(request), expected)
+                transcribe.assert_called_once_with(request)
+            with self.assertRaisesRegex(worker.WorkerError, "Campi non consentiti"):
+                worker.validate_request({**request, "fallbackModel": "base"})
+
+    def test_word_transcription_keeps_sung_passages_in_a_mastered_mix(self):
+        options = worker.whisper_singing_transcription_options()
+        self.assertFalse(options["vad_filter"])
+        self.assertEqual(options["no_speech_threshold"], 1.0)
+        self.assertTrue(options["word_timestamps"])
+        self.assertFalse(options["condition_on_previous_text"])
+
 
 class MusicalContextTests(unittest.TestCase):
     def test_removes_html_coverage_namespace_that_breaks_numba(self):

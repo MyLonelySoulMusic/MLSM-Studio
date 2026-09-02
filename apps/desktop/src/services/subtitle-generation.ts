@@ -46,7 +46,7 @@ export type LlmModelId = RhythmBallProject["subtitles"]["llmModel"];
 export const whisperModelOptions: readonly { id: WhisperModelId; label: string; detail: string; localSize: string }[] = [
   { id: "whisper-tiny_timestamped", label: "Whisper Tiny", detail: "Più rapido · adatto a preview e macchine meno potenti", localSize: "96 MB" },
   { id: "whisper-base_timestamped", label: "Whisper Base", detail: "Buon equilibrio tra precisione, memoria e velocità", localSize: "151 MB" },
-  { id: "whisper-medium_timestamped", label: "Whisper Medium", detail: "Precisione superiore · richiede più RAM/GPU e tempi di analisi maggiori", localSize: "circa 686 MB" }
+  { id: "whisper-medium_timestamped", label: "Whisper Medium", detail: "Massima precisione · nel lip-sync usa il backend nativo con timestamp reali", localSize: "download automatico al primo utilizzo" }
 ];
 export const llmModelOptions: readonly { id: LlmModelId; label: string; detail: string; localSize: string }[] = [
   { id: "qwen2.5-0.5b-instruct", label: "Qwen2.5 0.5B Instruct · consigliato", detail: "Italiano, istruzioni e JSON nettamente migliori; profilo bilanciato per computer modesti", localSize: "circa 483 MB WebGPU · 786 MB WASM" }
@@ -54,6 +54,30 @@ export const llmModelOptions: readonly { id: LlmModelId; label: string; detail: 
 function normalized(value: string): string { return value.normalize("NFKD").toLocaleLowerCase().replace(/[^\p{L}\p{N}']/gu, ""); }
 function words(value: string): string[] { return value.trim().split(/\s+/).filter(Boolean); }
 function clamp(value: number, minimum: number, maximum: number): number { return Math.min(maximum, Math.max(minimum, value)); }
+
+function validWhisperTimestamp(chunk: WhisperChunk, durationSeconds: number): boolean {
+  const start = chunk.timestamp?.[0]; const end = chunk.timestamp?.[1];
+  return typeof start === "number" && typeof end === "number" && Number.isFinite(start) && Number.isFinite(end)
+    && start >= 0 && start < durationSeconds && end > start && end <= durationSeconds + .05;
+}
+
+/** A real `return_timestamps: "word"` response contains one lexical word per
+ * timed chunk. A phrase-only chunk (or no timed chunks at all) is not a word
+ * timeline and must never be silently stretched over the clip in Lipsync. One
+ * untimed edge word is accepted because a user-selected excerpt may cut its
+ * first or final syllable. */
+export function hasMeasuredWhisperWordTimeline(result: WhisperResult, durationSeconds: number): boolean {
+  const lexicalChunks = (result.chunks ?? []).filter((chunk) => words(chunk.text ?? "").length > 0);
+  if (!lexicalChunks.length) return false;
+  if (lexicalChunks.some((chunk) => words(chunk.text ?? "").length !== 1)) return false;
+  const invalidIndexes: number[] = [];
+  for (let index = 0; index < lexicalChunks.length; index += 1) {
+    const chunk = lexicalChunks[index]!;
+    if (!validWhisperTimestamp(chunk, durationSeconds)) invalidIndexes.push(index);
+  }
+  return invalidIndexes.length === 0
+    || invalidIndexes.length === 1 && (invalidIndexes[0] === 0 || invalidIndexes[0] === lexicalChunks.length - 1);
+}
 
 function stageEvent(handler: SubtitleGenerationEventHandler | undefined, stage: SmartSubtitleStage, progress: number, message: string, indeterminate = false): void {
   handler?.({ type: "stage", stage, progress: clamp(progress, 0, 100), message, ...(indeterminate ? { indeterminate: true } : {}) });
@@ -104,11 +128,7 @@ function wordSimilarity(left: string, right: string): number {
 export function timestampedWords(result: WhisperResult, durationSeconds: number): TimestampedWord[] {
   const chunks = result.chunks ?? [];
   if (chunks.length) {
-    const timestampsAreUsable = chunks.some((chunk) => {
-      const start = chunk.timestamp?.[0]; const end = chunk.timestamp?.[1];
-      return typeof start === "number" && typeof end === "number" && Number.isFinite(start) && Number.isFinite(end)
-        && start >= 0 && start < durationSeconds && end > start && end <= durationSeconds + .05;
-    });
+    const timestampsAreUsable = chunks.some((chunk) => validWhisperTimestamp(chunk, durationSeconds));
     if (!timestampsAreUsable) {
       // Some Whisper backends return every sung token at the chunk limit (for
       // example 29.98s for a 15s clip). Those values are not evidence. Preserve
@@ -130,13 +150,21 @@ export function timestampedWords(result: WhisperResult, durationSeconds: number)
         && rawStart >= 0 && rawStart < durationSeconds && rawEnd > rawStart && rawEnd <= durationSeconds + .05;
       const start = validTimestamp ? rawStart : index / chunks.length * durationSeconds;
       const end = validTimestamp ? Math.min(durationSeconds, rawEnd) : (index + 1) / chunks.length * durationSeconds;
-      const tokens = words(text); const weights = tokens.map((token) => Math.max(1, normalized(token).length)); const totalWeight = weights.reduce((sum, value) => sum + value, 0);
+      const tokens = words(text);
+      const reportedConfidence = validTimestamp && typeof chunk.confidence === "number" ? chunk.confidence : validTimestamp && typeof chunk.score === "number" ? chunk.score : null;
+      const confidence = reportedConfidence === null ? (validTimestamp ? .62 : .35) : clamp(reportedConfidence, 0, 1);
+      const confidenceSource = reportedConfidence === null ? "estimated" as const : "model" as const;
+      // `return_timestamps: "word"` normally yields exactly one token per
+      // chunk. Preserve those measured boundaries byte-for-byte: running them
+      // through proportional arithmetic adds floating-point drift and has no
+      // semantic purpose.
+      if (tokens.length === 1) return [{ text: tokens[0]!, start, end, confidence, confidenceSource }];
+      const weights = tokens.map((token) => Math.max(1, normalized(token).length)); const totalWeight = weights.reduce((sum, value) => sum + value, 0);
       let elapsedWeight = 0;
       return tokens.map((token, tokenIndex) => {
         const tokenStart = start + (end - start) * elapsedWeight / Math.max(1, totalWeight); elapsedWeight += weights[tokenIndex] ?? 1;
         const tokenEnd = start + (end - start) * elapsedWeight / Math.max(1, totalWeight);
-        const reportedConfidence = validTimestamp && typeof chunk.confidence === "number" ? chunk.confidence : validTimestamp && typeof chunk.score === "number" ? chunk.score : null;
-        return { text: token, start: tokenStart, end: Math.max(tokenStart + .025, tokenEnd), confidence: reportedConfidence === null ? (validTimestamp ? .62 : .35) : clamp(reportedConfidence, 0, 1), confidenceSource: reportedConfidence === null ? "estimated" as const : "model" as const };
+        return { text: token, start: tokenStart, end: Math.max(tokenStart + .025, tokenEnd), confidence, confidenceSource };
       });
     }).sort((left, right) => left.start - right.start);
     const monotonic: TimestampedWord[] = [];
@@ -625,7 +653,10 @@ async function targetedOpeningTimeline(
   const transcriber = await getLocalTranscriber(recovery.whisperModel, modelProgressReporter(progress, onEvent, "whisper", 100, 100)) as (input: Float32Array, options: Record<string, unknown>) => Promise<WhisperResult>;
   const result = await transcriber(samples, {
     return_timestamps: "word",
-    force_full_sequences: true,
+    // The scanned window can legitimately end while Whisper is still emitting
+    // a word. Keeping this false makes the tokenizer flush the final partial
+    // sequence instead of throwing away the whole analysis.
+    force_full_sequences: false,
     task: "transcribe",
     language: !recovery.language || recovery.language === "auto" ? undefined : recovery.language
   });
@@ -855,32 +886,51 @@ export async function reviewSubtitles(cues: readonly SubtitleCue[], lyrics: stri
 /** Shared Whisper facade used by subtitles and MLSM POST LIPSYNC. Keeping the
  * model invocation here guarantees one model instance/cache and one timestamp
  * decoder instead of creating a second transcription stack. */
-export async function transcribeTimestampedAudio(audioUrl: string, durationSeconds: number, options: {
+export async function transcribeTimestampedAudio(audioUrl: string | Float32Array, durationSeconds: number, options: {
   language: string;
   whisperModel: WhisperModelId;
   phraseWords?: number;
   timingDetail?: "word" | "phoneme";
+  requireMeasuredWordTimestamps?: boolean;
+  audioRole?: "source" | "target";
   signal?: AbortSignal;
   onEvent?: SubtitleGenerationEventHandler;
 }, progress: (message: string) => void): Promise<WhisperTranscriptDocument> {
   if (options.signal?.aborted) throw new DOMException("Trascrizione annullata", "AbortError");
   progress(`Preparazione ${whisperModelOptions.find((item) => item.id === options.whisperModel)?.label ?? "Whisper"} · verifica cache locale…`);
   stageEvent(options.onEvent, "setup", 2, `Preparazione ${whisperModelOptions.find((item) => item.id === options.whisperModel)?.label ?? "Whisper"}…`, true);
-  const transcriber = await getLocalTranscriber(options.whisperModel, modelProgressReporter(progress, options.onEvent)) as (input: string, options: Record<string, unknown>) => Promise<WhisperResult>;
+  const transcriber = await getLocalTranscriber(options.whisperModel, modelProgressReporter(progress, options.onEvent)) as (input: string | Float32Array, options: Record<string, unknown>) => Promise<WhisperResult>;
   if (options.signal?.aborted) throw new DOMException("Trascrizione annullata", "AbortError");
   const deepTiming = options.timingDetail === "phoneme";
   stageEvent(options.onEvent, "whisper", 20, `Whisper sta analizzando ${durationSeconds.toFixed(1)} secondi di audio${deepTiming ? " · passaggio contestuale 1/2" : ""}…`, true);
   const language = options.language === "auto" ? undefined : options.language;
-  const result = await transcriber(audioUrl, { return_timestamps: "word", chunk_length_s: deepTiming ? 18 : 30, stride_length_s: deepTiming ? 4 : 5, language });
+  // MLSM often analyses a user-selected master excerpt. Its last sample may
+  // therefore fall inside a sustained syllable. Transformers.js explicitly
+  // requires `force_full_sequences: false` for that valid streaming/windowed
+  // case; `true` raises "Whisper did not predict an ending timestamp" and
+  // discards every timestamp that Whisper had already produced.
+  const transcribePass = (chunkLength: number, strideLength: number) => transcriber(audioUrl, { return_timestamps: "word", chunk_length_s: chunkLength, stride_length_s: strideLength, condition_on_prev_tokens: false, do_sample: false, force_full_sequences: false, task: "transcribe", language });
+  let result = await transcribePass(deepTiming ? 18 : 30, deepTiming ? 4 : 5);
+  if (options.requireMeasuredWordTimestamps && !hasMeasuredWhisperWordTimeline(result, durationSeconds)) {
+    progress("Whisper · primo passaggio privo di confini affidabili; ripetizione temporale sullo stesso modello…");
+    stageEvent(options.onEvent, "whisper", 30, "Whisper sta ripetendo esclusivamente l’estrazione dei timestamp parola per parola…", true);
+    result = await transcribePass(Math.min(15, Math.max(5, durationSeconds)), Math.min(3, Math.max(1, durationSeconds / 6)));
+    if (!hasMeasuredWhisperWordTimeline(result, durationSeconds)) {
+      const source = options.audioRole === "source" ? "del video" : options.audioRole === "target" ? "del brano master" : "analizzato";
+      throw new Error(`Whisper non ha prodotto i confini reali delle singole parole nell’audio ${source}. Nessun tempo artificiale è stato applicato.`);
+    }
+  }
   if (options.signal?.aborted) throw new DOMException("Trascrizione annullata", "AbortError");
   const primaryWords = timestampedWords(result, durationSeconds);
   let rawWords = primaryWords;
   if (deepTiming) {
     progress("Whisper approfondito · passaggio 2/2 su finestre fonetiche corte…");
     stageEvent(options.onEvent, "whisper", 34, "Whisper sta rifinendo attacchi consonantici, vocali e rilasci…", true);
-    const detailedResult = await transcriber(audioUrl, { return_timestamps: "word", chunk_length_s: 8, stride_length_s: 2, condition_on_prev_tokens: false, language });
+    const detailedResult = await transcriber(audioUrl, { return_timestamps: "word", chunk_length_s: 8, stride_length_s: 2, condition_on_prev_tokens: false, do_sample: false, force_full_sequences: false, task: "transcribe", language });
     if (options.signal?.aborted) throw new DOMException("Trascrizione annullata", "AbortError");
-    rawWords = fuseDetailedTimestampWords(primaryWords, timestampedWords(detailedResult, durationSeconds));
+    rawWords = options.requireMeasuredWordTimestamps && !hasMeasuredWhisperWordTimeline(detailedResult, durationSeconds)
+      ? primaryWords
+      : fuseDetailedTimestampWords(primaryWords, timestampedWords(detailedResult, durationSeconds));
   }
   const rawCues = phraseCues(rawWords, options.phraseWords ?? 6);
   const document: WhisperTranscriptDocument = {

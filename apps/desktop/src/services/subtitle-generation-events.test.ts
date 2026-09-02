@@ -2,11 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const runtime = vi.hoisted(() => ({
   transcriber: vi.fn(),
+  transcriberModels: [] as string[],
   generator: vi.fn()
 }));
 
 vi.mock("./local-model-runtime", () => ({
-  getLocalTranscriber: async (_model: string, progress?: (message: string) => void) => {
+  getLocalTranscriber: async (model: string, progress?: (message: string) => void) => {
+    runtime.transcriberModels.push(model);
     progress?.("Whisper pronto · cache locale persistente");
     return runtime.transcriber;
   },
@@ -18,12 +20,13 @@ vi.mock("./local-model-runtime", () => ({
   localGeneratedAnswer: (output: { generated_text?: string }[]) => output[0]?.generated_text ?? ""
 }));
 
-import { generateSubtitles, reviseSubtitlesWithAgentInstruction, type SubtitleGenerationEvent } from "./subtitle-generation";
+import { generateSubtitles, reviseSubtitlesWithAgentInstruction, transcribeTimestampedAudio, type SubtitleGenerationEvent } from "./subtitle-generation";
 
 describe("smart subtitle generation events", () => {
   beforeEach(() => {
     vi.unstubAllGlobals();
     runtime.transcriber.mockReset();
+    runtime.transcriberModels.length = 0;
     runtime.generator.mockReset();
   });
 
@@ -266,8 +269,96 @@ describe("smart subtitle generation events", () => {
       }
     );
 
-    expect(runtime.transcriber).toHaveBeenCalledWith(expect.any(Float32Array), expect.objectContaining({ return_timestamps: "word", force_full_sequences: true, language: "en" }));
+    expect(runtime.transcriber).toHaveBeenCalledWith(expect.any(Float32Array), expect.objectContaining({ return_timestamps: "word", force_full_sequences: false, language: "en" }));
     expect(result.cues.map((cue) => cue.text)).toEqual(["missing opening", "current line"]);
     expect(result.summary).toContain("timestamp Whisper");
+  });
+
+  it("accetta l’ultima parola parziale di un master tagliato senza imporre una sequenza completa", async () => {
+    runtime.transcriber.mockImplementation(async (_audio: string | Float32Array, options: Record<string, unknown>) => {
+      if (options.force_full_sequences !== false) {
+        throw new Error("Whisper did not predict an ending timestamp, which can happen if audio is cut off in the middle of a word.");
+      }
+      return {
+        text: "The Fallen",
+        chunks: [
+          { text: "The", timestamp: [0, .24] },
+          { text: "Fallen", timestamp: [.25, null] }
+        ]
+      };
+    });
+
+    const transcript = await transcribeTimestampedAudio("blob:master-window", 2.72, {
+      language: "en",
+      whisperModel: "whisper-medium_timestamped",
+      phraseWords: 4
+    }, vi.fn());
+
+    expect(runtime.transcriber).toHaveBeenCalledWith("blob:master-window", expect.objectContaining({
+      return_timestamps: "word",
+      force_full_sequences: false
+    }));
+    expect(transcript.words.map((word) => word.text).join(" ")).toBe("The Fallen");
+    expect(transcript.words.at(-1)?.end).toBeLessThanOrEqual(2.72);
+  });
+
+  it("riprova e usa soltanto timestamp parola per parola misurati nel flusso Lipsync", async () => {
+    runtime.transcriber
+      .mockResolvedValueOnce({ text: "I'm scared to be alone" })
+      .mockResolvedValueOnce({
+        text: "I'm scared to be alone",
+        chunks: [
+          { text: "I'm", timestamp: [0, .56] },
+          { text: "scared", timestamp: [.56, .9] },
+          { text: "to", timestamp: [.9, 1.28] },
+          { text: "be", timestamp: [1.28, 1.68] },
+          { text: "alone", timestamp: [1.68, 2.6] }
+        ]
+      });
+    const progress = vi.fn();
+
+    const transcript = await transcribeTimestampedAudio(new Float32Array(15 * 16_000), 15, {
+      language: "en",
+      whisperModel: "whisper-medium_timestamped",
+      requireMeasuredWordTimestamps: true
+    }, progress);
+
+    expect(runtime.transcriber).toHaveBeenCalledTimes(2);
+    expect(progress).toHaveBeenCalledWith(expect.stringContaining("primo passaggio privo di confini affidabili"));
+    expect(transcript.words.map((word) => [word.text, word.start, word.end])).toEqual([
+      ["I'm", 0, .56], ["scared", .56, .9], ["to", .9, 1.28], ["be", 1.28, 1.68], ["alone", 1.68, 2.6]
+    ]);
+  });
+
+  it("riprova lo stesso Medium senza usare Whisper Base quando il primo passaggio restituisce 29.98 secondi", async () => {
+    const brokenMedium = {
+      text: "I'm scared to be alone",
+      chunks: ["I'm", "scared", "to", "be", "alone"].map((text) => ({ text, timestamp: [29.98, 29.98] as [number, number] }))
+    };
+    runtime.transcriber
+      .mockResolvedValueOnce(brokenMedium)
+      .mockResolvedValueOnce({
+        text: "I'm scared to be alone",
+        chunks: [
+          { text: "I'm", timestamp: [0, .32] },
+          { text: "scared", timestamp: [.32, .68] },
+          { text: "to", timestamp: [.68, 1.04] },
+          { text: "be", timestamp: [1.04, 1.34] },
+          { text: "alone", timestamp: [1.34, 2.02] }
+        ]
+      });
+    const progress = vi.fn();
+
+    const transcript = await transcribeTimestampedAudio(new Float32Array(15 * 16_000), 15, {
+      language: "en",
+      whisperModel: "whisper-medium_timestamped",
+      requireMeasuredWordTimestamps: true
+    }, progress);
+
+    expect(runtime.transcriber).toHaveBeenCalledTimes(2);
+    expect(runtime.transcriberModels).toEqual(["whisper-medium_timestamped"]);
+    expect(progress).toHaveBeenCalledWith(expect.stringContaining("stesso modello"));
+    expect(transcript.words.map((word) => word.text)).toEqual(["I'm", "scared", "to", "be", "alone"]);
+    expect(transcript.words.map((word) => [word.start, word.end])).toEqual([[0, .32], [.32, .68], [.68, 1.04], [1.04, 1.34], [1.34, 2.02]]);
   });
 });

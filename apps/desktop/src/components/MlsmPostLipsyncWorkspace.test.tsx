@@ -17,14 +17,19 @@ describe("MlsmPostLipsyncWorkspace", () => {
     expect(screen.getByText("Testo incollato")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Svuota" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Svuota cache LIP SYNC" })).toBeInTheDocument();
-    expect(screen.getByText("Ogni clic esegue una nuova analisi")).toBeInTheDocument();
+    expect(screen.getByText(/Gli stessi file e parametri ripristinano sempre lo stesso risultato automatico/u)).toBeInTheDocument();
     expect(screen.queryByText(/richiede l’app desktop/i)).not.toBeInTheDocument();
     const deep = screen.getByRole("checkbox", { name: /Analisi fonema per fonema/u });
     const llmCorrection = screen.getByRole("checkbox", { name: /Correzione sequenza con LLM locale/u });
     const visualSpeech = screen.getByRole("checkbox", { name: /Analisi visiva del labiale/u });
+    const vocalSeparation = screen.getByRole("checkbox", { name: /Separa la voce/u });
+    const whisper = screen.getByLabelText("Precisione Whisper") as HTMLSelectElement;
     const exactLyrics = screen.getByLabelText("Parole esatte pronunciate") as HTMLTextAreaElement;
     expect(llmCorrection).toBeChecked();
     expect(visualSpeech).not.toBeChecked();
+    expect(vocalSeparation).not.toBeChecked();
+    expect(whisper.value).toBe("whisper-medium_timestamped");
+    expect(screen.getByText(/Whisper Medium analizza direttamente l’audio originale/u)).toBeInTheDocument();
     expect(screen.getByText(/Disattivata di default/u)).toBeInTheDocument();
     fireEvent.change(exactLyrics, { target: { value: "The Fallen, still loves me" } });
     expect(exactLyrics.value).toBe("The Fallen, still loves me");
@@ -60,7 +65,7 @@ describe("MlsmPostLipsyncWorkspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "Usa questa porzione" }));
     expect(screen.queryByRole("dialog", { name: "Ascolta e taglia il master" })).not.toBeInTheDocument();
     expect(screen.getByText(/0:30\.000 → 0:42\.500/u)).toBeInTheDocument();
-    expect(screen.getByText(/solo questa porzione viene separata e trascritta/iu)).toBeInTheDocument();
+    expect(screen.getByText(/viene analizzata soltanto questa porzione/iu)).toBeInTheDocument();
   });
 
   it("espande il monitor e lo richiude con Escape", () => {

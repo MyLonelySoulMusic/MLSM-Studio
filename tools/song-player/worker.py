@@ -47,6 +47,7 @@ ALLOWED_REQUEST_KEYS = {
     "alignWaveform": {"protocolVersion", "action", "sourcePath", "targetPath", "minimumScale", "maximumScale", "jobRoot"},
     "refineAlignment": {"protocolVersion", "action", "sourcePath", "targetPath", "anchors", "jobRoot"},
     "analyzeVisemes": {"protocolVersion", "action", "inputPath", "anchors", "language", "jobRoot"},
+    "transcribeWords": {"protocolVersion", "action", "inputPath", "language", "model", "startSeconds", "endSeconds", "jobRoot"},
 }
 
 MAJOR_KEY_PROFILE = (6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88)
@@ -428,6 +429,11 @@ def capabilities() -> dict[str, Any]:
         auto_avsr_ready = visual_dependencies_ready()
     except Exception:
         auto_avsr_ready = False
+    try:
+        import faster_whisper  # noqa: F401
+        faster_whisper_ready = True
+    except ImportError:
+        faster_whisper_ready = False
     return {
         "protocolVersion": PROTOCOL_VERSION,
         "ready": bool(numpy_version and yt_dlp_version and ffmpeg and ffprobe),
@@ -440,6 +446,7 @@ def capabilities() -> dict[str, Any]:
             "demucs": demucs_ready,
             "librosa": librosa_ready,
             "autoAvsr": auto_avsr_ready,
+            "fasterWhisper": faster_whisper_ready,
         },
         "features": {
             "download": bool(yt_dlp_version and ffmpeg and ffprobe),
@@ -450,6 +457,7 @@ def capabilities() -> dict[str, Any]:
             "alignWaveform": bool(librosa_ready and ffmpeg and ffprobe),
             "refineAlignment": bool(librosa_ready and ffmpeg and ffprobe),
             "analyzeVisemes": bool(auto_avsr_ready),
+            "transcribeWords": bool(faster_whisper_ready and ffmpeg and ffprobe),
         },
         "limits": {
             "maxInputBytes": MAX_INPUT_BYTES,
@@ -458,6 +466,132 @@ def capabilities() -> dict[str, Any]:
             "spectrogramRows": 96,
             "spectrogramMaxColumns": 2_048,
         },
+    }
+
+
+def transcribe_words(request: dict[str, Any]) -> dict[str, Any]:
+    """Measured word boundaries from native Faster-Whisper.
+
+    The Transformers.js Medium ONNX export can transcribe the text correctly
+    while collapsing all cross-attention timestamps to 29.98 seconds.  This
+    path uses the same requested Whisper size through CTranslate2 and never
+    substitutes Base or uniformly distributes words.
+    """
+    job_root = _validate_root(request.get("jobRoot"), "Job root")
+    input_value = request.get("inputPath")
+    if not isinstance(input_value, str):
+        raise WorkerError("invalid_input", "Percorso audio Whisper non valido")
+    source = Path(input_value)
+    if not source.is_absolute() or source.is_symlink() or not source.is_file():
+        raise WorkerError("invalid_input", "Whisper richiede un file audio locale valido")
+    source = source.resolve(strict=True)
+    if source.stat().st_size > MAX_INPUT_BYTES:
+        raise WorkerError("input_too_large", "Il file audio supera il limite consentito")
+    language = request.get("language", "en")
+    if language == "auto":
+        language = None
+    elif not isinstance(language, str) or not language or len(language) > 16 or not re.fullmatch(r"[A-Za-z-]+", language):
+        raise WorkerError("invalid_input", "Lingua Whisper non valida")
+    model_id = request.get("model", "whisper-medium_timestamped")
+    model_names = {
+        "whisper-tiny_timestamped": "tiny",
+        "whisper-base_timestamped": "base",
+        "whisper-medium_timestamped": "medium",
+    }
+    if model_id not in model_names:
+        raise WorkerError("invalid_input", "Modello Whisper non supportato")
+    metadata = probe_media(source)
+    start_value = request.get("startSeconds")
+    end_value = request.get("endSeconds")
+    if (start_value is None) != (end_value is None):
+        raise WorkerError("invalid_input", "startSeconds ed endSeconds devono essere indicati insieme")
+    if start_value is not None:
+        try:
+            start_seconds = float(start_value)
+            end_seconds = float(end_value)
+        except (TypeError, ValueError) as error:
+            raise WorkerError("invalid_input", "Intervallo Whisper non valido") from error
+        if not all(math.isfinite(value) for value in (start_seconds, end_seconds)) or start_seconds < 0 or end_seconds <= start_seconds + .05 or end_seconds > float(metadata["durationSeconds"]) + .05:
+            raise WorkerError("invalid_input", "Intervallo Whisper fuori dalla durata del file")
+        staging = _confined_child(job_root, "staging")
+        window = staging / "whisper-window.wav"
+        _run_ffmpeg(source, window, start_seconds, min(end_seconds, float(metadata["durationSeconds"])))
+        source = window.resolve(strict=True)
+        duration_seconds = end_seconds - start_seconds
+    else:
+        duration_seconds = float(metadata["durationSeconds"])
+
+    progress(.03, f"Preparazione Whisper {model_names[model_id].capitalize()} nativo")
+    try:
+        import ctranslate2
+        from faster_whisper import WhisperModel
+    except ImportError as error:
+        raise WorkerError("whisper_runtime_unavailable", "Faster-Whisper non è installato nel runtime MLSM") from error
+    cache_root = Path(os.environ.get("MLSM_WHISPER_CACHE", str(Path.home() / ".cache" / "mlsm-studio" / "faster-whisper"))).expanduser()
+    cache_root.mkdir(parents=True, exist_ok=True)
+    device = "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
+    compute_type = "float16" if device == "cuda" else "int8"
+    progress(.08, f"Caricamento/download automatico Whisper {model_names[model_id].capitalize()} · {device.upper()}")
+    try:
+        model = WhisperModel(model_names[model_id], device=device, compute_type=compute_type, download_root=str(cache_root))
+        segments, info = model.transcribe(
+            str(source),
+            language=language,
+            **whisper_singing_transcription_options(),
+        )
+        words_result: list[dict[str, Any]] = []
+        phrases: list[dict[str, Any]] = []
+        texts: list[str] = []
+        for segment in segments:
+            if cancellation_requested():
+                raise WorkerError("cancelled", "Trascrizione Whisper annullata")
+            segment_text = str(segment.text or "").strip()
+            if segment_text:
+                texts.append(segment_text)
+                phrases.append({"text": segment_text, "start": round(float(segment.start), 4), "end": round(float(segment.end), 4), "confidence": round(max(0.0, min(1.0, math.exp(float(segment.avg_logprob)))), 4)})
+            for word in segment.words or []:
+                text = str(word.word or "").strip()
+                start = float(word.start)
+                end = float(word.end)
+                probability = float(word.probability)
+                if text and all(math.isfinite(value) for value in (start, end, probability)) and 0 <= start < end <= duration_seconds + .1:
+                    words_result.append({"text": text, "start": round(start, 4), "end": round(min(duration_seconds, end), 4), "confidence": round(max(0.0, min(1.0, probability)), 4)})
+            progress(.15 + .8 * min(1.0, float(segment.end) / max(.001, duration_seconds)), "Whisper Medium · timestamp parola per parola")
+    except WorkerError:
+        raise
+    except Exception as error:
+        raise WorkerError("whisper_transcription_failed", str(error)[:1_000] or "Trascrizione Whisper fallita") from error
+    if not words_result:
+        raise WorkerError("whisper_missing_word_timestamps", "Whisper Medium non ha restituito timestamp parola per parola")
+    progress(.98, "Timestamp Whisper Medium verificati")
+    return {
+        "kind": "transcribeWords",
+        "engine": "Faster-Whisper",
+        "model": model_id,
+        "language": getattr(info, "language", language),
+        "durationSeconds": round(duration_seconds, 4),
+        "transcript": " ".join(texts),
+        "words": words_result,
+        "phrases": phrases,
+    }
+
+
+def whisper_singing_transcription_options() -> dict[str, Any]:
+    """Options for measured word timing on sung vocals and mastered music.
+
+    Faster-Whisper's VAD is tuned for speech.  On a mastered song it can mark
+    the vocal passages as non-speech and leave only a stray token even though
+    the same Medium model reads the isolated video vocal correctly.  Keeping
+    the complete signal lets Whisper inspect every singing passage; the later
+    monotonic lyric matcher still rejects unrelated words, so no timestamp is
+    fabricated or uniformly distributed.
+    """
+    return {
+        "beam_size": 5,
+        "word_timestamps": True,
+        "condition_on_previous_text": False,
+        "vad_filter": False,
+        "no_speech_threshold": 1.0,
     }
 
 
@@ -1192,6 +1326,11 @@ def dispatch(request: Any) -> dict[str, Any]:
         return refine_alignment(request)
     if action == "analyzeVisemes":
         return analyze_visemes(request)
+    if action == "transcribeWords":
+        try:
+            return transcribe_words(request)
+        finally:
+            _cleanup_staging(request)
     raise AssertionError("unreachable")
 
 

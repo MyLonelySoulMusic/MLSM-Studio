@@ -454,6 +454,23 @@ describe("MLSM POST LIPSYNC · HARD GATE core", () => {
     expect(mlsmPostLipsyncAnchorReport(analysis)).toContain("whisper-timing");
   });
 
+  it("aligns a mastered mix even when Whisper misses the opening words", () => {
+    const sourceWords = ["I'm", "scared", "to", "be", "alone", "When", "the", "morning", "never", "comes", "When", "the", "people", "that", "I", "loved", "loved"];
+    const sourceTimes = sourceWords.map((_, index) => [index * .62, index * .62 + .42] as [number, number]);
+    const targetWords = ["Be", "alone", "when", "the", "morning", "never", "comes", "When", "the", "people", "that", "I", "loved", "turn", "to", "faces"];
+    const targetTimes = targetWords.map((_, index) => [index * .7, index * .7 + .48] as [number, number]);
+    const analysis = createMlsmPostLipsyncAnalysis({
+      sourceTranscript: transcript(sourceTimes, sourceWords, 15),
+      targetTranscript: transcript(targetTimes, targetWords, 60),
+      sourceDurationSeconds: 15,
+      targetDurationSeconds: 60
+    });
+    expect(analysis.alignmentSource).toBe("whisper");
+    expect(analysis.report.matchedWords).toBeGreaterThanOrEqual(10);
+    expect(analysis.canonicalLyrics.map((word) => word.normalizedText)).toEqual(expect.arrayContaining(["be", "alone", "morning", "never", "comes", "people", "loved"]));
+    expect(analysis.report.monotonic).toBe(true);
+  });
+
   it("does not reject a Whisper-only match when the AI source repeats the line", () => {
     const words = ["The", "fallen", "Still", "loves", "me"];
     const repeatedWords = [...words, ...words, ...words];
