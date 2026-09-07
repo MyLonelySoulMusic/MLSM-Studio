@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createFrameInterpolationFormData, frameInterpolationJob, normalizeFrameInterpolationMethod, waitForFrameInterpolationHealth } from "./frame-interpolation-client";
+import { createFrameInterpolationFormData, frameInterpolationJob, normalizeFrameInterpolationMethod, probeFrameInterpolationSource, waitForFrameInterpolationHealth } from "./frame-interpolation-client";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -64,5 +64,14 @@ describe("Frame Booster interpolation request", () => {
 
     await expect(waitForFrameInterpolationHealth({ timeoutMs: 2_000 })).resolves.toMatchObject({ ffmpeg: true });
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("probes source FPS immediately through the local backend", async () => {
+    const metadata = { frameCount: 241, fps: 29.97002997, durationSeconds: 8.04, width: 720, height: 1280, hasAudio: true };
+    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(metadata), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const file = new File(["video"], "base.mp4", { type: "video/mp4" });
+
+    await expect(probeFrameInterpolationSource(file)).resolves.toMatchObject(metadata);
+    expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:8765/interpolation/probe", expect.objectContaining({ method: "POST", body: expect.any(FormData) }));
   });
 });

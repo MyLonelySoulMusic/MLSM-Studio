@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import { useProjectStore } from "../store/project-store";
 import { registerFrameBoosterSourceFile, releaseFrameBoosterSourceFile } from "../services/frame-booster-source-file";
-import { waitForFrameInterpolationHealth, type FrameInterpolationCapabilities, type FrameInterpolationMethod } from "../services/frame-interpolation-client";
+import { probeFrameInterpolationSource, waitForFrameInterpolationHealth, type FrameInterpolationCapabilities, type FrameInterpolationMethod } from "../services/frame-interpolation-client";
 
 const methodGuidance: Record<FrameInterpolationMethod, { title: string; description: string; ideal: string; avoid: string }> = {
   motion: {
@@ -28,6 +28,10 @@ function videoFile(file: File): boolean {
   return file.type.startsWith("video/") || /\.(mp4|mov|m4v|webm|mkv|avi)$/i.test(file.name);
 }
 
+function fpsLabel(value: number): string {
+  return Number(value.toFixed(3)).toString();
+}
+
 export function FrameBoosterPanel(): ReactElement {
   const settings = useProjectStore((state) => state.project.animation.frameBooster);
   const update = useProjectStore((state) => state.updateFrameBooster);
@@ -40,6 +44,7 @@ export function FrameBoosterPanel(): ReactElement {
   const healthController = useRef<AbortController | null>(null);
   const importOperation = useRef(0);
   const importCleanup = useRef<(() => void) | null>(null);
+  const probeController = useRef<AbortController | null>(null);
   const mounted = useRef(true);
 
   const check = async () => {
@@ -71,6 +76,8 @@ export function FrameBoosterPanel(): ReactElement {
       importOperation.current += 1;
       importCleanup.current?.();
       importCleanup.current = null;
+      probeController.current?.abort();
+      probeController.current = null;
       setImportError(null);
       setImportNotice(null);
     };
@@ -85,6 +92,8 @@ export function FrameBoosterPanel(): ReactElement {
       importOperation.current += 1;
       importCleanup.current?.();
       importCleanup.current = null;
+      probeController.current?.abort();
+      probeController.current = null;
     };
   }, []);
 
@@ -95,6 +104,9 @@ export function FrameBoosterPanel(): ReactElement {
     }
     importCleanup.current?.();
     importCleanup.current = null;
+    probeController.current?.abort();
+    const metadataController = new AbortController();
+    probeController.current = metadataController;
     const owner = ++importOperation.current;
     const url = URL.createObjectURL(file);
     const video = document.createElement("video");
@@ -125,7 +137,7 @@ export function FrameBoosterPanel(): ReactElement {
         return;
       }
       if (importCleanup.current) importCleanup.current = null;
-      setImportNotice(notice);
+      if (notice !== null) setImportNotice(notice);
       dispose();
     };
     importCleanup.current = dispose;
@@ -144,6 +156,23 @@ export function FrameBoosterPanel(): ReactElement {
     video.src = url;
     timeout = setTimeout(() => finish("Video caricato. I dettagli tecnici verranno rilevati dal backend prima dell’elaborazione."), 8_000);
     video.load();
+    void probeFrameInterpolationSource(file, metadataController.signal).then((metadata) => {
+      if (!mounted.current || importOperation.current !== owner || useProjectStore.getState().project.animation.frameBooster.sourceUrl !== url) return;
+      update({
+        sourceFps: metadata.fps,
+        sourceFrameCount: metadata.frameCount,
+        sourceWidth: metadata.width,
+        sourceHeight: metadata.height,
+        sourceDurationSeconds: metadata.durationSeconds,
+        sourceHasAudio: metadata.hasAudio,
+      });
+      setImportNotice(`Metadati rilevati · ${fpsLabel(metadata.fps)} fps · ${metadata.frameCount} frame · ${metadata.hasAudio ? "audio presente" : "senza audio"}`);
+    }).catch((error) => {
+      if (metadataController.signal.aborted || !mounted.current || importOperation.current !== owner) return;
+      setImportNotice(error instanceof Error ? error.message : String(error));
+    }).finally(() => {
+      if (probeController.current === metadataController) probeController.current = null;
+    });
   };
 
   const runtimeReady = Boolean(capabilities?.ffmpeg);
@@ -159,15 +188,14 @@ export function FrameBoosterPanel(): ReactElement {
     <label className="frame-booster-upload">
       <strong>{settings.sourceName ? "Sostituisci video" : "Scegli un video"}</strong>
       <span>MP4, MOV, WebM, MKV o AVI</span>
-      <input aria-label="Carica video Frame Booster" type="file" accept="video/*,.mkv,.avi" onChange={(event) => {
+      <input aria-label="Carica video Frame Booster" type="file" accept="video/*,.mkv,.avi" onClick={(event) => { event.currentTarget.value = ""; }} onChange={(event) => {
         const file = event.target.files?.[0];
         if (file) upload(file);
-        event.target.value = "";
       }} />
     </label>
     {importError ? <p className="status-error" role="alert">{importError}</p> : null}
     {importNotice ? <p className="muted" role="status">{importNotice}</p> : null}
-    {settings.sourceName ? <div className="frame-booster-source"><strong>{settings.sourceName}</strong><span>{settings.sourceWidth > 0 && settings.sourceHeight > 0 ? `${settings.sourceWidth} × ${settings.sourceHeight}` : "Dimensioni rilevate dal server"}{settings.sourceDurationSeconds > 0 ? ` · ${settings.sourceDurationSeconds.toFixed(2)} s` : ""}{settings.sourceFps ? ` · ${settings.sourceFps.toFixed(3)} fps` : " · FPS rilevati dal server"}</span></div> : null}
+    {settings.sourceName ? <div className="frame-booster-source"><strong>{settings.sourceName}</strong><span>{settings.sourceWidth > 0 && settings.sourceHeight > 0 ? `${settings.sourceWidth} × ${settings.sourceHeight}` : "Dimensioni in rilevamento"}{settings.sourceDurationSeconds > 0 ? ` · ${settings.sourceDurationSeconds.toFixed(2)} s` : ""}{settings.sourceFps ? ` · ${fpsLabel(settings.sourceFps)} fps` : " · rilevamento FPS in corso…"}</span></div> : null}
     <div className="frame-booster-method-control">
       <label>Metodo<select aria-label="Metodo Frame Booster" value={selectedMethod} onChange={(event) => update({ method: event.target.value as FrameInterpolationMethod })}><option value="motion">Motion AOBMC · FFmpeg</option><option value="motion-obmc">Motion OBMC bidirezionale · FFmpeg</option><option value="blend">Frame blend · FFmpeg</option></select></label>
       <div className="frame-booster-method-guide" aria-live="polite">

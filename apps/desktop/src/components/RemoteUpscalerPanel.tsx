@@ -31,6 +31,10 @@ export function RemoteUpscalerPanel({ settings, update }: { settings: Settings; 
   const cacheRequest = useRef<AbortController | null>(null);
   const upscalerBusy = useUpscalerBatchStore((state) => state.running || state.importing || state.singleOperations > 0);
   const remote = settings.remote;
+  const latestSettings = useRef(settings);
+  latestSettings.current = settings;
+  const latestUpdate = useRef(update);
+  latestUpdate.current = update;
   const active = useMemo(() => activeRemoteUpscalerEndpoints(settings), [settings]);
   const activeSignature = active.join("\n");
   const patchRemote = useCallback((patch: Partial<Settings["remote"]>) => update({ remote: { ...remote, ...patch } }), [remote, update]);
@@ -49,28 +53,29 @@ export function RemoteUpscalerPanel({ settings, update }: { settings: Settings; 
   }, [catalog?.models, patchRemote, remote, settings.sourceHeight, settings.sourceWidth, update]);
 
   const discover = useCallback(async () => {
+    const active = activeSignature ? activeSignature.split("\n") : [];
     if (!active.length) { setCatalog(null); setError("Aggiungi e attiva almeno un endpoint."); return; }
     request.current?.abort(); const controller = new AbortController(); request.current = controller; setLoading(true); setError("");
     try {
       const result = await discoverRemoteUpscalerModels(active, controller.signal);
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || activeRemoteUpscalerEndpoints(latestSettings.current).join("\n") !== activeSignature) return;
       setCatalog(result);
       const names = new Set(result.models.map((item) => item.name));
       if (result.models.length) {
-        const modelName = names.has(remote.model) ? remote.model : result.defaultModel || result.models[0]!.name;
+        const current = latestSettings.current;
+        const modelName = names.has(current.remote.model) ? current.remote.model : result.defaultModel || result.models[0]!.name;
         const model = result.models.find((item) => item.name === modelName) ?? result.models[0]!;
-        const dimensions = settings.sourceWidth > 0 && settings.sourceHeight > 0
-          ? resolveUpscalerTarget(settings.sourceWidth, settings.sourceHeight, model.scale)
+        const dimensions = current.sourceWidth > 0 && current.sourceHeight > 0
+          ? resolveUpscalerTarget(current.sourceWidth, current.sourceHeight, model.scale)
           : null;
-        const resolutionChanged = dimensions && (settings.finalWidth !== dimensions.width || settings.finalHeight !== dimensions.height);
-        if (remote.model !== model.name || settings.scale !== model.scale || resolutionChanged) {
-          update({ remote: { ...remote, model: model.name }, scale: model.scale, ...(dimensions ? { finalWidth: dimensions.width, finalHeight: dimensions.height } : {}) });
+        if (current.remote.model !== model.name) {
+          latestUpdate.current({ remote: { ...current.remote, model: model.name }, scale: model.scale, ...(dimensions ? { finalWidth: dimensions.width, finalHeight: dimensions.height } : {}) });
         }
       }
       if (!result.models.length) setError("Gli endpoint raggiungibili non espongono modelli utilizzabili.");
     } catch (reason) { if (!controller.signal.aborted) { setCatalog(null); setError(reason instanceof Error ? reason.message : String(reason)); } }
     finally { if (request.current === controller) { request.current = null; setLoading(false); } }
-  }, [active, remote, settings.finalHeight, settings.finalWidth, settings.scale, settings.sourceHeight, settings.sourceWidth, update]);
+  }, [activeSignature]);
 
   useEffect(() => {
     if (!remote.enabled || !activeSignature) return;

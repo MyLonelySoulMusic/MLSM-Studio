@@ -200,18 +200,6 @@ describe("App", () => {
     expect(screen.queryByRole("button", { name: "Solo prova rapida · elabora il frame corrente" })).not.toBeInTheDocument();
   });
 
-  it("apre l’assistente locale con knowledge base e suggerimenti contestuali", () => {
-    render(<App />);
-    fireEvent.click(screen.getByRole("button", { name: "Apri assistente applicazione" }));
-    const assistant = screen.getByRole("region", { name: "Assistente applicazione" });
-    expect(within(assistant).getByText("Preparazione Qwen2.5 0.5B…")).toBeInTheDocument();
-    expect(within(assistant).getByRole("button", { name: "Cosa puoi fare?" })).toBeInTheDocument();
-    fireEvent.click(within(assistant).getByRole("button", { name: "Modalità attiva" }));
-    expect(within(assistant).getByLabelText("Domanda per l’assistente")).toHaveValue("Come uso bene la modalità Instrumental Falling?");
-    fireEvent.click(within(assistant).getByRole("button", { name: "Chiudi assistente" }));
-    expect(screen.getByRole("button", { name: "Apri assistente applicazione" })).toBeInTheDocument();
-  });
-
   it("alterna la riproduzione con Spazio ma non mentre si scrive", async () => {
     const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
     useAudioStore.getState().setImported({ url: "demo.mp3", waveform: [], metadata: { path: "demo.mp3", fileName: "demo.mp3", hash: "a".repeat(64), durationSeconds: 30, sampleRate: 48_000, channels: 2, codec: "audio/mpeg", fileSize: 1024 } });

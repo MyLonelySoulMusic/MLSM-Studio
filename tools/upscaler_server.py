@@ -289,6 +289,94 @@ def cleanup_interpolation_job(job_id: str, reason: str = "cleanup") -> None:
     log_upscaler_event("backend", "interpolation-job-cleaned", jobId=job_id, workspace=workspace, reason=reason)
 
 
+def _clear_cache_root(root: Path) -> int:
+    """Clear one registered cache root without following links or removing the root."""
+    if root.is_symlink():
+        raise HTTPException(409, "La directory cache è un collegamento simbolico")
+    root.mkdir(parents=True, exist_ok=True)
+    canonical = root.resolve()
+    targets: list[Path] = []
+    for child in root.iterdir():
+        resolved = child.resolve()
+        if child.is_symlink() or resolved.parent != canonical:
+            raise HTTPException(409, "La cache contiene un percorso non sicuro")
+        targets.append(child)
+    removed = sum(_cache_entry_size(path) for path in targets)
+    for path in targets:
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+    return removed
+
+
+def _active_local_cache_jobs() -> dict[str, list[str]]:
+    with video_job_lock:
+        video = [
+            str(job_id) for job_id, item in video_jobs.items()
+            if not item.get("remote") and item.get("phase") not in REMOTE_VIDEO_TERMINAL_PHASES
+        ]
+    with interpolation_job_lock:
+        interpolation = [
+            str(job_id) for job_id, item in interpolation_jobs.items()
+            if item.get("phase") not in REMOTE_VIDEO_TERMINAL_PHASES
+        ]
+    return {"video": video, "interpolation": interpolation}
+
+
+def _require_idle_local_cache() -> None:
+    active = _active_local_cache_jobs()
+    if active["video"] or active["interpolation"]:
+        raise HTTPException(409, detail={
+            "message": "La cache locale non può essere svuotata durante un job Upscaler o Frame Booster.",
+            "videoJobs": active["video"],
+            "interpolationJobs": active["interpolation"],
+        })
+
+
+@app.delete("/cache/upscaler-video-temp")
+def clear_local_video_temp_cache():
+    """Clear completed/orphan local video workspaces while the service stays online."""
+    _require_idle_local_cache()
+    VIDEO_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
+    removed = sum(_cache_entry_size(path) for path in VIDEO_TEMP_ROOT.iterdir())
+    with video_job_lock:
+        completed_video = [
+            str(job_id) for job_id, item in video_jobs.items()
+            if not item.get("remote") and item.get("phase") in REMOTE_VIDEO_TERMINAL_PHASES
+        ]
+    with interpolation_job_lock:
+        completed_interpolation = [
+            str(job_id) for job_id, item in interpolation_jobs.items()
+            if item.get("phase") in REMOTE_VIDEO_TERMINAL_PHASES
+        ]
+    for job_id in completed_video:
+        cleanup_video_job(job_id, "settings-cache-clear")
+    for job_id in completed_interpolation:
+        cleanup_interpolation_job(job_id, "settings-cache-clear")
+    _clear_cache_root(VIDEO_TEMP_ROOT)
+    return {"removedBytes": removed, "path": str(VIDEO_TEMP_ROOT)}
+
+
+@app.delete("/cache/upscaler-models")
+def clear_upscaler_model_cache():
+    """Drop cached Real-ESRGAN models without requiring the service to be stopped."""
+    _require_idle_local_cache()
+    with lock:
+        downloading = [name for name, item in status.items() if item.get("phase") in ("queued", "download")]
+        if downloading:
+            raise HTTPException(409, detail={
+                "message": "Attendi la fine del download dei modelli prima di pulire la cache.",
+                "models": downloading,
+            })
+        loaded.clear()
+        status.clear()
+        removed = _clear_cache_root(CACHE)
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    return {"removedBytes": removed, "path": str(CACHE)}
+
+
 def schedule_video_job_cleanup(job_id: str, delay_seconds: int, reason: str) -> None:
     timer = threading.Timer(delay_seconds, cleanup_video_job, args=(job_id, reason))
     timer.daemon = True
@@ -3013,12 +3101,15 @@ def _interpolation_probe(path: Path, job_id: str | None = None) -> tuple[int, fl
     return frames, fps, duration
 
 
-def _interpolation_media_audit(path: Path, job_id: str | None = None) -> dict[str, object]:
+def _interpolation_media_audit(path: Path, job_id: str | None = None, count_frames: bool = True) -> dict[str, object]:
     """Read the complete source/output contract used by standalone Frame Booster."""
     probe = ffprobe_binary()
     if not probe:
         raise RuntimeError("ffprobe non disponibile: impossibile verificare il file")
-    command = [probe, "-v", "error", "-count_frames", "-show_streams", "-show_format", "-of", "json", str(path)]
+    command = [probe, "-v", "error"]
+    if count_frames:
+        command.append("-count_frames")
+    command.extend(["-show_streams", "-show_format", "-of", "json", str(path)])
     if job_id:
         result = _run_interpolation_subprocess(job_id, command)
     else:
@@ -3030,7 +3121,10 @@ def _interpolation_media_audit(path: Path, job_id: str | None = None) -> dict[st
     if not isinstance(video, dict): raise RuntimeError("Il file non contiene una traccia video")
     rate = str(video.get("avg_frame_rate") or video.get("r_frame_rate") or "0/1"); numerator, denominator = rate.split("/", 1)
     fps = float(numerator) / float(denominator) if float(denominator) else 0.0
-    frames = int(video.get("nb_read_frames") or 0); duration = float(video.get("duration") or payload.get("format", {}).get("duration") or 0)
+    duration = float(video.get("duration") or payload.get("format", {}).get("duration") or 0)
+    frames = int(video.get("nb_read_frames") or video.get("nb_frames") or 0)
+    if frames <= 0 and duration > 0 and fps > 0:
+        frames = max(1, round(duration * fps))
     # Reuse the same rotation/SAR parser used by video ingest. Smartphone files
     # commonly store landscape-coded pixels plus a 90-degree display matrix;
     # comparing raw coded dimensions would reject a correct autorotated output.
@@ -3278,6 +3372,29 @@ async def _stream_upload_limited(file: UploadFile, destination: Path, max_bytes:
     except BaseException:
         destination.unlink(missing_ok=True)
         raise
+
+
+@app.post("/interpolation/probe")
+@app.post("/interpolate/probe")
+async def probe_interpolation_source(file: UploadFile = File(...)):
+    """Read source FPS as soon as a Frame Booster file is selected."""
+    if not ffprobe_binary():
+        raise HTTPException(503, "ffprobe non disponibile nel servizio locale")
+    suffix = Path(file.filename or "source.mp4").suffix.lower()
+    if suffix not in (".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi"):
+        suffix = ".mp4"
+    workspace = Path(tempfile.mkdtemp(prefix="mlsm-frame-probe-"))
+    source = workspace / ("source" + suffix)
+    try:
+        await _stream_upload_limited(file, source)
+        return _interpolation_media_audit(source, count_frames=False)
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(400, str(error)) from error
+    finally:
+        await file.close()
+        shutil.rmtree(workspace, ignore_errors=True)
 
 
 @app.post("/interpolation/jobs")

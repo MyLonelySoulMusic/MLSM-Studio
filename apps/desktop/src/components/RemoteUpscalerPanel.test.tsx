@@ -23,6 +23,18 @@ function Harness() {
 }
 
 describe("RemoteUpscalerPanel", () => {
+  it("preserva il 4K personalizzato durante la verifica del catalogo", async () => {
+    const defaults = createProject().animation.upscaler;
+    const settings = { ...defaults, sourceWidth: 1920, sourceHeight: 1080, finalWidth: 3840, finalHeight: 2160, scale: 2,
+      remote: { ...defaults.remote, enabled: true, model: "x4", endpoints: [{ id: "a", label: "A", url: "https://one.gradio.live", enabled: true }] } };
+    const update = vi.fn();
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify({ ok: true, endpoints: [], models: [{ name: "x4", scale: 4 }], defaultModel: "x4" })));
+    render(<RemoteUpscalerPanel settings={settings} update={update} />);
+    await waitFor(() => expect(screen.getByLabelText("Modello Upscaler remoto")).toHaveValue("x4"));
+    fireEvent.click(screen.getByText("Verifica endpoint e carica modelli"));
+    await waitFor(() => expect(screen.getByText("Verifica endpoint e carica modelli")).toBeEnabled());
+    expect(update).not.toHaveBeenCalled();
+  });
   beforeEach(() => { useUpscalerBatchStore.getState().resetForProjectReplacement(); clearRemoteUpscalerVideoCache.mockResolvedValue({ removedJobs: 0, removedBytes: 0 }); });
   afterEach(() => { cleanup(); useUpscalerBatchStore.getState().resetForProjectReplacement(); clearRemoteUpscalerVideoCache.mockClear(); vi.restoreAllMocks(); });
 

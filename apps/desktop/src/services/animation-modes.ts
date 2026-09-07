@@ -5,8 +5,8 @@ export interface AnimationModeDefinition {
   id: string;
   label: string;
   description: string;
-  generator: "instrumentalFalling" | "newYorkStreets" | "coverSphere" | "stereoUnfold" | "walkingCube" | "portraitLandscape" | "commentsInvasion" | "teddyWalk" | "teddySing" | "proSubtitles" | "pixelsSub" | "backgroundAuto" | "staticWatermark" | "upscaler" | "frameBooster" | "videoEditor" | "songPlayer" | "cassetteDesk" | "overlaySpectral" | "aiQuantizer" | "mlsmPostLipsync";
-  panel: "instrumentalObjects" | "newYorkStreets" | "coverSphere" | "stereoUnfold" | "walkingCube" | "portraitLandscape" | "commentsInvasion" | "teddyWalk" | "teddySing" | "proSubtitles" | "pixelsSub" | "backgroundAuto" | "staticWatermark" | "upscaler" | "frameBooster" | "videoEditor" | "songPlayer" | "cassetteDesk" | "overlaySpectral" | "aiQuantizer" | "mlsmPostLipsync";
+  generator: "instrumentalFalling" | "newYorkStreets" | "coverSphere" | "stereoUnfold" | "walkingCube" | "portraitLandscape" | "commentsInvasion" | "teddyWalk" | "teddySing" | "proSubtitles" | "pixelsSub" | "backgroundAuto" | "staticWatermark" | "upscaler" | "frameBooster" | "videoEditor" | "songPlayer" | "cassetteDesk" | "overlaySpectral" | "aiQuantizer" | "mlsmPostLipsync" | "audioWorkspace";
+  panel: "instrumentalObjects" | "newYorkStreets" | "coverSphere" | "stereoUnfold" | "walkingCube" | "portraitLandscape" | "commentsInvasion" | "teddyWalk" | "teddySing" | "proSubtitles" | "pixelsSub" | "backgroundAuto" | "staticWatermark" | "upscaler" | "frameBooster" | "videoEditor" | "songPlayer" | "cassetteDesk" | "overlaySpectral" | "aiQuantizer" | "mlsmPostLipsync" | "audioWorkspace";
   objectTypes: readonly AnimationModeObjectType[];
   defaultBaseObjectTypes: readonly SceneObjectType[];
 }
@@ -134,7 +134,7 @@ export const animationModes: readonly AnimationModeDefinition[] = [{
 }, {
   id: "frameBooster",
   label: "Frame Booster",
-  description: "Aumenta i fotogrammi di un video con RIFE verificato, MPS Apple, CUDA o filtri FFmpeg senza alterare rapporto, risoluzione o audio.",
+  description: "Aumenta i fotogrammi con metodi FFmpeg selezionabili senza alterare rapporto, risoluzione o audio.",
   generator: "frameBooster",
   panel: "frameBooster",
   objectTypes: [],
@@ -187,13 +187,21 @@ export const animationModes: readonly AnimationModeDefinition[] = [{
   panel: "mlsmPostLipsync",
   objectTypes: [],
   defaultBaseObjectTypes: ["platform"]
+}, {
+  id: "audioWorkspace",
+  label: "Audio",
+  description: "Trascrive audio e video con Whisper, genera SRT/VTT/TXT/JSON, clona voci per Text to Speech e separa la voce dal mix.",
+  generator: "audioWorkspace",
+  panel: "audioWorkspace",
+  objectTypes: [],
+  defaultBaseObjectTypes: ["platform"]
 }];
 
 // La modalità urbana resta leggibile nei vecchi progetti e utilizzabile dai
 // relativi generatori, ma non viene più proposta per crearne di nuovi.
 export const visibleAnimationModes: readonly AnimationModeDefinition[] = animationModes.filter((mode) => mode.id !== "newYorkStreets");
-export type AnimationModeGroupId = "visualizers" | "stories" | "typography" | "restoration" | "editing" | "musicTools" | "lipsyncTools";
-export type AnimationCategoryId = "soundAnimation" | "photoVideoStudio" | "videoEditor" | "music" | "lipsync";
+export type AnimationModeGroupId = "visualizers" | "stories" | "typography" | "restoration" | "editing" | "musicTools" | "lipsyncTools" | "audioTools";
+export type AnimationCategoryId = "soundAnimation" | "photoVideoStudio" | "videoEditor" | "music" | "lipsync" | "audio";
 export interface AnimationModeGroup { id: AnimationModeGroupId; modeIds: readonly string[]; }
 export interface AnimationCategory { id: AnimationCategoryId; groups: readonly AnimationModeGroup[]; }
 
@@ -217,6 +225,9 @@ export const animationCategories: readonly AnimationCategory[] = [{
 }, {
   id: "lipsync",
   groups: [{ id: "lipsyncTools", modeIds: ["mlsmPostLipsync"] }]
+}, {
+  id: "audio",
+  groups: [{ id: "audioTools", modeIds: ["audioWorkspace"] }]
 }];
 export function getAnimationMode(modeId: string): AnimationModeDefinition { return animationModes.find((mode) => mode.id === modeId) ?? animationModes[0]!; }
 export function getAnimationCategory(modeId: string): AnimationCategory { return animationCategories.find((category) => category.groups.some((group) => group.modeIds.includes(modeId))) ?? animationCategories[0]!; }

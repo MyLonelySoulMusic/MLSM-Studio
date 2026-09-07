@@ -1,3 +1,5 @@
+import { trackTask } from "./task-history";
+export function frameInterpolationJob(...args: Parameters<typeof frameInterpolationJobImpl>): ReturnType<typeof frameInterpolationJobImpl> { return trackTask("Frame Booster", () => frameInterpolationJobImpl(...args)); }
 import type { FrameInterpolationMediaAudit } from "./frame-interpolation-audit";
 
 export type FrameInterpolationMethod = "blend" | "motion" | "motion-obmc";
@@ -89,6 +91,31 @@ export async function waitForFrameInterpolationHealth(options: { timeoutMs?: num
   return null;
 }
 
+export async function probeFrameInterpolationSource(file: File, signal?: AbortSignal): Promise<FrameInterpolationMediaAudit> {
+  const form = new FormData();
+  form.set("file", file, file.name || "source.mp4");
+  const response = await fetch(`${frameInterpolationBaseUrl}/interpolation/probe`, { method: "POST", body: form, ...(signal ? { signal } : {}) });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null) as { detail?: unknown } | null;
+    const detail = typeof payload?.detail === "string" ? payload.detail : `HTTP ${response.status}`;
+    throw new Error(`Rilevamento FPS non riuscito: ${detail}`);
+  }
+  const result = await response.json() as Partial<FrameInterpolationMediaAudit>;
+  if (!Number.isFinite(result.fps) || Number(result.fps) <= 0 || !Number.isFinite(result.width) || Number(result.width) <= 0 || !Number.isFinite(result.height) || Number(result.height) <= 0) {
+    throw new Error("Il server non ha restituito metadati video validi.");
+  }
+  return {
+    frameCount: Math.max(0, Math.round(Number(result.frameCount) || 0)),
+    fps: Number(result.fps),
+    durationSeconds: Math.max(0, Number(result.durationSeconds) || 0),
+    width: Math.round(Number(result.width)),
+    height: Math.round(Number(result.height)),
+    hasAudio: Boolean(result.hasAudio),
+    ...(typeof result.sampleAspectRatio === "string" ? { sampleAspectRatio: result.sampleAspectRatio } : {}),
+    ...(Number.isFinite(result.displayAspectRatio) ? { displayAspectRatio: Number(result.displayAspectRatio) } : {}),
+  };
+}
+
 export function resolveFrameInterpolationTarget(sourceFps: number | null | undefined, mode: "multiplier" | "fps", value: number): number | null {
   if (!sourceFps || !Number.isFinite(sourceFps) || sourceFps <= 0) return mode === "fps" && value > 0 ? value : null;
   const target = mode === "multiplier" ? sourceFps * value : value;
@@ -149,7 +176,7 @@ export function createFrameInterpolationFormData(options: Omit<FrameInterpolatio
   return form;
 }
 
-export async function frameInterpolationJob(options: FrameInterpolationRequest): Promise<FrameInterpolationResult> {
+async function frameInterpolationJobImpl(options: FrameInterpolationRequest): Promise<FrameInterpolationResult> {
   if (options.signal.aborted) throw new DOMException("Operazione annullata", "AbortError");
   const clientId = options.clientId ?? globalThis.crypto?.randomUUID?.() ?? `frame-booster-${Date.now()}`;
   const form = createFrameInterpolationFormData(options, clientId);

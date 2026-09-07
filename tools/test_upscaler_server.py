@@ -236,6 +236,18 @@ class FfprobeGeometryTests(unittest.TestCase):
         self.assertEqual(audit["rotation"], 270)
         self.assertAlmostEqual(float(audit["displayAspectRatio"]), 9 / 16)
 
+    def test_fast_interpolation_audit_reads_declared_frames_without_scanning(self) -> None:
+        payload = {"streams": [{
+            "codec_type": "video", "width": 720, "height": 1280,
+            "avg_frame_rate": "30000/1001", "nb_frames": "241", "duration": "8.0417",
+        }], "format": {"duration": "8.0417"}}
+        completed = subprocess.CompletedProcess(["ffprobe"], 0, stdout=json.dumps(payload).encode(), stderr=b"")
+        with mock.patch.object(upscaler_server, "ffprobe_binary", return_value="ffprobe"), mock.patch.object(upscaler_server.subprocess, "run", return_value=completed) as run:
+            audit = _interpolation_media_audit(Path("base.mp4"), count_frames=False)
+        self.assertNotIn("-count_frames", run.call_args.args[0])
+        self.assertEqual(audit["frameCount"], 241)
+        self.assertAlmostEqual(float(audit["fps"]), 30000 / 1001)
+
     @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg/ffprobe non disponibili")
     def test_extraction_uses_post_autorotation_sample_aspect_ratio(self) -> None:
         ffmpeg = str(shutil.which("ffmpeg"))
@@ -1047,6 +1059,102 @@ class RemoteVideoJobPersistenceTests(unittest.TestCase):
                     upscaler_server.remote_manifest_written_revision.update(previous_revisions)
                     upscaler_server.remote_manifest_last_write.clear()
                     upscaler_server.remote_manifest_last_write.update(previous_writes)
+
+    def test_local_temp_cache_can_be_cleared_while_idle_service_stays_online(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="mlsm-local-cache-clear-") as temporary:
+            root = Path(temporary) / "upscaler"
+            root.mkdir()
+            workspace = root / "finished-job"
+            workspace.mkdir()
+            (workspace / "result.mp4").write_bytes(b"video")
+            (root / "orphan.tmp").write_bytes(b"old")
+            record = {"id": "finished-job", "remote": False, "phase": "ready", "tempDirectory": str(workspace)}
+            with upscaler_server.video_job_lock:
+                previous_jobs = dict(upscaler_server.video_jobs)
+                upscaler_server.video_jobs.clear()
+                upscaler_server.video_jobs["finished-job"] = record
+            with upscaler_server.interpolation_job_lock:
+                previous_interpolation = dict(upscaler_server.interpolation_jobs)
+                upscaler_server.interpolation_jobs.clear()
+            try:
+                with mock.patch.object(upscaler_server, "VIDEO_TEMP_ROOT", root), mock.patch.object(upscaler_server, "log_upscaler_event"):
+                    result = upscaler_server.clear_local_video_temp_cache()
+                self.assertEqual(result["removedBytes"], 8)
+                self.assertTrue(root.is_dir())
+                self.assertEqual(list(root.iterdir()), [])
+                with upscaler_server.video_job_lock:
+                    self.assertNotIn("finished-job", upscaler_server.video_jobs)
+            finally:
+                with upscaler_server.video_job_lock:
+                    upscaler_server.video_jobs.clear()
+                    upscaler_server.video_jobs.update(previous_jobs)
+                with upscaler_server.interpolation_job_lock:
+                    upscaler_server.interpolation_jobs.clear()
+                    upscaler_server.interpolation_jobs.update(previous_interpolation)
+
+    def test_local_temp_cache_refuses_an_active_frame_booster_job(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="mlsm-local-cache-active-") as temporary:
+            root = Path(temporary) / "upscaler"
+            root.mkdir()
+            artifact = root / "active.mp4"
+            artifact.write_bytes(b"keep")
+            with upscaler_server.video_job_lock:
+                previous_jobs = dict(upscaler_server.video_jobs)
+                upscaler_server.video_jobs.clear()
+            with upscaler_server.interpolation_job_lock:
+                previous_interpolation = dict(upscaler_server.interpolation_jobs)
+                upscaler_server.interpolation_jobs.clear()
+                upscaler_server.interpolation_jobs["active"] = {"id": "active", "phase": "interpolating"}
+            try:
+                with mock.patch.object(upscaler_server, "VIDEO_TEMP_ROOT", root):
+                    with self.assertRaises(HTTPException) as raised:
+                        upscaler_server.clear_local_video_temp_cache()
+                self.assertEqual(raised.exception.status_code, 409)
+                self.assertTrue(artifact.is_file())
+            finally:
+                with upscaler_server.video_job_lock:
+                    upscaler_server.video_jobs.clear()
+                    upscaler_server.video_jobs.update(previous_jobs)
+                with upscaler_server.interpolation_job_lock:
+                    upscaler_server.interpolation_jobs.clear()
+                    upscaler_server.interpolation_jobs.update(previous_interpolation)
+
+    def test_model_cache_clear_drops_loaded_models_and_preserves_root(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="mlsm-model-cache-clear-") as temporary:
+            root = Path(temporary) / "models"
+            root.mkdir()
+            (root / "weights.pth").write_bytes(b"model")
+            with upscaler_server.video_job_lock:
+                previous_jobs = dict(upscaler_server.video_jobs)
+                upscaler_server.video_jobs.clear()
+            with upscaler_server.interpolation_job_lock:
+                previous_interpolation = dict(upscaler_server.interpolation_jobs)
+                upscaler_server.interpolation_jobs.clear()
+            with upscaler_server.lock:
+                previous_status = dict(upscaler_server.status)
+                previous_loaded = dict(upscaler_server.loaded)
+                upscaler_server.status.clear()
+                upscaler_server.loaded.clear()
+                upscaler_server.loaded[("model", "cpu", 0)] = object()
+            try:
+                with mock.patch.object(upscaler_server, "CACHE", root), mock.patch.object(upscaler_server.torch.cuda, "is_available", return_value=False):
+                    result = upscaler_server.clear_upscaler_model_cache()
+                self.assertEqual(result["removedBytes"], 5)
+                self.assertTrue(root.is_dir())
+                self.assertEqual(list(root.iterdir()), [])
+                self.assertEqual(upscaler_server.loaded, {})
+            finally:
+                with upscaler_server.video_job_lock:
+                    upscaler_server.video_jobs.clear()
+                    upscaler_server.video_jobs.update(previous_jobs)
+                with upscaler_server.interpolation_job_lock:
+                    upscaler_server.interpolation_jobs.clear()
+                    upscaler_server.interpolation_jobs.update(previous_interpolation)
+                with upscaler_server.lock:
+                    upscaler_server.status.clear()
+                    upscaler_server.status.update(previous_status)
+                    upscaler_server.loaded.clear()
+                    upscaler_server.loaded.update(previous_loaded)
 
     def test_stale_manifest_writer_cannot_recreate_cache_after_clear(self) -> None:
         class GateLock:

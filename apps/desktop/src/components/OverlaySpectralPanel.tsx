@@ -11,7 +11,7 @@ export function OverlaySpectralPanel({ onImportAudio }: { onImportAudio: () => v
   const isCurrent = (token: number) => token === operation.current && useProjectStore.getState().project.project.id === projectId;
   const extractMediaPalette = (url: string, type: "image" | "video") => type === "video" ? extractPaletteFromVideo(url) : extractPaletteFromImage(url);
   const loadBackground = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]; event.target.value = ""; if (!file) return;
+    const file = event.target.files?.[0]; if (!file) return;
     const token = ++operation.current; const backgroundMediaType = overlaySpectralBackgroundMediaType(file); setError("");
     try {
       const runtimeOwner = backgroundMediaType === "video" ? registerOverlaySpectralBackground(projectId, file) : null;
@@ -32,7 +32,7 @@ export function OverlaySpectralPanel({ onImportAudio }: { onImportAudio: () => v
   return <section className="overlay-spectral-panel">
     <h2>Overlay Spectral</h2><p className="muted">Adattamento nativo del concetto Winamp/MilkDrop: usa le 48 bande FFT reali di MLSM, resta sincronizzato durante seek ed export e non richiede projectM o componenti Windows.</p>
     <button type="button" onClick={onImportAudio}>Carica brano</button>
-    <label className="flyer-upload">Carica immagine o video di sfondo<input aria-label="Carica sfondo Overlay Spectral" type="file" accept="image/png,image/jpeg,image/webp,video/mp4,video/webm,video/quicktime" onChange={(event) => void loadBackground(event)} /></label>
+    <label className="flyer-upload">Carica immagine o video di sfondo<input aria-label="Carica sfondo Overlay Spectral" type="file" accept="image/png,image/jpeg,image/webp,video/mp4,video/webm,video/quicktime" onClick={(event) => { event.currentTarget.value = ""; }} onChange={(event) => void loadBackground(event)} /></label>
     {settings.backgroundImageUrl ? <>{settings.backgroundMediaType === "video" ? <video className="overlay-spectral-thumbnail" src={settings.backgroundImageUrl} muted preload="metadata" playsInline controls={false} aria-label="Video di sfondo Overlay Spectral" /> : <div className="overlay-spectral-thumbnail" style={{ backgroundImage: `url(${settings.backgroundImageUrl})` }} />}<button type="button" onClick={() => { operation.current += 1; clearOverlaySpectralBackground(); update({ backgroundImageUrl: null, backgroundMediaType: "image" }); }}>Rimuovi sfondo</button></> : null}{error ? <p role="alert">{error}</p> : null}
     <label>Adattamento immagine<select value={settings.backgroundFit} onChange={(event) => update({ backgroundFit: event.target.value as typeof settings.backgroundFit })}><option value="cover">Riempi</option><option value="contain">Mostra intera</option></select></label>
     <label>Oscuramento opzionale: {Math.round(settings.backgroundDim * 100)}%<input aria-label="Oscuramento opzionale sfondo Overlay Spectral" type="range" min="0" max="1" step=".01" value={settings.backgroundDim} onChange={(event) => update({ backgroundDim: Number(event.target.value) })} /></label>

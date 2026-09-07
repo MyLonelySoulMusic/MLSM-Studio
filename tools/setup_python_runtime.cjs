@@ -9,6 +9,7 @@ const runtimes = {
   upscaler: { directory: ".venv", requirements: "requirements-upscaler.txt" },
   "ai-quantizer": { directory: ".venv-ai-quantizer", requirements: "tools/ai-quantizer/requirements.txt" },
   "song-player": { directory: ".venv-song-player", requirements: "tools/song-player/requirements.txt" }
+  ,"audio-tts": { directory: ".venv-audio-tts", requirements: "tools/audio/requirements.txt" }
 };
 
 function venvPython(directory, platform = process.platform) {
@@ -40,7 +41,7 @@ function setup(name, { dryRun = false } = {}) {
   const config = runtimes[name];
   if (!config) throw new Error(`Runtime sconosciuto: ${name}`);
   const isAiq = name === "ai-quantizer";
-  const progressPrefix = isAiq ? "AIQ_PROGRESS" : name === "song-player" ? "SONG_PLAYER_PROGRESS" : null;
+  const progressPrefix = isAiq ? "AIQ_PROGRESS" : name === "song-player" ? "SONG_PLAYER_PROGRESS" : name === "audio-tts" ? "AUDIO_TTS_PROGRESS" : null;
   const progress = (value, message) => { if (progressPrefix) console.log(`[${progressPrefix}] ${value}|${message}`); };
   progress(5, "Verifica di Python 3.11");
   const python = findPython();
@@ -85,6 +86,13 @@ function setup(name, { dryRun = false } = {}) {
     progress(91, "Download e verifica del modello Demucs htdemucs");
     const model = spawnSync(target, ["-c", "from demucs.pretrained import get_model; get_model('htdemucs'); print('Demucs htdemucs pronto')"], { cwd: root, encoding: "utf8", stdio: "inherit" });
     if (model.status !== 0) throw new Error("Il modello Demucs htdemucs non è stato scaricato o verificato.");
+  }
+  if (name === "audio-tts" && !dryRun) {
+    progress(90, "Verifica del motore Chatterbox");
+    const check = spawnSync(target, ["tools/audio/worker.py"], { cwd: root, encoding: "utf8", input: '{"protocolVersion":1,"action":"capabilities"}\n' });
+    const lastLine = check.stdout.trim().split(/\r?\n/).filter(Boolean).at(-1);
+    let capability = null; try { capability = JSON.parse(lastLine); } catch { /* verified below */ }
+    if (check.status !== 0 || capability?.type !== "result" || capability?.result?.ready !== true) throw new Error("Chatterbox non ha superato la verifica del runtime Audio.");
   }
   progress(100, "Ambiente Python pronto");
   console.log(`${name}: ambiente pronto in ${resolve(root, config.directory)}`);

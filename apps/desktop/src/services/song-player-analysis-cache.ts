@@ -2,6 +2,7 @@ import type { SongPlayerAnalysis, SongPlayerSpectrogramCacheRecord } from "./son
 import { openAnalysisDatabase, SONG_PLAYER_ANALYSIS_STORE_NAME } from "./analysis-database";
 
 const fallback = new Map<string, SongPlayerAnalysis>();
+export function resetSongPlayerAnalysisMemoryCache() { fallback.clear(); }
 // v3 deliberately invalidates the former browser-synthesized cache entries:
 // only matrices produced by a real native or browser FFT may use this key.
 export function songPlayerAnalysisCacheKey(hash: string): string { return `song-player:real-fft-v3:${hash}:11025:1024:adaptive:96`; }

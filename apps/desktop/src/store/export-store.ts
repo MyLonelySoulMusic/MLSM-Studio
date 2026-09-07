@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { beginTask } from "../services/task-history";
 import type { ExportProgress, ExportProgressPhase } from "@rbs/export-engine";
 
 interface ExportState {
@@ -44,6 +45,8 @@ const initialProgress = {
   estimatedRemainingMs: 0
 };
 
+let finishHistory: ReturnType<typeof beginTask> | null = null;
+
 export const useExportStore = create<ExportState>((set, get) => ({
   open: false,
   running: false,
@@ -52,7 +55,7 @@ export const useExportStore = create<ExportState>((set, get) => ({
   controller: null,
   show: () => set({ open: true, error: null, ...(get().running ? {} : initialProgress) }),
   hide: () => { if (!get().running) set({ open: false }); },
-  start: (controller) => set({ open: true, running: true, controller, error: null, ...initialProgress }),
+  start: (controller) => { finishHistory?.("interrupted"); finishHistory = beginTask("Video export"); set({ open: true, running: true, controller, error: null, ...initialProgress }); },
   update: (value, currentFrame, totalFrames) => {
     const progress: ExportProgress = typeof value === "number"
       ? { progress: value, currentFrame: currentFrame ?? 0, totalFrames: totalFrames ?? 0, elapsedMs: 0, estimatedRemainingMs: 0 }
@@ -73,7 +76,7 @@ export const useExportStore = create<ExportState>((set, get) => ({
       estimatedRemainingMs: progress.estimatedRemainingMs
     });
   },
-  complete: () => set({ running: false, controller: null, progress: 1, phase: "complete", phaseLabel: null, stageProgress: 1, indeterminate: false }),
-  fail: (error) => set((state) => ({ running: false, controller: null, phase: state.phase === "cancelled" ? "cancelled" : "error", phaseLabel: null, error })),
+  complete: () => { finishHistory?.("completed"); finishHistory = null; set({ running: false, controller: null, progress: 1, phase: "complete", phaseLabel: null, stageProgress: 1, indeterminate: false }); },
+  fail: (error) => { finishHistory?.(get().phase === "cancelled" ? "cancelled" : "failed", error); finishHistory = null; set((state) => ({ running: false, controller: null, phase: state.phase === "cancelled" ? "cancelled" : "error", phaseLabel: null, error })); },
   cancel: () => { get().controller?.abort(); set({ phase: "cancelled", phaseLabel: null }); }
 }));

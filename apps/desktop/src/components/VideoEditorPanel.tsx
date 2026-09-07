@@ -56,7 +56,6 @@ export function VideoEditorPanel() {
 
   const chooseFiles = (event: ChangeEvent<HTMLInputElement>) => {
     const files = [...(event.target.files ?? [])];
-    event.target.value = "";
     void ingest(files);
   };
 
@@ -93,7 +92,7 @@ export function VideoEditorPanel() {
       onDragLeave={() => setDragging(false)}
       onDrop={dropFiles}
     >
-      <label className="video-editor-media-import">{importing ? "Importazione…" : "Importa media"}<input aria-label="Importa media Video Editor" type="file" multiple accept={videoEditorAcceptedFiles} disabled={importing} onChange={chooseFiles} /></label>
+      <label className="video-editor-media-import">{importing ? "Importazione…" : "Importa media"}<input aria-label="Importa media Video Editor" type="file" multiple accept={videoEditorAcceptedFiles} disabled={importing} onClick={(event) => { event.currentTarget.value = ""; }} onChange={chooseFiles} /></label>
       <span>Trascina qui video, immagini o audio</span>
     </div>
     {errors.length ? <ul className="video-editor-errors">{errors.map((message) => <li key={message}>{message}</li>)}</ul> : null}

@@ -1,3 +1,5 @@
+import { trackTask } from "./task-history";
+export function exportUpscalerImage(...args: Parameters<typeof exportUpscalerImageImpl>): ReturnType<typeof exportUpscalerImageImpl> { return trackTask("Upscaler · Image", () => exportUpscalerImageImpl(...args)); }
 import type { RhythmBallProject } from "@rbs/project-schema";
 import { generateAiUpscalerPreview, type ModelLoadProgress } from "./upscaler-ai";
 import { createUpscalerFrameRenderer } from "./upscaler-renderer";
@@ -42,7 +44,7 @@ function assertNotAborted(signal?: AbortSignal): void {
  * batch runner. AI inference is intentionally performed only when an enhanced
  * source was not supplied by the caller.
  */
-export async function exportUpscalerImage(options: UpscalerImageExportOptions): Promise<UpscalerImageExportResult> {
+async function exportUpscalerImageImpl(options: UpscalerImageExportOptions): Promise<UpscalerImageExportResult> {
   const { source, settings, signal, onModelProgress } = options;
   assertNotAborted(signal);
   let aiEnhancedSource = options.aiEnhancedSource ?? null;

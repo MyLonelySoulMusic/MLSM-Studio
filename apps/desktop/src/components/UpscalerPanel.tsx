@@ -141,7 +141,7 @@ export function UpscalerPanel() {
     }
   };
   const importMedia = async (event: ChangeEvent<HTMLInputElement>) => {
-    const files = [...(event.target.files ?? [])]; event.target.value = ""; if (!files.length) return; setImportError("");
+    const files = [...(event.target.files ?? [])]; if (!files.length) return; setImportError("");
     const videos: Array<{ file: File; classification: SupportedUpscalerMediaFile }> = []; const images: Array<{ file: File; classification: SupportedUpscalerMediaFile }> = []; const rejected: string[] = [];
     for (const file of files) {
       const classification = classifyUpscalerMediaFile(file);
@@ -201,7 +201,7 @@ export function UpscalerPanel() {
   const outputMegapixels = settings.finalWidth * settings.finalHeight / 1_000_000;
   const demandingVideoProfile = settings.sourceKind === "video" && Boolean(settings.sourceUrl) && (selectedModel.speed === "slow" || settings.tta || outputMegapixels > 8.4);
   return <section className="upscaler-settings">
-    <h2>Sorgente</h2><label className="flyer-upload">Carica foto o video<input aria-label="Carica sorgente Upscaler" type="file" accept="image/png,image/jpeg,image/webp,image/avif,video/mp4,video/webm,video/quicktime,.m4v" multiple disabled={batchRunning} onChange={(event) => void importMedia(event)} /></label>{importError ? <p className="upscaler-preview-error">{importError}</p> : null}
+    <h2>Sorgente</h2><label className="flyer-upload">Carica foto o video<input aria-label="Carica sorgente Upscaler" type="file" accept="image/png,image/jpeg,image/webp,image/avif,video/mp4,video/webm,video/quicktime,.m4v" multiple disabled={batchRunning} onClick={(event) => { event.currentTarget.value = ""; }} onChange={(event) => void importMedia(event)} /></label>{importError ? <p className="upscaler-preview-error">{importError}</p> : null}
     {settings.sourceUrl ? <div className="subtitle-video-loaded"><strong>{settings.sourceName}</strong><span>{settings.sourceWidth} × {settings.sourceHeight}{settings.sourceKind === "video" ? ` · ${settings.durationSeconds.toFixed(1)} s` : " · immagine"}</span></div> : <p className="muted">Foto e video condividono la stessa pipeline, la stessa correzione colore e la stessa risoluzione finale.</p>}
     <fieldset className="upscaler-global-settings" disabled={batchRunning || batchImporting}>
     <h2>Modalità elaborazione</h2><div className="segmented" role="group" aria-label="Modalità elaborazione Upscaler"><button type="button" className={!settings.remote.enabled ? "active" : ""} aria-pressed={!settings.remote.enabled} onClick={() => update({ remote: { ...settings.remote, enabled: false } })}>Locale</button><button type="button" className={settings.remote.enabled ? "active" : ""} aria-pressed={settings.remote.enabled} onClick={() => update({ remote: { ...settings.remote, enabled: true } })}>Gradio / Colab</button></div>

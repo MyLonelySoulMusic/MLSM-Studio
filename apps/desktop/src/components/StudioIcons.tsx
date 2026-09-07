@@ -15,5 +15,6 @@ export function AreaIcon({ category }: { category: AnimationCategoryId }) {
   if (category === "photoVideoStudio") return <svg viewBox="0 0 64 64" aria-hidden="true"><rect x="9" y="14" width="36" height="36" rx="7" /><path d="m16 42 10-11 8 8 7-6M45 24l10-6v28l-10-6" /><circle cx="23" cy="25" r="4" /></svg>;
   if (category === "music") return <svg viewBox="0 0 64 64" aria-hidden="true"><path d="M24 43V15l27-6v27" /><circle cx="17" cy="45" r="8" /><circle cx="44" cy="38" r="8" /><path d="M24 23l27-6M7 16h8M11 12v8" /></svg>;
   if (category === "lipsync") return <svg viewBox="0 0 64 64" aria-hidden="true"><path d="M10 33c7-10 15-15 22-15s15 5 22 15c-7 9-15 14-22 14S17 42 10 33Z" /><path d="M18 33c5-3 9-4 14-4s9 1 14 4c-5 4-9 6-14 6s-9-2-14-6Z" /><path d="M9 12h15M40 52h15" /></svg>;
+  if (category === "audio") return <svg viewBox="0 0 64 64" aria-hidden="true"><path d="M10 34h8l5-15 8 30 8-37 7 27 4-9h5"/><path d="M8 52h48M14 8v8M50 8v8"/></svg>;
   return <svg viewBox="0 0 64 64" aria-hidden="true"><rect x="7" y="11" width="50" height="42" rx="7" /><path d="M13 22h38M19 22v31M43 22v31M13 34h38M13 44h38" /><circle cx="31" cy="34" r="3" className="icon-fill" /></svg>;
 }

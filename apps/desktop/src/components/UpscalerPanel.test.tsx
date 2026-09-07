@@ -147,7 +147,8 @@ describe("UpscalerPanel source picker", () => {
     });
 
     render(<UpscalerPanel />);
-    fireEvent.change(screen.getByLabelText("Carica sorgente Upscaler"), {
+    const picker = screen.getByLabelText("Carica sorgente Upscaler") as HTMLInputElement;
+    fireEvent.change(picker, {
       target: { files: [new File(["video"], "remote.mp4", { type: "video/mp4" })] },
     });
 
@@ -159,6 +160,7 @@ describe("UpscalerPanel source picker", () => {
       finalWidth: 2564,
       finalHeight: 1436,
     }));
+    expect(picker.files?.[0]?.name).toBe("remote.mp4");
   });
 
   it("disabilita il picker principale durante l'elaborazione batch", () => {

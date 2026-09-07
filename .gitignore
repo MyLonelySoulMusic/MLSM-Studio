@@ -1,4 +1,9 @@
 node_modules/
+.env
+.env.*
+!.env.example
+.mlsm-settings/
+.venv-audio-tts/
 coverage/
 **/dist/
 **/target/

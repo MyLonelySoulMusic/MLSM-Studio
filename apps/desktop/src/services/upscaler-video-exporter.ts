@@ -1,3 +1,5 @@
+import { trackTask } from "./task-history";
+export function processUpscaledVideo(...args: Parameters<typeof processUpscaledVideoImpl>): ReturnType<typeof processUpscaledVideoImpl> { return trackTask("Upscaler · Video", () => processUpscaledVideoImpl(...args)); }
 import type { ExportProgress } from "@rbs/export-engine";
 import type { RhythmBallProject } from "@rbs/project-schema";
 import type { ExportQuality } from "./offline-video-exporter";
@@ -137,7 +139,7 @@ export async function exportUpscaledVideo(
   };
 }
 
-export async function processUpscaledVideo(settings: UpscalerVideoExportSettings, signal: AbortSignal, onProgress: (progress: UpscalerVideoExportProgress) => void): Promise<UpscalerVideoExportResult & { blob: Blob }> {
+async function processUpscaledVideoImpl(settings: UpscalerVideoExportSettings, signal: AbortSignal, onProgress: (progress: UpscalerVideoExportProgress) => void): Promise<UpscalerVideoExportResult & { blob: Blob }> {
   const result = await exportUpscaledVideo({ ...settings, suppressDownload: true }, signal, onProgress);
   if (!result.blob) throw new Error("Upscaler non ha prodotto un artifact video.");
   return result as UpscalerVideoExportResult & { blob: Blob };

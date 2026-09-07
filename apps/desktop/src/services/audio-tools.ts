@@ -1,0 +1,89 @@
+import { trackTask } from "./task-history";
+export function transcribeAudioMedia(...args: Parameters<typeof transcribeAudioMediaImpl>): ReturnType<typeof transcribeAudioMediaImpl> { return trackTask("Audio · Whisper", () => transcribeAudioMediaImpl(...args)); }
+export function createTaggedSpeechScript(...args: Parameters<typeof createTaggedSpeechScriptImpl>): ReturnType<typeof createTaggedSpeechScriptImpl> { return trackTask("Audio · Speech tags", () => createTaggedSpeechScriptImpl(...args)); }
+export function synthesizeSpeech(...args: Parameters<typeof synthesizeSpeechImpl>): ReturnType<typeof synthesizeSpeechImpl> { return trackTask("Audio · Text to speech", () => synthesizeSpeechImpl(...args)); }
+import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import type { ImportedAudio } from "./audio-import";
+import { importVideoFile, loadAudioFromPath } from "./audio-import";
+import { getLocalTextGenerator, localGeneratedAnswer, preferredLocalAssistantModel, runLocalTextGeneration } from "./local-model-runtime";
+import { transcribeMlsmWhisperWords } from "./mlsm-post-lipsync-whisper";
+import type { TimestampedWord, WhisperModelId, WhisperTranscriptDocument } from "./subtitle-generation";
+
+export interface AudioToolMedia { name: string; path: string; url: string; durationSeconds: number; imported: ImportedAudio; browserFile?: File }
+export interface VoiceProfile { id: string; name: string; path: string; createdAtMs: number; browserBlob?: Blob }
+export interface AudioTtsControls { language: string; exaggeration: number; cfgWeight: number; temperature: number }
+export interface AudioJobProgress { progress: number; message: string }
+const TAG_PATTERN = /\[(?:calm|neutral|intense|dramatic|soft|pause\s*=\s*\d+(?:\.\d+)?\s*(?:ms|s)?)\]/gi;
+const SUPPORTED_TAG = /^\[(?:calm|neutral|intense|dramatic|soft|pause\s*=\s*(?:\d+(?:\.\d+)?)\s*(?:ms|s)?)\]$/i;
+
+function chooseBrowserMedia(accept: string): Promise<File | null> { return new Promise(resolve=>{const input=document.createElement("input");input.type="file";input.accept=accept;input.onchange=()=>resolve(input.files?.[0]??null);input.addEventListener("cancel",()=>resolve(null),{once:true});input.click();}); }
+export async function selectAudioToolMedia(): Promise<AudioToolMedia | null> {
+  if (!isTauri()) { const file=await chooseBrowserMedia("audio/*,video/*,.mp3,.wav,.flac,.m4a,.aac,.ogg,.opus,.mp4,.mov,.m4v,.webm,.mkv,.avi");if(!file)return null;const imported=file.type.startsWith("video/")||/\.(mp4|mov|m4v|webm|mkv|avi)$/i.test(file.name)?await importVideoFile(file):await browserAudio(file);return{name:file.name,path:file.name,url:imported.url,durationSeconds:imported.metadata.durationSeconds,imported,browserFile:file}; }
+  const path=await open({multiple:false,filters:[{name:"Audio o video",extensions:["mp3","wav","flac","m4a","aac","ogg","opus","mp4","mov","m4v","webm","mkv","avi"]}]});if(typeof path!=="string")return null;const imported=await loadAudioFromPath(path);return{name:path.split(/[\\/]/).at(-1)??path,path,url:convertFileSrc(path),durationSeconds:imported.metadata.durationSeconds,imported};
+}
+async function browserAudio(file: File): Promise<ImportedAudio> { const bytes=await file.arrayBuffer();const context=new AudioContext();try{const decoded=await context.decodeAudioData(bytes.slice(0));const data=decoded.getChannelData(0);const step=Math.max(1,Math.ceil(data.length/1024));const waveform=[] as number[];for(let offset=0;offset<data.length;offset+=step){let peak=0;for(let i=offset;i<Math.min(data.length,offset+step);i++)peak=Math.max(peak,Math.abs(data[i]??0));waveform.push(peak);}const hash=Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",bytes.slice(0))),value=>value.toString(16).padStart(2,"0")).join("");return{metadata:{path:file.name,fileName:file.name,hash,durationSeconds:decoded.duration,sampleRate:decoded.sampleRate,channels:decoded.numberOfChannels,codec:file.type||"audio",fileSize:file.size},waveform,url:URL.createObjectURL(file)};}finally{await context.close();} }
+
+async function transcribeAudioMediaImpl(media: AudioToolMedia, options: { language: string; model: WhisperModelId; signal?: AbortSignal; onProgress: (value: AudioJobProgress) => void }): Promise<WhisperTranscriptDocument> { return transcribeMlsmWhisperWords({media:{path:media.path,url:media.url,fileName:media.name,durationSeconds:media.durationSeconds},range:{startSeconds:0,endSeconds:media.durationSeconds},language:options.language,model:options.model,role:"source",...(options.signal?{signal:options.signal}:{}),onProgress:(progress,message)=>options.onProgress({progress:progress??0,message})}); }
+
+const normalizedWords=(value:string)=>value.toLocaleLowerCase().match(/[\p{L}\p{N}']+/gu)??[];
+
+/**
+ * Applies corrected display words without destroying Whisper's measured clock.
+ * When the word count is unchanged every start/end pair remains byte-for-byte
+ * identical. Insertions or removals use interpolation only for the affected
+ * target boundaries and are explicitly marked as estimated.
+ */
+export function retimeReferenceWords(document: WhisperTranscriptDocument, tokens: readonly string[]): Pick<WhisperTranscriptDocument,"words"|"phrases"> {
+  if (!tokens.length || !document.words.length) return { words: document.words, phrases: document.phrases };
+  let words: TimestampedWord[];
+  if (tokens.length === document.words.length) {
+    words = tokens.map((text,index)=>({ ...document.words[index]!, text }));
+  } else {
+    const source=document.words;const sourceCount=source.length;const targetCount=tokens.length;
+    const boundary=(position:number):number=>{
+      if(position<=0)return source[0]!.start;if(position>=targetCount)return source[sourceCount-1]!.end;
+      const sourcePosition=position*sourceCount/targetCount;const left=Math.floor(sourcePosition);const fraction=sourcePosition-left;
+      if(left<=0)return source[0]!.start+(source[0]!.end-source[0]!.start)*fraction;
+      if(left>=sourceCount)return source[sourceCount-1]!.end;
+      const before=source[left-1]!.end;const after=source[left]!.start;return before+(after-before)*fraction;
+    };
+    words=tokens.map((text,index)=>({text,start:boundary(index),end:Math.max(boundary(index)+.001,boundary(index+1)),confidence:source[Math.min(sourceCount-1,Math.floor((index+.5)*sourceCount/targetCount))]!.confidence,confidenceSource:"estimated"}));
+  }
+  const phrases=document.phrases.map((phrase,index)=>{
+    const selected=words.filter(word=>{const midpoint=(word.start+word.end)/2;return midpoint>=phrase.start&&(index===document.phrases.length-1?midpoint<=phrase.end:midpoint<phrase.end);});
+    return {...phrase,text:selected.map(word=>word.text).join(" ").trim()||phrase.text};
+  });
+  return {words,phrases};
+}
+
+export async function correctAudioTranscript(document: WhisperTranscriptDocument, reference: string, onProgress: (message: string)=>void): Promise<WhisperTranscriptDocument> {
+  const source=reference.replace(/\s+/g," ").trim();if(!source)return document;const expected=normalizedWords(source);if(!expected.length)throw new Error("Il testo originale non contiene parole utilizzabili.");
+  const generator=await getLocalTextGenerator(preferredLocalAssistantModel,onProgress);let accepted="";
+  for(let attempt=1;attempt<=3;attempt+=1){onProgress(`LLM locale · verifica testo ${attempt}/3`);const output=await runLocalTextGeneration(generator,[{role:"system",content:"You are a transcript editor. Return only JSON {\"text\":\"...\"}. Preserve every word from REFERENCE exactly, including repetitions and order. Correct only punctuation and capitalization. Never add or remove words."},{role:"user",content:`REFERENCE:\n${source}\n\nWHISPER:\n${document.transcript}`}],{max_new_tokens:Math.min(2048,expected.length*5+64),temperature:0,do_sample:false},60_000);const raw=localGeneratedAnswer(output);try{const parsed=JSON.parse(raw.match(/\{[\s\S]*\}/)?.[0]??raw) as {text?:unknown};if(typeof parsed.text==="string"&&normalizedWords(parsed.text).join("|")===expected.join("|")){accepted=parsed.text.trim();break;}}catch{/* retry */}}
+  if(!accepted)accepted=source;
+  const tokens=accepted.match(/[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)?[.,!?;:]?/gu)??expected;const timing=retimeReferenceWords(document,tokens);
+  return{...document,transcript:accepted,...timing};
+}
+
+function clock(value:number,separator:string){const ms=Math.max(0,Math.round(value*1000));const h=Math.floor(ms/3600000);const m=Math.floor(ms%3600000/60000);const s=Math.floor(ms%60000/1000);const tail=ms%1000;return`${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}${separator}${String(tail).padStart(3,"0")}`;}
+export function transcriptAsSrt(document:WhisperTranscriptDocument){return document.phrases.map((phrase,index)=>`${index+1}\n${clock(phrase.start,",")} --> ${clock(phrase.end,",")}\n${phrase.text}`).join("\n\n");}
+export function transcriptAsVtt(document:WhisperTranscriptDocument){return`WEBVTT\n\n${document.phrases.map(phrase=>`${clock(phrase.start,".")} --> ${clock(phrase.end,".")}\n${phrase.text}`).join("\n\n")}`;}
+export function downloadAudioText(name:string,value:string,type:string){const url=URL.createObjectURL(new Blob([value],{type}));const link=document.createElement("a");link.href=url;link.download=name;link.click();setTimeout(()=>URL.revokeObjectURL(url),10_000);}
+
+function stripTags(value:string){return value.replace(TAG_PATTERN,"").replace(/\s+/g," ").trim();}
+function validTaggedText(tagged:string,original:string){const tags=tagged.match(/\[[^\]]+\]/g)??[];return tags.every(tag=>SUPPORTED_TAG.test(tag))&&normalizedWords(stripTags(tagged)).join("|")===normalizedWords(original).join("|");}
+async function createTaggedSpeechScriptImpl(text:string,direction:string,onProgress:(message:string)=>void):Promise<string>{if(!text.trim())throw new Error("Inserisci prima il testo da leggere.");if(!direction.trim())throw new Error("Descrivi come deve essere letto il testo.");const generator=await getLocalTextGenerator(preferredLocalAssistantModel,onProgress);let previous="";for(let attempt=1;attempt<=3;attempt+=1){onProgress(`Regia vocale LLM · controllo ${attempt}/3`);const output=await runLocalTextGeneration(generator,[{role:"system",content:"Add MLSM speech tags to the provided text. Allowed tags only: [calm], [neutral], [intense], [dramatic], [soft], [pause=NUMBERs], [pause=NUMBERms]. Never change, remove, reorder, repeat, or add a spoken word. Return only the tagged text."},{role:"user",content:`DIRECTION: ${direction}\nTEXT: ${text}${previous?`\nINVALID PREVIOUS VERSION: ${previous}\nFix it.`:""}`}],{max_new_tokens:Math.min(3072,text.length*2+128),temperature:.15,do_sample:false},60_000);const candidate=localGeneratedAnswer(output).replace(/^```(?:text)?\s*|\s*```$/g,"").trim();if(validTaggedText(candidate,text))return candidate;previous=candidate;}throw new Error("Il controllo ha rifiutato tre versioni perché alteravano il testo o contenevano tag non supportati.");}
+
+type NativeRuntime={status:"idle"|"installing"|"ready"|"failed";progress:number;message:string;error:string|null;ready:boolean};type NativeJob={jobId:string;status:string;progress:number;message:string;result?:Record<string,unknown>|null;error?:string|null};
+const wait=(ms:number,signal?:AbortSignal)=>new Promise<void>((resolve,reject)=>{const timer=setTimeout(resolve,ms);signal?.addEventListener("abort",()=>{clearTimeout(timer);reject(new DOMException("Operazione annullata","AbortError"));},{once:true});});
+async function ensureTtsRuntime(signal:AbortSignal|undefined,onProgress:(value:AudioJobProgress)=>void){if(isTauri()){let state=await invoke<NativeRuntime>("audio_ensure_tts_runtime");while(!state.ready){if(state.status==="failed")throw new Error(state.error??state.message);onProgress({progress:state.progress/100,message:state.message});await wait(700,signal);state=await invoke<NativeRuntime>("audio_get_tts_runtime");}return;}let response=await fetch("/__mlsm/audio-tools/ensure",{method:"POST",...(signal?{signal}:{})});if(!response.ok&&response.status!==202)throw new Error(`Preparazione TTS fallita (HTTP ${response.status}).`);let state=await response.json() as NativeRuntime;while(!state.ready){if(state.status==="failed")throw new Error(state.error??state.message);onProgress({progress:state.progress/100,message:state.message});await wait(700,signal);response=await fetch("/__mlsm/audio-tools/status",signal?{signal}:undefined);if(!response.ok)throw new Error(`Lettura runtime TTS fallita (HTTP ${response.status}).`);state=await response.json() as NativeRuntime;}}
+async function synthesizeSpeechImpl(input:{text:string;voice:VoiceProfile;controls:AudioTtsControls;signal?:AbortSignal;onProgress:(value:AudioJobProgress)=>void}):Promise<{path:string;url:string}>{await ensureTtsRuntime(input.signal,input.onProgress);if(isTauri()){const request={referencePath:input.voice.path,text:input.text,...input.controls};let job:NativeJob|undefined;try{job=await invoke<NativeJob>("audio_start_tts",{request});while(job.status==="queued"||job.status==="running"){input.onProgress({progress:job.progress,message:job.message});await wait(350,input.signal);job=await invoke<NativeJob>("audio_get_job",{jobId:job.jobId});}if(job.status!=="completed"||typeof job.result?.path!=="string")throw new Error(job.error??"Sintesi Text to Speech fallita.");return{path:job.result.path,url:convertFileSrc(job.result.path)};}catch(error){if(job&&(input.signal?.aborted||(error instanceof DOMException&&error.name==="AbortError")))await invoke("audio_cancel_job",{jobId:job.jobId}).catch(()=>undefined);throw error;}}const voiceBlob=input.voice.browserBlob;if(!voiceBlob)throw new Error("Ricarica la voce salvata in questa sessione.");const sessionResponse=await fetch("/__mlsm/audio-tools/tts/session",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:input.text,...input.controls}),...(input.signal?{signal:input.signal}:{})});const session=await sessionResponse.json() as {uploadId?:string;error?:string};if(!sessionResponse.ok||!session.uploadId)throw new Error(session.error??"Sessione TTS non disponibile.");input.onProgress({progress:.45,message:"Generazione Chatterbox Multilingual"});const resultResponse=await fetch(`/__mlsm/audio-tools/tts/upload/${session.uploadId}`,{method:"POST",body:voiceBlob,...(input.signal?{signal:input.signal}:{})});const result=await resultResponse.json() as {path?:string;error?:string};if(!resultResponse.ok||!result.path)throw new Error(result.error??"Sintesi fallita.");return{path:result.path,url:result.path};}
+
+const browserVoices=new Map<string,VoiceProfile>();
+function voiceDatabase():Promise<IDBDatabase|null>{if(typeof indexedDB==="undefined")return Promise.resolve(null);return new Promise((resolve,reject)=>{const request=indexedDB.open("mlsm-audio-voices",1);request.onupgradeneeded=()=>{if(!request.result.objectStoreNames.contains("voices"))request.result.createObjectStore("voices",{keyPath:"id"});};request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});}
+async function browserVoiceTransaction<T>(mode:IDBTransactionMode,work:(store:IDBObjectStore,resolve:(value:T)=>void,reject:(reason?:unknown)=>void)=>void):Promise<T>{const database=await voiceDatabase();if(!database)throw new Error("Archivio voci del browser non disponibile.");return new Promise<T>((resolve,reject)=>{const transaction=database.transaction("voices",mode);work(transaction.objectStore("voices"),resolve,reject);transaction.onerror=()=>reject(transaction.error);transaction.oncomplete=()=>database.close();});}
+export async function listVoiceProfiles():Promise<VoiceProfile[]>{if(isTauri())return invoke("audio_list_voices");try{const voices=await browserVoiceTransaction<VoiceProfile[]>("readonly",(store,resolve,reject)=>{const request=store.getAll();request.onsuccess=()=>resolve(request.result as VoiceProfile[]);request.onerror=()=>reject(request.error);});voices.forEach(voice=>browserVoices.set(voice.id,voice));return voices.sort((a,b)=>b.createdAtMs-a.createdAtMs);}catch{return[...browserVoices.values()];}}
+export async function saveVoiceProfile(name:string,media:AudioToolMedia):Promise<VoiceProfile>{if(!name.trim())throw new Error("Assegna un nome alla voce.");if(isTauri())return invoke("audio_save_voice",{name,sourcePath:media.path});let blob:Blob;if(media.browserFile)blob=media.browserFile;else{const response=await fetch(media.url);if(!response.ok)throw new Error("Impossibile leggere la voce di riferimento.");blob=await response.blob();}const voice:VoiceProfile={id:`voice-${Date.now()}`,name:name.trim(),path:media.name,createdAtMs:Date.now(),browserBlob:blob};browserVoices.set(voice.id,voice);try{await browserVoiceTransaction<void>("readwrite",(store,resolve,reject)=>{const request=store.put(voice);request.onsuccess=()=>resolve();request.onerror=()=>reject(request.error);});}catch{/* in-memory session remains usable */}return voice;}
+export async function deleteVoiceProfile(id:string):Promise<void>{if(isTauri())await invoke("audio_delete_voice",{voiceId:id});else{browserVoices.delete(id);try{await browserVoiceTransaction<void>("readwrite",(store,resolve,reject)=>{const request=store.delete(id);request.onsuccess=()=>resolve();request.onerror=()=>reject(request.error);});}catch{/* already removed from session */}}}
+export async function exportAudioArtifact(path:string,url:string,fileName="mlsm-speech.wav"):Promise<void>{if(isTauri()){const destination=await save({defaultPath:fileName,filters:[{name:"WAV",extensions:["wav"]}]});if(typeof destination==="string")await invoke("audio_copy_artifact",{sourcePath:path,destinationPath:destination});return;}const link=document.createElement("a");link.href=url;link.download=fileName;link.click();}

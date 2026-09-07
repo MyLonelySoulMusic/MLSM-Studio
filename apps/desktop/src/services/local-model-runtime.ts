@@ -35,6 +35,21 @@ interface ModelEnvironment {
   allowLocalModels: boolean;
   useBrowserCache: boolean;
   localModelPath: string;
+  backends?: { onnx?: { wasm?: { numThreads?: number; proxy?: boolean } } };
+}
+
+export const localModelMaximumCpuThreads = 2;
+
+export function configureLocalModelCpu(environment: ModelEnvironment, logicalCores = typeof navigator === "undefined" ? localModelMaximumCpuThreads : navigator.hardwareConcurrency): number {
+  const wasm = environment.backends?.onnx?.wasm;
+  if (!wasm) return 0;
+  const available = Number.isFinite(logicalCores) ? Math.max(1, Math.floor(logicalCores)) : localModelMaximumCpuThreads;
+  const threads = Math.min(localModelMaximumCpuThreads, Math.max(1, Math.floor(available / 2)));
+  wasm.numThreads = threads;
+  // ONNX Runtime runs WASM inference in a worker so a fallback cannot freeze
+  // the WebView UI thread while it is consuming its bounded CPU allowance.
+  wasm.proxy = true;
+  return threads;
 }
 
 function configureModelDownloads(environment: ModelEnvironment): void {
@@ -43,6 +58,7 @@ function configureModelDownloads(environment: ModelEnvironment): void {
   environment.allowLocalModels = persistentDevelopmentCache;
   environment.localModelPath = persistentDevelopmentCache ? "/__local-models/" : "/models/";
   environment.useBrowserCache = !persistentDevelopmentCache && typeof caches !== "undefined";
+  configureLocalModelCpu(environment);
 }
 
 function setLocalModelStatus(model: string, phase: LocalModelPhase, message: string, progress?: (message: string) => void): void {

@@ -39,6 +39,18 @@ describe("ProSubtitles UI", () => {
     expect(screen.getByRole("button", { name: "16:9 orizzontale" })).toHaveAttribute("aria-pressed", "false");
   });
 
+  it("conserva il video nel picker dopo la selezione", () => {
+    const onImportVideo = vi.fn(async () => undefined);
+    render(<ProSubtitlesPanel duration={0} selectedSubtitleId={null} onSelectSubtitle={vi.fn()} onImportVideo={onImportVideo} />);
+    const picker = screen.getByLabelText("Carica video ProSubtitles") as HTMLInputElement;
+    const file = new File(["video"], "guide.mp4", { type: "video/mp4" });
+
+    fireEvent.change(picker, { target: { files: [file] } });
+
+    expect(onImportVideo).toHaveBeenCalledWith(file);
+    expect(picker.files?.[0]).toBe(file);
+  });
+
   it("offre Whisper e la redazione Qwen accanto all'import SRT", () => {
     render(<ProSubtitlesPanel audioUrl="blob:guide" duration={8} selectedSubtitleId={null} onSelectSubtitle={vi.fn()} onImportVideo={vi.fn(async () => undefined)} />);
     const whisper = screen.getByRole("combobox", { name: "Modello Whisper ProSubtitles" });

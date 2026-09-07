@@ -22,7 +22,7 @@ export function CommentsInvasionPanel({ onImportVideo }: { onImportVideo: (file:
   return <section className="comments-invasion-settings">
     <div className="vocal-track-advice"><strong>Timbri deterministici, nessun commento perso</strong><span>La cartella viene ordinata naturalmente per nome. Preview ed export usano la stessa sequenza: quando entra il sesto commento, il primo viene rimosso nello stesso frame.</span></div>
     <h2>Video sorgente</h2>
-    <label className="flyer-upload">Carica video<input aria-label="Carica video Comments Invasion" type="file" accept="video/mp4,video/webm,video/quicktime,.m4v" onChange={(event) => { const file = event.target.files?.[0]; if (file) void onImportVideo(file); event.target.value = ""; }} /></label>
+    <label className="flyer-upload">Carica video<input aria-label="Carica video Comments Invasion" type="file" accept="video/mp4,video/webm,video/quicktime,.m4v" onClick={(event) => { event.currentTarget.value = ""; }} onChange={(event) => { const file = event.target.files?.[0]; if (file) void onImportVideo(file); }} /></label>
     {settings.videoUrl ? <div className="subtitle-video-loaded"><strong>{settings.videoName}</strong><span>{settings.videoWidth} × {settings.videoHeight} · rapporto sorgente preservato · {settings.videoHasAudio ? "audio originale" : "senza audio"}</span></div> : <p className="muted">Sono accettati video verticali, orizzontali, quadrati e rapporti personalizzati.</p>}
 
     <h2>Cartella commenti</h2>

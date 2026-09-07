@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { localModelErrorMessage, modelProgressMessage, remoteModelRepository } from "./local-model-runtime";
+import { configureLocalModelCpu, localModelErrorMessage, localModelMaximumCpuThreads, modelProgressMessage, remoteModelRepository } from "./local-model-runtime";
 
 describe("runtime modelli locali", () => {
   it("risolve Whisper e Qwen verso repository ONNX remoti espliciti", () => {
@@ -25,5 +25,14 @@ describe("runtime modelli locali", () => {
     expect(localModelErrorMessage(new TypeError("fetch failed"))).toMatch(/model download failed.*network/i);
     expect(localModelErrorMessage(new Error("Unexpected token 'e', \"fetch failed\" is not valid JSON"))).toMatch(/model download failed.*network/i);
     expect(localModelErrorMessage(new Error("network unavailable"))).toBe("network unavailable");
+  });
+
+  it("limita il fallback WASM e lo sposta fuori dal thread dell'interfaccia", () => {
+    const wasm: { numThreads?: number; proxy?: boolean } = {};
+    const environment = { allowRemoteModels: true, allowLocalModels: false, useBrowserCache: true, localModelPath: "/models/", backends: { onnx: { wasm } } };
+    expect(configureLocalModelCpu(environment, 12)).toBe(localModelMaximumCpuThreads);
+    expect(wasm).toMatchObject({ numThreads: 2, proxy: true });
+    expect(configureLocalModelCpu(environment, 2)).toBe(1);
+    expect(wasm.numThreads).toBe(1);
   });
 });

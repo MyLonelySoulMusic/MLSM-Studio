@@ -8,10 +8,16 @@ export interface ApplicationHelpArticle {
 
 export const applicationHelpKnowledgeBase: readonly ApplicationHelpArticle[] = [{
   id: "assistant-introduction",
-  title: "Presentazione di Studio Bot",
+  title: "Presentazione di Lonely Bot",
   modeIds: [],
   keywords: ["ciao", "salve", "buongiorno", "presentati", "chi sei", "cosa fai", "cosa puoi fare", "aiuto", "help", "funzioni"],
-  content: "Studio Bot è la guida locale di MLSM Studio (My Lonely Soul Music Studio). Può spiegare come iniziare un progetto, usare la modalità attiva e i suoi controlli, importare e analizzare audio, lavorare con timeline e sottotitoli, configurare scene e palette, risolvere problemi documentati ed esportare il risultato. Per ricevere una risposta precisa, indica cosa vuoi ottenere, la modalità che stai usando oppure il punto in cui sei bloccato. Studio Bot fornisce istruzioni ma non modifica direttamente il progetto."
+  content: "Lonely Bot è l’assistente AI locale di MLSM Studio. Conosce la pagina corrente, i controlli visibili e la documentazione delle aree. Può spiegare ogni passaggio, proporre con un pulsante la pagina corretta e, per Upscaler e Frame Booster, verificare gli allegati, mostrare le opzioni, avviare il lavoro e restituire il download con avanzamento in chat. La documentazione è recuperata da un database vettoriale locale e nessuna domanda viene inviata online."
+}, {
+  id: "studio-home",
+  title: "Home · scelta delle aree di MLSM Studio",
+  modeIds: ["studioHome"],
+  keywords: ["home", "pagina", "questa", "qui", "cosa", "contiene", "schermata", "aree", "scegli", "seleziona"],
+  content: "Questa è la Home di MLSM Studio: serve a scegliere l’area di lavoro, quindi qui non è ancora aperto un progetto operativo. Le sei schede centrali aprono Sound Animation per visualizer e animazioni musicali, Photo & Video Studio per restauro, rimozione watermark, upscaling e Frame Booster, Video Editor per il montaggio multitraccia, Music per produzione e quantizzazione, Lipsync per riallineare il labiale e Audio per Whisper, sottotitoli e separazione della voce. Premi una scheda per entrare nella relativa area. In alto trovi Memory per catalogare e ritrovare file, Supportami, la scelta IT/EN e il selettore Giorno/Notte. Lonely Bot resta disponibile in basso a destra per spiegarti le aree o portarti direttamente alla funzione corretta."
 }, {
   id: "quick-start",
   title: "Primo progetto: flusso consigliato",
@@ -32,10 +38,10 @@ export const applicationHelpKnowledgeBase: readonly ApplicationHelpArticle[] = [
   content: "Il pulsante Memory nella barra superiore è disponibile dalla Home e da ogni area di lavoro. In Costruisci memoria seleziona uno o più file oppure una cartella: le cartelle vengono lette ricorsivamente, puoi aggiungere una descrizione comune, tag, categorie personalizzate e una descrizione specifica per ogni elemento. La cartella di appartenenza diventa automaticamente una categoria. MLSM salva nel database vettoriale locale percorso, metadati, descrizioni, categorie e un vettore semantico; i file originali non vengono caricati online né duplicati. In Trova memoria puoi cercare con una frase naturale, filtrare per tipo o categoria e ricevere risultati ordinati per pertinenza. Seleziona un risultato per vedere immagine, video, audio, PDF o testo; passa alla vista Grafo relazioni per esplorare categorie, cartelle e affinità, usando trascinamento e zoom. Seleziona uno o più risultati e premi Copia selezionati per scegliere una cartella di destinazione: i file esistenti non vengono sovrascritti. Se un file viene spostato o eliminato fuori da MLSM, il record resta ricercabile ma l’anteprima segnala che il percorso non è più disponibile.",
 }, {
   id: "studio-assistant",
-  title: "Assistente Studio e memoria locale",
+  title: "Lonely Bot, azioni e memoria locale",
   modeIds: [],
-  keywords: ["assistente", "chat", "chatbot", "studio bot", "caricamento", "risponde", "memoria", "azzera", "smollm", "knowledge base"],
-  content: "Apri Guida in basso a destra: l’apertura prepara subito Qwen2.5 0.5B e lo stato sotto Assistente Studio indica cache, backend WebGPU/WASM e disponibilità. Saluti, ringraziamenti e presentazione ricevono subito una risposta conversazionale locale e non vengono sottoposti al validatore tecnico. Per le domande sull’app, se Qwen è ancora in preparazione, supera il tempo limite, non è disponibile oppure produce una risposta non aderente ai fatti, Studio Bot usa la knowledge base senza restare bloccato; sotto ogni risposta viene mostrato il motivo preciso, non una generica etichetta fallback. La ricerca non seleziona la guida della modalità attiva se la domanda non contiene un argomento pertinente. Studio Bot può guidare avvio progetto, modalità attiva, audio, timeline, sottotitoli, problemi ed esportazione. Dopo ogni scambio il programma conserva sul dispositivo un riepilogo compatto delle richieste e delle indicazioni recenti, così comprende domande collegate senza accumulare tutta la cronologia. Il contatore Memoria indica i turni conservati. Premi Azzera memoria per cancellare riepilogo e messaggi visibili. Nessuna domanda viene inviata online."
+  keywords: ["assistente", "chat", "chatbot", "lonely bot", "allegati", "caricamento", "risponde", "memoria", "azzera", "vector database", "knowledge base"],
+  content: "Apri Lonely Bot in basso a destra. L’assistente rileva pagina, pulsanti, campi e menu attualmente visibili e recupera le guide pertinenti dal database vettoriale locale prima di interrogare Qwen2.5. Il pulsante graffetta accetta più file e mostra gli allegati rimovibili. Se chiedi un Upscaler o Frame Booster, Lonely Bot controlla tipo e quantità dei file, espone le opzioni che restano facoltative, chiede conferma con Avvia, mostra fase e percentuale e infine offre Scarica. Se la funzione è altrove, propone Apri seguito dal nome dell’area e naviga realmente dopo il clic. Azzera memoria elimina riepilogo e messaggi; file e domande non vengono inviati online."
 }, {
   id: "audio-analysis",
   title: "Importazione e analisi del brano",
@@ -101,13 +107,13 @@ export const applicationHelpKnowledgeBase: readonly ApplicationHelpArticle[] = [
   title: "Modalità Upscaler",
   modeIds: ["upscaler"],
   keywords: ["upscaler", "real esrgan", "risoluzione", "4k", "8k", "cuda", "metal", "webgpu", "foto", "video", "nitidezza"],
-  content: "Apri Photo & Video Studio e scegli Upscaler. Carica una foto o un video, quindi seleziona il modello: x4plus per scene reali e massimo dettaglio, x2plus per un aumento naturale 2×, RealESRNet per un risultato conservativo, Anime 6B per illustrazioni, General x4v3 per velocità e poca memoria oppure AnimeVideo v3 per animazione 2D. I checkpoint PyTorch funzionano anche nella web app mediante il servizio locale: esegui una sola volta npm run upscaler:setup e, quando serve, npm run upscaler:server in un terminale separato. Automatico usa prima MPS/Metal su Apple Silicon, CUDA su NVIDIA, poi WebGPU o CPU; puoi forzare il motore e regolare tile e TTA. Imposta liberamente la risoluzione finale o usa Full HD, QHD, 4K e 8K. Prima/dopo, vista singola e fusione confrontano sempre originale e migliorato alla stessa dimensione. Sono disponibili esposizione, contrasto, luci, ombre, bianchi, neri, saturazione, vividezza, temperatura, tinta, nitidezza e denoise. Le immagini escono in PNG; i video vengono elaborati offline conservando timestamp, VFR e audio e vengono consegnati soltanto dopo il controllo anti-frame-drop."
+  content: "Apri Photo & Video Studio e scegli Upscaler. Carica una foto o un video, quindi seleziona il modello: x4plus per scene reali e massimo dettaglio, x2plus per un aumento naturale 2×, RealESRNet per un risultato conservativo, Anime 6B per illustrazioni, General x4v3 per velocità e poca memoria oppure AnimeVideo v3 per animazione 2D. Il servizio locale viene avviato automaticamente dall’app e i checkpoint necessari vengono preparati al primo utilizzo, con stato e avanzamento visibili: non servono comandi manuali. Automatico usa prima MPS/Metal su Apple Silicon, CUDA su NVIDIA, poi WebGPU o CPU; puoi forzare il motore e regolare tile e TTA. Imposta liberamente la risoluzione finale o usa Full HD, QHD, 4K e 8K. Prima/dopo, vista singola e fusione confrontano sempre originale e migliorato alla stessa dimensione. Sono disponibili esposizione, contrasto, luci, ombre, bianchi, neri, saturazione, vividezza, temperatura, tinta, nitidezza e denoise. Le immagini escono in PNG; i video vengono elaborati offline conservando timestamp, VFR e audio e vengono consegnati soltanto dopo il controllo anti-frame-drop."
 }, {
   id: "video-editor",
   title: "Area Video Editor · montaggio professionale",
   modeIds: ["videoEditor"],
   keywords: ["montaggio", "video editor", "capcut", "clip", "pool", "calamita", "magnete", "taglia", "inverti", "inversa", "contrario", "reverse", "sincronizza", "sincronizzazione", "fusione", "blend", "dissolvenza", "fade", "interpolazione", "ffmpeg", "battute"],
-  content: "Scegli l’area Video Editor per un montaggio multitraccia con clock indipendente dal brano dello studio. Nel Pool media carica video, immagini e audio: le miniature rendono riconoscibili i contenuti. Per ogni media scegli il livello di destinazione, poi inseriscilo al playhead, aggiungilo in coda oppure trascinalo direttamente sul livello e sul tempo desiderati. Tutti i livelli video sono equivalenti: non esistono ruoli principale o overlay; quello più in alto viene composto sopra quelli inferiori e può essere riordinato liberamente. Nell’Inspector puoi spostare una clip fra livelli e regolare posizione, scala, rotazione, opacità, fusione e colore su qualsiasi livello. Per invertirla, seleziona una clip video e premi ↶ Reverse nella barra superiore della timeline: il simbolo ↶ compare sulla clip e l’export inverte video e audio. In timeline trascina il corpo della clip per spostarla o cambiarle livello e i bordi per estenderla o accorciarla. Taglia con S, ✂ Taglia, doppio clic o menu contestuale. La calamita aggancia clip, playhead e battute. Per sincronizzare audio e video seleziona più clip con Shift o Cmd, poi fai clic destro sulla clip di riferimento e scegli Sincronizza audio e video. La Libreria effetti contiene 14 effetti reali nelle categorie Transizioni, Movimento, Colore, Distorsione e Luce: ogni effetto ha un’anteprima, può essere trascinato nella corsia rosa e diventa un blocco autonomo spostabile, rifilabile, selezionabile ed eliminabile. L’Inspector espone i parametri pertinenti, fra durata, intensità, curva, ampiezza, frequenza e diffusione. Durante Play lo stack nativo presenta tutti i video e le immagini attivi nell’ordine esatto della timeline; media cancellati, gap e seek non lasciano un vecchio fotogramma nel monitor. La timeline parte soltanto quando i decoder necessari hanno confermato la riproduzione e mostra gli eventuali errori. L’export è offline, da 24 a 120 fps, con verifica anti-frame-drop. Il frame rate avanzato arriva a 240 tramite ffmpeg minterpolate o RIFE nel servizio locale; per usare RIFE prepara il servizio una sola volta e avvialo con npm run upscaler:server."
+  content: "Scegli l’area Video Editor per un montaggio multitraccia con clock indipendente dal brano dello studio. Nel Pool media carica video, immagini e audio: le miniature rendono riconoscibili i contenuti. Per ogni media scegli il livello di destinazione, poi inseriscilo al playhead, aggiungilo in coda oppure trascinalo direttamente sul livello e sul tempo desiderati. Tutti i livelli video sono equivalenti: non esistono ruoli principale o overlay; quello più in alto viene composto sopra quelli inferiori e può essere riordinato liberamente. Nell’Inspector puoi spostare una clip fra livelli e regolare posizione, scala, rotazione, opacità, fusione e colore su qualsiasi livello. Per invertirla, seleziona una clip video e premi ↶ Reverse nella barra superiore della timeline: il simbolo ↶ compare sulla clip e l’export inverte video e audio. In timeline trascina il corpo della clip per spostarla o cambiarle livello e i bordi per estenderla o accorciarla. Taglia con S, ✂ Taglia, doppio clic o menu contestuale. La calamita aggancia clip, playhead e battute. Per sincronizzare audio e video seleziona più clip con Shift o Cmd, poi fai clic destro sulla clip di riferimento e scegli Sincronizza audio e video. La Libreria effetti contiene 14 effetti reali nelle categorie Transizioni, Movimento, Colore, Distorsione e Luce: ogni effetto ha un’anteprima, può essere trascinato nella corsia rosa e diventa un blocco autonomo spostabile, rifilabile, selezionabile ed eliminabile. L’Inspector espone i parametri pertinenti, fra durata, intensità, curva, ampiezza, frequenza e diffusione. Durante Play lo stack nativo presenta tutti i video e le immagini attivi nell’ordine esatto della timeline; media cancellati, gap e seek non lasciano un vecchio fotogramma nel monitor. La timeline parte soltanto quando i decoder necessari hanno confermato la riproduzione e mostra gli eventuali errori. L’export è offline, da 24 a 120 fps, con verifica anti-frame-drop. Per frame rate più elevati usa Frame Booster, che espone i metodi FFmpeg supportati e ne descrive l’impiego per scene lente o con molto movimento."
 }, {
   id: "pixels-sub",
   title: "Modalità Pixels Subtitles",
@@ -163,6 +169,54 @@ export const applicationHelpKnowledgeBase: readonly ApplicationHelpArticle[] = [
   keywords: ["music", "quantizer", "quantizza", "bpm", "warp", "stem", "pitch", "daw", "restoration", "mastering", "forensics"],
   content: "Apri Music e scegli AI Quantizer. Crea un progetto, carica il master e usa Analisi Smart per rilevare beat, downbeat e BPM; controlla i marker, imposta il BPM intero obiettivo e genera la warp map. Quantizza master e stem con la stessa mappa per evitare derive e preservare il pitch. I moduli successivi gestiscono allineamento alla griglia DAW, restauro, misura LUFS/True Peak, mastering ISP-aware e confronto AI Forensics. Il motore resta locale: richiede il progetto AI Quantizer configurato, Python, FFmpeg/FFprobe e Rubber Band."
 }, {
+  id: "frame-booster",
+  title: "Frame Booster",
+  modeIds: ["frameBooster"],
+  keywords: ["frame booster", "interpolazione", "fps", "motion", "aobmc", "obmc", "blend", "fluido"],
+  content: "Apri Photo & Video Studio e scegli Frame Booster. Carica un video, scegli Moltiplicatore oppure FPS diretto e seleziona il metodo. Motion AOBMC ricostruisce il movimento ed è la scelta generale; Motion OBMC bidirezionale privilegia movimenti continui e panoramiche ma è più lento; Frame blend è rapido per scene quasi statiche e può lasciare scie. Premi Boost frames nella preview. Il backend FFmpeg viene avviato dall’app, preserva rapporto, risoluzione e audio, mostra upload, elaborazione, verifica e download, e accetta il risultato soltanto dopo l’audit di FPS, durata, frame e audio."
+}, {
+  id: "comments-invasion",
+  title: "Comments Invasion",
+  modeIds: ["commentsInvasion"],
+  keywords: ["commenti", "comments invasion", "timbro", "screenshot", "entrata", "uscita", "durata"],
+  content: "In Sound Animation scegli Comments Invasion, carica il video sorgente e più screenshot di commenti. La preview conserva il rapporto del video e mostra le animazioni anche durante Play. Imposta quanti commenti restano contemporaneamente, dimensione, durata a schermo e animazione di uscita. Ogni nuovo commento entra con impatto a timbro; oltre il limite il più vecchio esce secondo l’effetto scelto. L’export usa gli stessi tempi e lo stesso layout della preview."
+}, {
+  id: "background-auto",
+  title: "Background Auto",
+  modeIds: ["backgroundAuto"],
+  keywords: ["background auto", "sfondo", "video", "automatico", "palette", "ritmo"],
+  content: "Background Auto costruisce un’animazione audiovisiva dal media caricato. Carica la sorgente, completa l’analisi richiesta e usa il pannello dedicato per stile, intensità, palette ed elementi. Play, pausa e seek aggiornano realmente il video di sfondo e gli effetti; l’export ricompone gli stessi livelli offline."
+}, {
+  id: "overlay-spectral",
+  title: "Overlay Spectral",
+  modeIds: ["overlaySpectral"],
+  keywords: ["overlay spectral", "milkdrop", "preset", "spettro", "palette", "sfondo", "immagine", "video"],
+  content: "In Sound Animation scegli Overlay Spectral. Importa e analizza il brano, seleziona un effetto dal catalogo MilkDrop adattato e carica come sfondo un’immagine oppure un video. Regola intensità, simmetria, scie e palette automatica o manuale. Lo sfondo mantiene la propria luminosità; lo spettro e le geometrie vengono sovrapposti senza una patina scura obbligatoria. Play, pausa, seek e export usano lo stesso clock audio."
+}, {
+  id: "cassette-desk",
+  title: "Cassette Desk",
+  modeIds: ["cassetteDesk"],
+  keywords: ["cassette desk", "musicassetta", "stereo", "pianoforte", "voce", "finestra", "ambiente", "tazza"],
+  content: "Cassette Desk anima custodia, musicassetta e stereo sulla scrivania. Carica cover e brano: la cover resta proporzionata sulla custodia e in piccolo sulla cassetta. Scegli scocca, colori da palette o manuali e ambiente della finestra. L’intro riproduce ingresso della cassetta, sportello e Play; il brano parte soltanto dopo. Display, BPM, tonalità inglese, dodici barre, waveform, casse e pianoforte seguono l’analisi. La separazione Demucs isola realmente la voce per stimare le note. In export puoi includere il brano oppure mantenere soltanto gli effetti dell’intro."
+}, {
+  id: "song-player",
+  title: "Song Player",
+  modeIds: ["songPlayer"],
+  keywords: ["song player", "youtube", "frammento", "traccia completa", "spettrogramma", "cubo", "cover"],
+  content: "Song Player richiede una traccia completa, caricata oppure acquisita dall’URL supportato, e un frammento usato dalla clip. L’analisi locale confronta i segnali e colloca il frammento nel riquadro dello spettrogramma completo; l’offset manuale resta modificabile. Carica la cover, scegli rapporto e sfondo opzionale, quindi regola separatamente i colori di barre e spettrogramma partendo dalla palette. La cover centrale può ruotare come un cubo."
+}, {
+  id: "post-lipsync",
+  title: "MLSM POST LIPSYNC",
+  modeIds: ["mlsmPostLipsync"],
+  keywords: ["post lipsync", "lipsync", "whisper", "parole", "timestamp", "visemi", "retiming", "master"],
+  content: "MLSM POST LIPSYNC allinea il labiale di un video AI alla voce master. Carica video e master, ritaglia il tratto del master ascoltandolo nella modale e usa Whisper Medium per ottenere veri timestamp parola per parola. SRT e testo atteso sono opzionali. La separazione vocale è opzionale e l’analisi visiva Auto-AVSR è disattivata per impostazione predefinita. I tab permettono di correggere parole, tempi sorgente e master, spostare o ridimensionare intervalli e applicare realmente Correggi/Fix. Ogni nuova analisi invalida il risultato precedente. L’export termina con il video, non prosegue fino alla durata dell’intero master."
+}, {
+  id: "audio-workspace",
+  title: "Area Audio",
+  modeIds: ["audioWorkspace"],
+  keywords: ["audio", "srt", "vtt", "whisper", "json", "testo", "trascrizione", "demucs", "separazione voce", "estrai voce"],
+  content: "L’area Audio contiene due schede indipendenti. Da audio a testo / SRT accetta audio o video, usa Whisper selezionabile e produce testo, SRT, VTT e JSON completo; il testo originale opzionale viene controllato da Qwen senza sostituire i timestamp misurati. Estrai voce usa Demucs htdemucs su audio o video e restituisce un WAV ascoltabile e scaricabile. Il precedente Text to Speech locale non fa più parte dell’area Audio."
+}, {
   id: "troubleshooting",
   title: "Problemi comuni",
   modeIds: [],
@@ -215,7 +269,7 @@ function expandedQueryTokens(query: string): Set<string> {
 export function retrieveApplicationHelp(query: string, modeId: string, limit = 3): ApplicationHelpArticle[] {
   if (conversationalApplicationHelpAnswer(query)) return [applicationHelpKnowledgeBase[0]!];
   const queryTokens = expandedQueryTokens(query); const normalizedQuery = normalizedTokens(query).join(" ");
-  const contextualModeRequest = queryTokens.has("modalita") && (queryTokens.has("questa") || queryTokens.has("attiva") || queryTokens.has("corrente"));
+  const contextualModeRequest = (queryTokens.has("modalita") || queryTokens.has("pagina") || queryTokens.has("schermata")) && (queryTokens.has("questa") || queryTokens.has("attiva") || queryTokens.has("corrente") || queryTokens.has("qui"));
   const ranked = applicationHelpKnowledgeBase.map((article, index) => {
     const titleTokens = new Set(normalizedTokens(article.title)); const keywordTokens = new Set(article.keywords.flatMap(normalizedTokens)); const contentTokens = new Set(normalizedTokens(article.content));
     let matchScore = 0;

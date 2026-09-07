@@ -4,10 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearFrameBoosterSourceFile, getFrameBoosterSourceFile, registerFrameBoosterSourceFile } from "../services/frame-booster-source-file";
 import { useProjectStore } from "../store/project-store";
 
-const waitForFrameInterpolationHealth = vi.hoisted(() => vi.fn());
+const { waitForFrameInterpolationHealth, probeFrameInterpolationSource } = vi.hoisted(() => ({
+  waitForFrameInterpolationHealth: vi.fn(),
+  probeFrameInterpolationSource: vi.fn(),
+}));
 vi.mock("../services/frame-interpolation-client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../services/frame-interpolation-client")>();
-  return { ...actual, waitForFrameInterpolationHealth };
+  return { ...actual, waitForFrameInterpolationHealth, probeFrameInterpolationSource };
 });
 
 import { FrameBoosterPanel } from "./FrameBoosterPanel";
@@ -21,6 +24,7 @@ describe("FrameBoosterPanel", () => {
     useProjectStore.getState().newProject();
     clearFrameBoosterSourceFile();
     waitForFrameInterpolationHealth.mockResolvedValue(null);
+    probeFrameInterpolationSource.mockResolvedValue({ frameCount: 75, fps: 29.97, durationSeconds: 2.5, width: 1920, height: 1080, hasAudio: true });
     Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:new-video") });
     Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
   });
@@ -29,6 +33,7 @@ describe("FrameBoosterPanel", () => {
     cleanup();
     clearFrameBoosterSourceFile();
     waitForFrameInterpolationHealth.mockReset();
+    probeFrameInterpolationSource.mockReset();
     vi.restoreAllMocks();
     Reflect.deleteProperty(URL, "createObjectURL");
     Reflect.deleteProperty(URL, "revokeObjectURL");
@@ -54,20 +59,27 @@ describe("FrameBoosterPanel", () => {
       ? metadataVideo as unknown as HTMLVideoElement
       : originalCreateElement(tagName, options)) as typeof document.createElement);
     const next = new File(["new"], "new.mp4", { type: "video/mp4" });
-    fireEvent.change(screen.getByLabelText("Carica video Frame Booster"), { target: { files: [next] } });
+    const picker = screen.getByLabelText("Carica video Frame Booster") as HTMLInputElement;
+    fireEvent.change(picker, { target: { files: [next] } });
     expect(useProjectStore.getState().project.animation.frameBooster.sourceName).toBe("new.mp4");
     expect(getFrameBoosterSourceFile("blob:new-video")).toBe(next);
     expect(getFrameBoosterSourceFile("blob:old-video")).toBeNull();
+    expect(picker.files?.[0]).toBe(next);
     expect(screen.getByText("Video caricato. Rilevamento dei metadati in corso…")).toBeVisible();
     expect(metadataVideo.load).toHaveBeenCalled();
     metadataVideo.onloadedmetadata?.();
 
     await waitFor(() => expect(useProjectStore.getState().project.animation.frameBooster.sourceWidth).toBe(1920));
+    await waitFor(() => expect(useProjectStore.getState().project.animation.frameBooster.sourceFps).toBe(29.97));
+    expect(screen.getByText(/1920 × 1080 · 2.50 s · 29.97 fps/)).toBeVisible();
+    expect(screen.getByText(/Metadati rilevati · 29.97 fps · 75 frame · audio presente/)).toBeVisible();
+    expect(probeFrameInterpolationSource).toHaveBeenCalledWith(next, expect.any(AbortSignal));
     expect(screen.queryByText("Video caricato. Rilevamento dei metadati in corso…")).not.toBeInTheDocument();
     expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:old-video");
   });
 
   it("keeps the selected video usable when browser metadata fails", async () => {
+    probeFrameInterpolationSource.mockRejectedValueOnce(new Error("Rilevamento FPS non riuscito: backend offline"));
     const originalCreateElement = document.createElement.bind(document);
     const metadataVideo = {
       preload: "", muted: false, src: "", duration: Number.NaN, videoWidth: 0, videoHeight: 0,
@@ -82,7 +94,7 @@ describe("FrameBoosterPanel", () => {
     fireEvent.change(screen.getByLabelText("Carica video Frame Booster"), { target: { files: [file] } });
     metadataVideo.onerror?.();
 
-    await waitFor(() => expect(screen.getByText("Video caricato. I dettagli tecnici verranno rilevati dal backend prima dell’elaborazione.")).toBeVisible());
+    await waitFor(() => expect(screen.getByText("Rilevamento FPS non riuscito: backend offline")).toBeVisible());
     expect(useProjectStore.getState().project.animation.frameBooster.sourceName).toBe("webkit.mov");
     expect(getFrameBoosterSourceFile("blob:new-video")).toBe(file);
     expect(URL.revokeObjectURL).not.toHaveBeenCalledWith("blob:new-video");

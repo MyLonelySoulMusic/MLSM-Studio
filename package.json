@@ -27,6 +27,7 @@
     "rife:verify": "node tools/verify_rife_runtime.cjs",
     "song-player:setup": "node tools/setup_python_runtime.cjs song-player",
     "song-player:worker": "node tools/song-player/run_worker.cjs",
+    "audio-tts:setup": "node tools/setup_python_runtime.cjs audio-tts",
     "ai-quantizer:setup": "node tools/setup_python_runtime.cjs ai-quantizer",
     "ai-quantizer:server": "node tools/run_python_service.cjs ai-quantizer"
   },

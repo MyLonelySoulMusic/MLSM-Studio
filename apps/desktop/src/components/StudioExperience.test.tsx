@@ -36,4 +36,16 @@ describe("StudioExperience", () => {
     expect(useProjectStore.getState().project.audio).toMatchObject({ sourcePath: "", durationSeconds: 0 });
     expect(revoke).toHaveBeenCalledWith("blob:stale-song");
   });
+
+  it("nasconde Lonely Bot nella splash e lo anima dalla Home in poi", () => {
+    render(<StudioExperience />);
+    expect(screen.queryByRole("button", { name: "Apri Lonely Bot" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Entra in MLSM Studio" }));
+    expect(screen.queryByRole("button", { name: "Apri Lonely Bot" })).not.toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(850));
+    fireEvent.click(screen.getByRole("button", { name: "Apri Lonely Bot" }));
+    expect(screen.getByRole("region", { name: "Lonely Bot" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Chiudi Lonely Bot" }));
+    expect(screen.getByRole("button", { name: "Apri Lonely Bot" })).toBeInTheDocument();
+  });
 });

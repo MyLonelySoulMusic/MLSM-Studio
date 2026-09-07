@@ -1,3 +1,5 @@
+import { trackTask } from "./task-history";
+export function analyzeMlsmPostLipsync(...args: Parameters<typeof analyzeMlsmPostLipsyncImpl>): ReturnType<typeof analyzeMlsmPostLipsyncImpl> { return trackTask("Lipsync · Analysis", () => analyzeMlsmPostLipsyncImpl(...args)); }
 import type { ImportedAudio } from "./audio-import";
 import { loadAudioFromPath, releaseImportedAudio } from "./audio-import";
 import { separateCassetteDeskVocals } from "./cassette-desk-vocals";
@@ -64,7 +66,7 @@ export async function extractMlsmPostLipsyncSourceAudio(
   return loadAudioFromPath(terminal.result.path);
 }
 
-export async function analyzeMlsmPostLipsync(input: {
+async function analyzeMlsmPostLipsyncImpl(input: {
   sourceVideoPath: string;
   sourceVideoHash?: string;
   sourceVideoUrl?: string;

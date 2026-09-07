@@ -13,6 +13,33 @@ from tools import remote_upscaler
 
 
 class RemoteUpscalerTests(unittest.TestCase):
+    def test_accepted_video_error_is_not_resubmitted_to_legacy_route(self):
+        with patch.object(remote_upscaler, "normalize_endpoint", side_effect=lambda value: value), patch.object(remote_upscaler, "_request_json", return_value={"event_id": "accepted"}) as submit, patch.object(remote_upscaler, "_read_sse_result", return_value=[{"ok": False, "error": "CUDA out of memory"}]):
+            with self.assertRaisesRegex(remote_upscaler.RemoteUpscalerError, "CUDA out of memory"):
+                remote_upscaler.upscale_video_chunk("https://one", b"\x00\x00\x00\x18ftypisomsegment", "x4", 100)
+            self.assertEqual(submit.call_count, 1)
+
+    def test_healthy_endpoint_drains_remaining_segments_after_peer_failure(self):
+        mp4 = b"\x00\x00\x00\x18ftypisomsegment"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            chunks = [(root / f"segment-{index}.mp4", 10) for index in range(6)]
+            for path, _ in chunks:
+                path.write_bytes(mp4)
+            failed = threading.Event()
+            def upscale(endpoint, data, _model, count, **_kwargs):
+                if endpoint == "https://broken":
+                    failed.set()
+                    raise RuntimeError("endpoint offline")
+                self.assertTrue(failed.wait(2))
+                time.sleep(.02)
+                return data, {"frame_count": count}
+            with patch.object(remote_upscaler, "normalize_endpoint", side_effect=lambda value: value), patch.object(remote_upscaler, "upscale_video_chunk", side_effect=upscale):
+                segments, frames, errors = remote_upscaler.distribute_video_chunks(chunks, ["https://broken", "https://healthy"], "x4", root / "output")
+            self.assertEqual((segments, frames), (6, 60))
+            self.assertTrue(errors)
+            self.assertEqual(len(list((root / "output").glob("*.mp4"))), 6)
+
     def test_normalizes_gradio_route_and_rejects_private_hosts(self):
         with patch("tools.remote_upscaler.socket.getaddrinfo", return_value=[(2, 1, 6, "", ("34.1.2.3", 443))]):
             self.assertEqual(remote_upscaler.normalize_endpoint("https://demo.gradio.live/gradio_api/call/upscale_image"), "https://demo.gradio.live")

@@ -14,6 +14,8 @@ use tauri::Manager;
 
 mod memory;
 mod song_player;
+mod audio_tools;
+mod studio_settings;
 
 #[derive(Debug, thiserror::Error)]
 enum ProjectIoError {
@@ -441,6 +443,7 @@ fn write_project(path: String, content: String) -> Result<(), ProjectIoError> {
 pub fn run() {
     let app = tauri::Builder::default()
         .manage(song_player::SongPlayerState::default())
+        .manage(audio_tools::AudioToolsState::default())
         .manage(UpscalerServiceState::default())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
@@ -464,12 +467,23 @@ pub fn run() {
             song_player::song_player_start_job,
             song_player::song_player_get_job,
             song_player::song_player_cancel_job
+            ,audio_tools::audio_ensure_tts_runtime
+            ,audio_tools::audio_get_tts_runtime
+            ,audio_tools::audio_start_tts
+            ,studio_settings::studio_settings
+            ,audio_tools::audio_get_job
+            ,audio_tools::audio_cancel_job
+            ,audio_tools::audio_save_voice
+            ,audio_tools::audio_list_voices
+            ,audio_tools::audio_delete_voice
+            ,audio_tools::audio_copy_artifact
         ])
         .build(tauri::generate_context!())
         .expect("errore durante l'avvio di MLSM Studio");
     app.run(|app_handle, event| {
         if matches!(event, tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit) {
             app_handle.state::<UpscalerServiceState>().shutdown();
+            audio_tools::shutdown(app_handle.state::<audio_tools::AudioToolsState>().inner());
         }
     });
 }

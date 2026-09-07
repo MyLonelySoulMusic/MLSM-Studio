@@ -2,6 +2,7 @@ import type { AudioAnalysisResult } from "@rbs/audio-analysis";
 import { ANALYSIS_STORE_NAME, openAnalysisDatabase } from "./analysis-database";
 
 const memoryCache = new Map<string, AudioAnalysisResult>();
+export function resetAnalysisMemoryCache() { memoryCache.clear(); }
 export class AnalysisCache {
   async get(key: string): Promise<AudioAnalysisResult | null> {
     const fallback = memoryCache.get(key) ?? null;

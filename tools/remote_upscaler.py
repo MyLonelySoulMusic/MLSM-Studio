@@ -355,6 +355,7 @@ def upscale_video_chunk(
     encoded = "data:video/mp4;base64," + base64.b64encode(video).decode("ascii")
     last_error: Exception | None = None
     for path in ("/gradio_api/call/upscale_video_chunk", "/call/upscale_video_chunk"):
+        accepted = False
         try:
             endpoint_url = _candidate_url(endpoint, path)
             # Gradio v3 declares four components and rejects a shorter data
@@ -365,6 +366,7 @@ def upscale_video_chunk(
             event_id = queued.get("event_id")
             if not isinstance(event_id, str) or not event_id:
                 raise RemoteUpscalerError("Gradio non ha restituito event_id per il segmento")
+            accepted = True
             result = _read_sse_result(
                 f"{endpoint_url}/{urllib.parse.quote(event_id, safe='')}",
                 timeout,
@@ -387,6 +389,10 @@ def upscale_video_chunk(
                 raise RemoteUpscalerError("Output video remoto vuoto, non valido o troppo grande")
             return output, item
         except Exception as error:
+            if accepted:
+                # An accepted job must never be submitted again through the
+                # legacy alias. Preserve its actual error for the scheduler.
+                raise RemoteUpscalerError(f"{endpoint}: {error}") from error
             last_error = error
     raise RemoteUpscalerError(str(last_error or "Upscaling del segmento remoto fallito"))
 

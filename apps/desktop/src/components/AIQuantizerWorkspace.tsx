@@ -1,3 +1,4 @@
+import { SettingsButton } from "./StudioSettings";
 import { useEffect, useRef, useState } from "react";
 import { SupportArtistButton } from "./ArtistSupport";
 import { uiCopy, useUiPreferences } from "../services/ui-preferences";
@@ -84,7 +85,7 @@ export function AIQuantizerWorkspace({ onHome }: { onHome?: () => void }) {
       <button type="button" className="home-button" onClick={onHome} aria-label={copy.home}>⌂ <span>{copy.home}</span></button>
       <div className="ai-quantizer-workspace__identity"><img src="/mlsm-studio-favicon-192.png" alt="" /><span><strong>MLSM Studio</strong><small>Music / AI Quantizer</small></span></div>
       <div className="ai-quantizer-workspace__status" data-status={status}><i />{status === "ready" ? (language === "it" ? "Motore audio pronto" : "Audio engine ready") : (language === "it" ? "Preparazione motore…" : "Preparing engine…")}</div>
-      <div className="ai-quantizer-workspace__actions"><MemoryButton /><SupportArtistButton /><select aria-label={copy.language} value={language} onChange={(event) => setLanguage(event.target.value === "en" ? "en" : "it")}><option value="it">IT</option><option value="en">EN</option></select><button type="button" className="theme-toggle" onClick={() => setTheme(theme === "day" ? "night" : "day")}>{theme === "day" ? "☼" : "◐"}</button></div>
+      <div className="ai-quantizer-workspace__actions"><SettingsButton /><MemoryButton /><SupportArtistButton /><select aria-label={copy.language} value={language} onChange={(event) => setLanguage(event.target.value === "en" ? "en" : "it")}><option value="it">IT</option><option value="en">EN</option></select><button type="button" className="theme-toggle" onClick={() => setTheme(theme === "day" ? "night" : "day")}>{theme === "day" ? "☼" : "◐"}</button></div>
     </header>
     <div className="ai-quantizer-workspace__body">
       {status === "ready"

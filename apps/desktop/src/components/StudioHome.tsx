@@ -1,3 +1,4 @@
+import { SettingsButton } from "./StudioSettings";
 import type { CSSProperties } from "react";
 import { animationCategories, getAnimationMode, type AnimationCategoryId } from "../services/animation-modes";
 import { uiCopy, useUiPreferences } from "../services/ui-preferences";
@@ -12,7 +13,8 @@ const areaCopyKeys = {
   photoVideoStudio: { label: "photoVideoStudio", description: "photoVideoDescription" },
   videoEditor: { label: "videoEditor", description: "videoEditorDescription" },
   music: { label: "music", description: "musicDescription" },
-  lipsync: { label: "lipsync", description: "lipsyncDescription" }
+  lipsync: { label: "lipsync", description: "lipsyncDescription" },
+  audio: { label: "audio", description: "audioDescription" }
 } as const;
 
 export type StudioAreaDestination = AnimationCategoryId;
@@ -29,7 +31,7 @@ export function StudioHome({ onEnterArea }: { onEnterArea: (category: StudioArea
     <div className="studio-home__atmosphere" aria-hidden="true"><i /><i /><i /><i /></div>
     <header className="studio-home__topbar">
       <div className="brand" aria-label="MLSM Studio — My Lonely Soul Music Studio"><img className="brand-mark" src="/mlsm-studio-favicon-192.png" alt="" /><span className="brand-copy"><strong>MLSM Studio</strong><small>My Lonely Soul Music</small></span></div>
-      <div className="studio-home__preferences"><MemoryButton /><SupportArtistButton /><label><span>{copy.language}</span><select aria-label={copy.language} value={language} onChange={(event) => setLanguage(event.target.value === "en" ? "en" : "it")}><option value="it">IT</option><option value="en">EN</option></select></label><button className="theme-toggle" aria-label={`${copy.appearance}: ${theme === "day" ? copy.day : copy.night}`} onClick={() => setTheme(theme === "day" ? "night" : "day")}><span aria-hidden="true">{theme === "day" ? "☼" : "◐"}</span>{theme === "day" ? copy.day : copy.night}</button></div>
+      <div className="studio-home__preferences"><SettingsButton /><MemoryButton /><SupportArtistButton /><label><span>{copy.language}</span><select aria-label={copy.language} value={language} onChange={(event) => setLanguage(event.target.value === "en" ? "en" : "it")}><option value="it">IT</option><option value="en">EN</option></select></label><button className="theme-toggle" aria-label={`${copy.appearance}: ${theme === "day" ? copy.day : copy.night}`} onClick={() => setTheme(theme === "day" ? "night" : "day")}><span aria-hidden="true">{theme === "day" ? "☼" : "◐"}</span>{theme === "day" ? copy.day : copy.night}</button></div>
     </header>
     <main className="studio-home__main">
       <div className="studio-home__intro"><span>MLSM / CREATIVE OS</span><h1>{copy.chooseArea}</h1><p>{copy.chooseAreaDescription}</p></div>

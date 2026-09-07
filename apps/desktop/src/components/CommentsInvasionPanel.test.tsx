@@ -20,6 +20,18 @@ describe("CommentsInvasionPanel", () => {
     expect(screen.getByLabelText("Animazione uscita commenti")).toHaveValue("fade");
   });
 
+  it("conserva il video nel picker dopo la selezione", () => {
+    const onImportVideo = vi.fn();
+    render(<CommentsInvasionPanel onImportVideo={onImportVideo} />);
+    const picker = screen.getByLabelText("Carica video Comments Invasion") as HTMLInputElement;
+    const file = new File(["video"], "comments-source.mp4", { type: "video/mp4" });
+
+    fireEvent.change(picker, { target: { files: [file] } });
+
+    expect(onImportVideo).toHaveBeenCalledWith(file);
+    expect(picker.files?.[0]).toBe(file);
+  });
+
   it("salva indipendentemente quantità, dimensione e forza del timbro", () => {
     render(<CommentsInvasionPanel onImportVideo={vi.fn()} />);
     fireEvent.change(screen.getByLabelText("Numero commenti visibili"), { target: { value: "8" } });

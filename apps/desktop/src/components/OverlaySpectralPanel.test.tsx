@@ -39,9 +39,11 @@ describe("OverlaySpectralPanel", () => {
     useProjectStore.getState().updateOverlaySpectral({ backgroundDim: .6 });
     render(<OverlaySpectralPanel onImportAudio={vi.fn()} />);
     const file = new File(["video"], "background.mp4", { type: "video/mp4" });
-    fireEvent.change(screen.getByLabelText("Carica sfondo Overlay Spectral"), { target: { files: [file] } });
+    const picker = screen.getByLabelText("Carica sfondo Overlay Spectral") as HTMLInputElement;
+    fireEvent.change(picker, { target: { files: [file] } });
     await waitFor(() => expect(useProjectStore.getState().project.animation.overlaySpectral).toMatchObject({ backgroundImageUrl: "blob:overlay-preview", backgroundMediaType: "video", backgroundDim: 0 }));
     expect(create).toHaveBeenCalledWith(file);
+    expect(picker.files?.[0]).toBe(file);
     expect(palette.video).toHaveBeenCalledWith("blob:overlay-preview");
     expect(screen.getByLabelText("Video di sfondo Overlay Spectral")).toHaveAttribute("src", "blob:overlay-preview");
     fireEvent.click(screen.getByRole("button", { name: "Rimuovi sfondo" }));

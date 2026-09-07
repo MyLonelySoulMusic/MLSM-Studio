@@ -4,7 +4,14 @@ import { applicationHelpContext, conversationalApplicationHelpAnswer, fallbackAp
 describe("application assistant knowledge base", () => {
   it("sa presentarsi e propone ambiti di assistenza concreti", () => {
     expect(retrieveApplicationHelp("Ciao, chi sei e cosa puoi fare?", "walkingCube")[0]).toMatchObject({ id: "assistant-introduction" });
-    expect(fallbackApplicationHelpAnswer("Presentati e dimmi in cosa puoi aiutarmi.", "walkingCube")).toContain("Studio Bot");
+    expect(fallbackApplicationHelpAnswer("Presentati e dimmi in cosa puoi aiutarmi.", "walkingCube")).toContain("Lonely Bot");
+  });
+
+  it("spiega la Home quando la domanda è contestuale e non cita una modalità casuale", () => {
+    const answer = fallbackApplicationHelpAnswer("Cosa c'è in questa pagina?", "studioHome");
+    expect(answer).toContain("Questa è la Home di MLSM Studio");
+    expect(answer).toContain("Le sei schede centrali");
+    expect(answer).not.toContain("biglia");
   });
 
   it("risponde ai saluti senza selezionare guide tecniche della modalità attiva", () => {
@@ -51,8 +58,7 @@ describe("application assistant knowledge base", () => {
     // "audio" e "video" sono sinonimi dell'esportazione: la guida del montaggio resta
     // fra i risultati anche quando la domanda usa entrambi i termini generici.
     expect(retrieveApplicationHelp("Come sincronizzo audio e video come su CapCut?", "videoEditor")).toContainEqual(expect.objectContaining({ id: "video-editor" }));
-    // Il servizio dell’interpolazione va avviato a mano: la guida deve dirlo sempre.
-    expect(applicationHelpContext("Come aumento davvero gli fps con l’interpolazione?", "videoEditor")).toContain("npm run upscaler:server");
+    expect(applicationHelpContext("Come aumento davvero gli fps con l’interpolazione?", "videoEditor")).toContain("Frame Booster");
   });
 
   it("fornisce sempre una risposta locale anche senza corrispondenze", () => {
