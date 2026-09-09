@@ -5,7 +5,7 @@ import reactRefresh from "eslint-plugin-react-refresh";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["**/dist/**", "**/node_modules/**", "**/target/**", "**/.venv/**", "**/.venv-*/**"] },
+  { ignores: ["**/dist/**", "**/node_modules/**", "**/target/**", "**/.venv/**", "**/.venv-*/**", ".avatar3d-runtime/**", ".avatar3d-private/**"] },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
   {

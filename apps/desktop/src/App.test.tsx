@@ -113,6 +113,7 @@ describe("App", () => {
   it("mostra il layout editor e permette di rinominare il progetto", () => {
     render(<App />);
     expect(screen.getByLabelText("MLSM Studio — My Lonely Soul Music Studio")).toBeInTheDocument();
+    expect(screen.queryByText("Progetto senza titolo")).not.toBeInTheDocument();
     expect(screen.getByRole("main", { name: "Viewport scena" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Timeline musicale" })).toBeInTheDocument();
     expect(screen.getByRole("separator", { name: "Ridimensiona pannello sinistro" })).toHaveAttribute("aria-valuenow", "230");

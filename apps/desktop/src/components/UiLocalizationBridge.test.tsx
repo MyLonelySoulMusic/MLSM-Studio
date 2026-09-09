@@ -30,4 +30,13 @@ describe("UiLocalizationBridge", () => {
     await waitFor(() => expect(screen.getByText("No active effects.")).toBeInTheDocument());
     expect(container.querySelector("input")).toHaveAttribute("placeholder", "Upload images");
   });
+
+  it("traduce gli attributi dei campi senza modificare il testo inserito dall’utente", async () => {
+    updateUiPreferences({ language: "en" });
+    render(<><UiLocalizationBridge /><textarea aria-label="Testo completo della canzone" placeholder="Incolla il testo" defaultValue="Testo dell’utente" /></>);
+
+    await waitFor(() => expect(screen.getByRole("textbox")).toHaveAttribute("aria-label", "Full song text"));
+    expect(screen.getByRole("textbox")).toHaveAttribute("placeholder", "Paste the text");
+    expect(screen.getByRole("textbox")).toHaveValue("Testo dell’utente");
+  });
 });

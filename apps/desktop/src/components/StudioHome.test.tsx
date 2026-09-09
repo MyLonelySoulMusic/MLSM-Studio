@@ -1,10 +1,11 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useProjectStore } from "../store/project-store";
 import { useAudioStore } from "../store/audio-store";
 import { createProject } from "@rbs/project-schema";
 import { registerVideoEditorFiles, videoEditorSessionFile } from "../services/video-editor-import";
 import { StudioHome } from "./StudioHome";
+import { animationCategories } from "../services/animation-modes";
 
 describe("StudioHome", () => {
   beforeEach(() => { localStorage.clear(); useProjectStore.getState().newProject(); });
@@ -13,6 +14,7 @@ describe("StudioHome", () => {
   it("presenta le aree come ingressi grandi e apre la prima modalità pertinente", () => {
     const onEnterArea = vi.fn();
     render(<StudioHome onEnterArea={onEnterArea} />);
+    expect(within(screen.getByRole("region", { name: "Aree creative disponibili" })).getAllByRole("button")).toHaveLength(animationCategories.length);
     expect(screen.getByRole("button", { name: /Sound Animation/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Photo & Video Studio/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Video Editor/ })).toBeInTheDocument();

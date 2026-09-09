@@ -6,13 +6,19 @@ const textState = new WeakMap<Text, { source: string; output: string }>();
 const attributeState = new WeakMap<Element, Map<string, { source: string; output: string }>>();
 const translatedAttributes = ["aria-label", "title", "placeholder", "alt"] as const;
 
-function excluded(node: Node) {
+function excludedText(node: Node) {
   const element = node instanceof Element ? node : node.parentElement;
-  return Boolean(element?.closest("script, style, code, pre, [data-no-localize]"));
+  return Boolean(element?.closest("script, style, code, pre, textarea, [contenteditable]:not([contenteditable='false']), [data-no-localize], [data-ui-copy]"));
+}
+
+function excludedAttributes(element: Element) {
+  // Textareas and contenteditable controls must keep the user's value intact,
+  // but their labels, titles and placeholders are still part of the UI.
+  return Boolean(element.closest("script, style, code, pre, [data-no-localize], [data-ui-copy]"));
 }
 
 function localizeTextNode(node: Text, language: UiLanguage) {
-  if (excluded(node)) return;
+  if (excludedText(node)) return;
   const current = node.nodeValue ?? "";
   const previous = textState.get(node);
   const source = previous && current === previous.output ? previous.source : current;
@@ -22,7 +28,7 @@ function localizeTextNode(node: Text, language: UiLanguage) {
 }
 
 function localizeAttributes(element: Element, language: UiLanguage) {
-  if (excluded(element)) return;
+  if (excludedAttributes(element)) return;
   let states = attributeState.get(element);
   if (!states) { states = new Map(); attributeState.set(element, states); }
   for (const attribute of translatedAttributes) {
@@ -51,7 +57,8 @@ function localizeTree(root: Node, language: UiLanguage) {
 export function UiLocalizationBridge() {
   const { language } = useUiPreferences();
   useEffect(() => {
-    const root = document.getElementById("root") ?? document.body;
+    // Dialog portals live beside #root and need the same legacy translations.
+    const root = document.body;
     localizeTree(root, language);
     const observer = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
@@ -65,4 +72,3 @@ export function UiLocalizationBridge() {
   }, [language]);
   return null;
 }
-

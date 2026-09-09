@@ -57,6 +57,12 @@ export function useUiPreferences() {
 
 export const uiCopy = {
   it: {
+    welcomeLabel: "Benvenuto in MLSM Studio", creativeStudio: "Il tuo studio creativo",
+    introTitle: "Dai forma", introTitleAccent: "al tuo suono.",
+    introDescription: "Trasforma la tua musica in immagini in movimento. Crea, perfeziona e monta, in un unico spazio di lavoro.",
+    introSound: "Suono", introImage: "Immagine", introVideo: "Video", soundInMotion: "Suono in movimento",
+    productionSuite: "MLSM Studio · Suite di produzione creativa", pauseAnimation: "Pausa animazione", resumeAnimation: "Riprendi animazione", skipIntro: "Salta introduzione",
+    workspaceEyebrow: "I TUOI STRUMENTI, UN UNICO STUDIO", creativeMode: "modalità creativa",
     projectActions: "Azioni progetto", new: "Nuovo", open: "Apri", save: "Salva", undo: "Annulla", redo: "Ripeti",
     importAudio: "Importa audio", importing: "Importazione…", analyze: "Analizza", analysis: "Analisi", generate: "Genera scena", export: "Esporta",
     language: "Lingua", appearance: "Aspetto", day: "Giorno", night: "Notte", navigation: "Navigazione creativa",
@@ -66,6 +72,12 @@ export const uiCopy = {
     home: "Home", memory: "Memory", openMemory: "Apri memoria intelligente", supportArtist: "Supportami", supportTitle: "Sostieni My Lonely Soul Music", supportDescription: "Ascolta, condividi e scopri le ultime uscite dell’artista che rende possibile MLSM Studio.", close: "Chiudi", latestVideos: "Guarda gli ultimi contenuti", artistChannels: "Canali ufficiali dell’artista", featuredContent: "Contenuto in evidenza", previousContent: "Contenuto precedente", nextContent: "Contenuto successivo", chooseArea: "Cosa vuoi creare?", chooseAreaDescription: "Scegli un ambiente di lavoro. All’interno troverai soltanto gli strumenti e le modalità pertinenti al tuo progetto.", availableAreas: "Aree creative disponibili", creativeModes: "modalità creative", enterArea: "Apri area", enterStudio: "Entra in MLSM Studio", supportOnSocials: "Supporta l’artista"
   },
   en: {
+    welcomeLabel: "Welcome to MLSM Studio", creativeStudio: "Your creative studio",
+    introTitle: "Give your", introTitleAccent: "sound a shape.",
+    introDescription: "Turn your music into moving images. Create, refine and edit in one connected workspace.",
+    introSound: "Sound", introImage: "Image", introVideo: "Video", soundInMotion: "Sound in motion",
+    productionSuite: "MLSM Studio · Creative production suite", pauseAnimation: "Pause animation", resumeAnimation: "Resume animation", skipIntro: "Skip intro",
+    workspaceEyebrow: "YOUR TOOLS, ONE STUDIO", creativeMode: "creative mode",
     projectActions: "Project actions", new: "New", open: "Open", save: "Save", undo: "Undo", redo: "Redo",
     importAudio: "Import audio", importing: "Importing…", analyze: "Analyze", analysis: "Analysis", generate: "Generate scene", export: "Export",
     language: "Language", appearance: "Appearance", day: "Day", night: "Night", navigation: "Creative navigation",

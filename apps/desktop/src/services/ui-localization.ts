@@ -5,6 +5,91 @@ import type { UiLanguage } from "./ui-preferences";
  * Keep technical/product names unchanged and translate longest phrases first.
  */
 const PAIRS: ReadonlyArray<readonly [string, string]> = [
+  // Legacy panels still contain a few English-only controls. Keep these
+  // complete phrases here so the bridge never leaves an Italian/English mix.
+  ["Carica un’immagine. Il rilevatore mantiene tutte le categorie COCO supportate e ogni cerchio può essere rilevato o posizionato manualmente.", "Upload an image. The detector keeps every supported COCO category, and each circle can be detected or positioned manually."],
+  ["Una sensibilità maggiore riduce la soglia di confidenza e può includere più categorie supportate. La modifica non riavvia automaticamente il rilevamento.", "Higher sensitivity lowers the confidence threshold and may include more supported categories. Changing it does not rerun detection automatically."],
+  ["Canvas2D deterministico · contain + rilevamento oggetti", "Deterministic Canvas2D · contain + object detection"],
+  ["Anteprima Circular Spectrum Auto Detector", "Circular Spectrum Auto Detector preview"],
+  ["Mostra/nascondi aree rilevate", "Toggle detected areas"],
+  ["Nascondi aree rilevate", "Hide detected areas"],
+  ["Mostra aree rilevate", "Show detected areas"],
+  ["Esci da tutto schermo", "Exit full screen"],
+  ["Anteprima a tutto schermo", "Preview full screen"],
+  ["↙ Torna all’editor", "↙ Back to editor"],
+  ["⛶ Tutto schermo", "⛶ Full screen"],
+  ["● Canvas2D · export offline condiviso", "● Canvas2D · shared offline export"],
+  ["Persone", "People"],
+  ["Cerchi Circular Spectrum", "Circular Spectrum circles"],
+  ["Ridimensiona Circular Spectrum", "Resize Circular Spectrum"],
+  ["Disattiva animazione", "Disable animation"],
+  ["Animata", "Animated"],
+  ["Personalizzata", "Custom"],
+  ["Stereo laterale (L/R)", "Stereo sides (L/R)"],
+  ["Testo completo della canzone", "Full song text"],
+  ["Incolla il testo", "Paste the text"],
+  ["Mixer audio", "Audio mixer"],
+  ["Transizioni", "Transitions"],
+  ["Apri procedura", "Open workflow"],
+  ["Genera un layer Pro Subtitles per la clip selezionata.", "Generate a Pro Subtitles layer for the selected clip."],
+  ["Seleziona un frammento nella timeline.", "Select a fragment in the timeline."],
+  ["Seleziona una clip con audio per regolarne il volume.", "Select a clip with audio to adjust its volume."],
+  ["Traccia bloccata · sbloccala per modificare le regolazioni.", "Track locked · unlock it to edit adjustments."],
+  ["Seleziona una clip video o immagine per regolarla.", "Select a video or image clip to adjust it."],
+  ["Il frammento selezionato verrà elaborato e il risultato inserito come nuova clip sopra l’originale.", "The selected fragment will be processed and the result inserted as a new clip above the original."],
+  ["Esegui sul frammento", "Run on fragment"],
+  ["transizioni disponibili. Si applicano soltanto alla clip visiva selezionata.", "transitions available. They apply only to the selected visual clip."],
+  ["Seleziona una clip visiva su una traccia sbloccata.", "Select a visual clip on an unlocked track."],
+  ["Nessuna transizione disponibile in questa build.", "No transitions available in this build."],
+  ["Frame precedente", "Previous frame"],
+  ["Frame successivo", "Next frame"],
+  ["Riproduci/Pausa (Spazio)", "Play/Pause (Space)"],
+  ["Spazio", "Space"],
+  ["Sottotitolo", "Subtitle"],
+  ["Risoluzione · formato", "Resolution · format"],
+  ["Qualità codifica", "Encoding quality"],
+  ["Massima · bitrate elevato", "Maximum · high bitrate"],
+  ["Alta · file più leggero", "High · smaller file"],
+  ["Scegli destinazione e esporta", "Choose destination and export"],
+  ["Durata", "Duration"],
+  ["Video stimato", "Estimated video"],
+  ["Nessuna conversione FPS", "No frame-rate conversion"],
+  ["Formato", "Format"],
+  ["Visualizzatori", "Visualizers"],
+  ["Forma d’onda audio", "Waveform audio"],
+  ["Già elaborato", "Already processed"],
+  ["Interpola fotogrammi", "Boost frames"],
+  ["Salva video", "Save video"],
+  ["Video salvato", "Video saved"],
+  ["Salvataggio…", "Saving…"],
+  ["Interpolazione completata", "Interpolation complete"],
+  ["Elaborazione in corso…", "Processing…"],
+  ["Dimensioni in rilevamento", "Detecting dimensions"],
+  ["rilevamento FPS in corso…", "detecting frame rate…"],
+  ["FPS diretto", "Exact frame rate"],
+  ["FPS target", "Target frame rate"],
+  ["Moltiplicatore", "Multiplier"],
+  ["Seleziona file", "Choose file"],
+  ["Nessun file selezionato", "No file selected"],
+  ["Sostituisci file", "Replace file"],
+  ["Trascina un file qui", "Drop a file here"],
+  ["Rimuovi file", "Remove file"],
+  ["Video temporanei di Upscaler / Frame Booster", "Upscaler / Frame Booster temporary video"],
+  ["Modelli Upscaler", "Upscaler models"],
+  ["Modelli locali", "Local models"],
+  ["Cache del browser", "Browser cache"],
+  ["Centro di controllo MLSM Studio", "MLSM Studio Control Center"],
+  ["Pronto per l’esportazione", "Ready to export"],
+  ["Esportazione completata", "Export complete"],
+  ["Nessuna selezione", "Nothing selected"],
+  ["Ripristina impostazioni", "Reset settings"],
+  ["Mostra anteprima", "Show preview"],
+  ["Nascondi anteprima", "Hide preview"],
+  ["Adatta alla finestra", "Fit to window"],
+  ["Mantieni proporzioni", "Keep aspect ratio"],
+  ["Qualità di esportazione", "Export quality"],
+  ["Qualità anteprima", "Preview quality"],
+  ["Impostazioni avanzate", "Advanced settings"],
   ["MLSM usa H.264 quando supportato e, per sorgenti oltre 4K, passa automaticamente a H.265/HEVC senza ridurre la risoluzione.", "MLSM uses H.264 when supported and, for sources above 4K, automatically switches to H.265/HEVC without reducing resolution."],
   ["passa automaticamente a", "automatically switches to"],
   ["sorgenti oltre 4K", "sources above 4K"],
@@ -322,7 +407,7 @@ const PAIRS: ReadonlyArray<readonly [string, string]> = [
   ["proprietà", "ownership"], ["quali", "which"], ["sei", "are"], ["autorizzato", "authorized"],
   ["intervenire", "modify"], ["rappresentare", "represent"], ["inquadratura", "shot"],
   ["vedere", "see"], ["tracce", "tracks"], ["nuovi", "new"], ["obiettivo", "target"],
-  ["morbido", "soft"], ["pause", "pauses"], ["vocali", "vocal"], ["decidono", "determine"],
+  ["morbido", "soft"], ["vocali", "vocal"], ["decidono", "determine"],
   ["rimangono", "remain"], ["vincoli", "constraints"], ["mostrerà", "will show"],
   ["stima", "estimate"], ["attendibile", "reliable"], ["confronterà", "will compare"],
   ["appartengono", "belong"], ["esattamente", "exactly"], ["nuovo", "new"],
@@ -336,8 +421,7 @@ const PAIRS: ReadonlyArray<readonly [string, string]> = [
   ["suo", "its"], ["estenderli", "extend them"], ["corpo", "body"], ["spostarli", "move them"]
 ];
 
-const sortedPairs = [...PAIRS].sort((a, b) => Math.max(b[0].length, b[1].length) - Math.max(a[0].length, a[1].length));
-const PROTECTED_UI_TERMS = /https?:\/\/\S+|(?<![\p{L}\p{N}_])(?:\/[\w.-]+)+|\b(?:MLSM Studio|My Lonely Soul Music|Circular Spectrum|Overlay Spectral|Comments Invasion|Cassette Desk|Song Player|Frame Booster|Video Editor|Pro ?Subtitles|MilkDrop|Winamp|FFmpeg|Whisper|Demucs|Gradio|Colab|Canvas2D|WebM|H\.264|COCO|CUDA|MPS|Metal)\b/giu;
+const PROTECTED_UI_TERMS = /https?:\/\/\S+|(?<![\p{L}\p{N}_])(?:\/[\w.-]+)+|[\p{L}\p{N}_-][\p{L}\p{N}_ .()-]*\.(?:mp4|mov|webm|mkv|mp3|wav|flac|ogg|m4a|png|jpg|jpeg|webp|glb|fbx|srt|vtt)\b|\b(?:MLSM Studio|My Lonely Soul Music|Lonely Bot|Sound Animation|Photo & Video Studio|Circular Spectrum(?: Auto Detector)?|Overlay Spectral|Comments Invasion|Cassette Desk|Song Player|Frame Booster|Video Editor|Pro ?Subtitles|From 9:16 to 16:9|Static Watermark Remover|Auto Detector|AI Quantizer|AI Forensics|DAW Align|Music Restoration|Mastering|Teddy (?:Walk|Sing)|MilkDrop|Winamp|FFmpeg|Whisper|Demucs|Gradio|Colab|Canvas2D|WebM|H\.264|H\.265|OpenAI|NVIDIA|Gemini|COCO|CUDA|MPS|Metal)\b/giu;
 
 function escapeRegExp(value: string) { return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 
@@ -347,16 +431,32 @@ function replacementCase(source: string, translated: string) {
   return translated[0]?.toLowerCase() + translated.slice(1);
 }
 
-export function localizeUiText(value: string, language: UiLanguage): string {
-  if (!value.trim()) return value;
-  const protectedValues: string[] = [];
-  let output = value.replace(PROTECTED_UI_TERMS, (match) => `\uE000${protectedValues.push(match) - 1}\uE001`);
-  for (const [italian, english] of sortedPairs) {
+function compileCatalogue(language: UiLanguage) {
+  const translations = new Map<string, string>();
+  for (const [italian, english] of PAIRS) {
     const source = language === "en" ? italian : english;
     const target = language === "en" ? english : italian;
-    if (source === target || !output.toLocaleLowerCase().includes(source.toLocaleLowerCase())) continue;
-    const pattern = new RegExp(`(?<![\\p{L}\\p{N}_])${escapeRegExp(source)}(?![\\p{L}\\p{N}_])`, "giu");
-    output = output.replace(pattern, (match) => replacementCase(match, target));
+    // English articles such as "a" are valid Italian words too: never reverse them in isolation.
+    if (language === "it" && source.length < 3) continue;
+    if (!translations.has(source.toLowerCase())) translations.set(source.toLowerCase(), target);
   }
+  const phrases = [...translations.keys()].sort((a, b) => b.length - a.length).map(escapeRegExp);
+  return { translations, pattern: new RegExp(`(?<![\\p{L}\\p{N}_])(?:${phrases.join("|")})(?![\\p{L}\\p{N}_])`, "giu") };
+}
+
+// Compile once, not hundreds of regular expressions for each DOM mutation.
+const catalogues = { it: compileCatalogue("it"), en: compileCatalogue("en") };
+
+export function localizeUiText(value: string, language: UiLanguage): string {
+  const trimmed = value.trim();
+  if (!trimmed || /^(?:[A-Za-z]:[\\/]|\/|https?:\/\/)/.test(trimmed)) return value;
+  const { translations, pattern } = catalogues[language];
+  // Complete reviewed phrases take priority, including phrases containing product names.
+  const exact = translations.get(trimmed.toLowerCase());
+  if (exact) return value.replace(trimmed, replacementCase(trimmed, exact));
+  const protectedValues: string[] = [];
+  const protectedText = value.replace(PROTECTED_UI_TERMS, (match) => `\uE000${protectedValues.push(match) - 1}\uE001`);
+  // Single pass: replacement text must never be translated again in this call.
+  const output = protectedText.replace(pattern, (match) => replacementCase(match, translations.get(match.toLowerCase()) ?? match));
   return output.replace(/\uE000(\d+)\uE001/g, (_match, index: string) => protectedValues[Number(index)] ?? "");
 }

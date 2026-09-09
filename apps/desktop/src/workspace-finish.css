@@ -1,0 +1,1716 @@
+/*
+ * MLSM workspace finish
+ *
+ * This is intentionally a final cascade layer. It consumes the product
+ * variables defined by styles.css/studio-polish.css and never redefines them;
+ * scene canvases, thumbnails, clips and media remain responsible for their
+ * own colour pipeline. Keep selectors close to their component surface so
+ * editor interactions (dragging, trimming, picking) are not affected.
+ */
+
+/* Shared editor chrome --------------------------------------------------- */
+.app-shell {
+  color: var(--ink);
+  background: var(--app-bg);
+}
+
+.toolbar {
+  position: relative;
+  z-index: 22;
+  min-width: 0;
+  gap: 11px;
+  padding-inline: 16px;
+  border-bottom-color: color-mix(in srgb, var(--accent) 18%, var(--line));
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--accent) 4%, transparent), transparent 40%),
+    var(--panel);
+  box-shadow: 0 8px 24px var(--shadow), inset 0 -1px color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.toolbar::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 45%, transparent), transparent);
+  opacity: .52;
+}
+
+.toolbar .brand,
+.audio-toolbar .brand {
+  min-width: 0;
+  gap: 9px;
+}
+
+.toolbar .brand-mark,
+.audio-toolbar .brand-mark {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
+  box-shadow: 0 7px 18px color-mix(in srgb, var(--accent) 16%, transparent);
+  filter: none;
+}
+
+.toolbar .brand-copy,
+.audio-toolbar .brand-copy {
+  gap: 3px;
+}
+
+.toolbar .brand-copy strong,
+.audio-toolbar .brand-copy strong {
+  color: var(--ink);
+  font-family: "Space Grotesk", Inter, sans-serif;
+  font-size: 13px;
+  letter-spacing: -.035em;
+}
+
+.toolbar .brand-copy small,
+.audio-toolbar .brand-copy small {
+  color: var(--accent-strong);
+  font-size: 7px;
+  letter-spacing: .13em;
+}
+
+.toolbar nav {
+  min-width: 0;
+  padding-block: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+.toolbar nav button,
+.toolbar-home,
+.ui-preferences :is(select, .theme-toggle),
+.toolbar > .studio-settings-button,
+.toolbar > .memory-button,
+.toolbar > .support-artist-button {
+  min-height: 32px;
+  border-radius: 8px;
+  color: var(--ink);
+  border-color: var(--line);
+  background: var(--panel-raised);
+  font-size: 10px;
+  font-weight: 650;
+  transition: transform .16s ease, border-color .16s ease, background-color .16s ease, box-shadow .16s ease;
+}
+
+.toolbar nav button:hover:not(:disabled),
+.toolbar-home:hover:not(:disabled),
+.ui-preferences :is(select, .theme-toggle):hover:not(:disabled),
+.toolbar > .studio-settings-button:hover:not(:disabled),
+.toolbar > .memory-button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 54%, var(--line));
+  background: var(--accent-soft);
+  box-shadow: 0 5px 14px var(--shadow);
+  transform: translateY(-1px);
+}
+
+.toolbar nav button:active:not(:disabled),
+.toolbar-home:active:not(:disabled),
+.ui-preferences .theme-toggle:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.toolbar nav button:disabled {
+  color: color-mix(in srgb, var(--muted) 72%, transparent);
+  background: color-mix(in srgb, var(--panel-soft) 70%, transparent);
+}
+
+.toolbar .toolbar-home {
+  padding-inline: 10px;
+}
+
+.toolbar .toolbar-home span,
+.toolbar .theme-toggle span {
+  color: var(--accent-strong);
+}
+
+.toolbar .ui-preferences {
+  min-width: 0;
+  gap: 6px;
+  padding-left: 10px;
+  border-left-color: color-mix(in srgb, var(--accent) 20%, var(--line));
+}
+
+.toolbar .ui-preferences label {
+  min-width: 0;
+}
+
+.toolbar .ui-preferences select {
+  padding: 5px 7px;
+}
+
+.toolbar .export {
+  flex: 0 0 auto;
+  min-height: 34px;
+  border-color: var(--accent-strong);
+  color: var(--on-accent);
+  background: var(--accent-strong);
+  box-shadow: 0 7px 18px color-mix(in srgb, var(--accent) 22%, transparent), inset 0 1px color-mix(in srgb, #fff 38%, transparent);
+  font-weight: 800;
+}
+
+.toolbar .export:hover:not(:disabled) {
+  color: var(--on-accent);
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: 0 9px 22px color-mix(in srgb, var(--accent) 30%, transparent), inset 0 1px color-mix(in srgb, #fff 38%, transparent);
+  transform: translateY(-1px);
+}
+
+.toolbar .support-artist-button {
+  box-shadow: 0 5px 16px color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
+.workspace {
+  background: var(--app-bg);
+}
+
+.workspace > .panel,
+.workspace > .viewport,
+.workspace > .workspace-resize-handle {
+  min-width: 0;
+}
+
+.panel.library,
+.panel.inspector,
+.frame-booster-inspector {
+  position: relative;
+  color: var(--ink);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--accent) 3%, transparent), transparent 180px),
+    var(--panel);
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+.panel.library {
+  padding: 15px 14px 18px;
+  border-right-color: color-mix(in srgb, var(--accent) 16%, var(--line));
+}
+
+.panel.inspector,
+.frame-booster-inspector {
+  padding: 16px 15px 20px;
+  border-left-color: color-mix(in srgb, var(--accent) 16%, var(--line));
+}
+
+.panel.library::before,
+.panel.inspector::before,
+.frame-booster-inspector::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  width: 34%;
+  height: 1px;
+  background: color-mix(in srgb, var(--accent) 58%, transparent);
+  opacity: .58;
+  pointer-events: none;
+}
+
+.panel.library::before { left: 0; }
+.panel.inspector::before,
+.frame-booster-inspector::before { right: 0; }
+
+.panel-heading {
+  min-height: 28px;
+  margin-bottom: 13px;
+  padding-bottom: 9px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+}
+
+.panel-heading strong {
+  color: var(--ink);
+  font-family: "Space Grotesk", Inter, sans-serif;
+  font-size: 13px;
+  letter-spacing: -.02em;
+}
+
+.type-badge {
+  padding: 4px 6px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+  border-radius: 999px;
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel-soft));
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: .09em;
+}
+
+.animation-mode-heading {
+  position: relative;
+  overflow: hidden;
+  margin: -2px -1px 0;
+  padding: 13px 12px 14px;
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+  border-radius: 12px;
+  background:
+    radial-gradient(circle at 100% 0, color-mix(in srgb, var(--accent) 17%, transparent), transparent 54%),
+    linear-gradient(145deg, color-mix(in srgb, var(--panel-raised) 90%, var(--accent)), var(--panel));
+  box-shadow: 0 9px 24px var(--shadow), inset 0 1px color-mix(in srgb, #fff 38%, transparent);
+}
+
+.animation-mode-heading::after {
+  content: "";
+  position: absolute;
+  right: -20px;
+  bottom: -28px;
+  width: 92px;
+  height: 92px;
+  border: 1px solid color-mix(in srgb, var(--accent) 27%, transparent);
+  border-radius: 50%;
+  opacity: .7;
+  pointer-events: none;
+}
+
+.animation-mode-heading span {
+  position: relative;
+  z-index: 1;
+  color: var(--accent-strong);
+  font-size: 8px;
+  font-weight: 850;
+  letter-spacing: .14em;
+}
+
+.animation-mode-heading strong {
+  position: relative;
+  z-index: 1;
+  color: var(--ink);
+  font-family: "Space Grotesk", Inter, sans-serif;
+  font-size: 15px;
+  letter-spacing: -.025em;
+}
+
+.creative-navigation {
+  gap: 9px;
+}
+
+.animation-navigation-selectors {
+  gap: 7px;
+}
+
+.mode-picker {
+  gap: 5px;
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: .1em;
+}
+
+.mode-picker select {
+  min-height: 34px;
+  padding: 7px 25px 7px 9px;
+  border-color: var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--panel-raised);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.mode-picker select:hover,
+.panel :is(input, select, textarea):hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--line));
+}
+
+.mode-description {
+  margin: -2px 1px 1px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.panel section {
+  margin-top: 13px;
+  padding-top: 12px;
+  border-top-color: color-mix(in srgb, var(--line) 84%, transparent);
+}
+
+.panel section:first-of-type {
+  margin-top: 8px;
+}
+
+.panel h2 {
+  margin-bottom: 10px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 850;
+  letter-spacing: .12em;
+}
+
+.panel :is(label, .muted, p) {
+  line-height: 1.5;
+}
+
+.panel label {
+  color: var(--muted);
+}
+
+.panel strong {
+  color: var(--ink);
+}
+
+.panel :is(input:not([type="range"]):not([type="color"]):not([type="checkbox"]), select, textarea) {
+  min-height: 33px;
+  color: var(--ink);
+  border-color: var(--line);
+  border-radius: 8px;
+  background: var(--panel-raised);
+}
+
+.panel textarea {
+  min-height: 66px;
+}
+
+.panel input[type="color"] {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-raised);
+}
+
+.panel input[type="range"] {
+  accent-color: var(--accent-strong);
+}
+
+.panel button {
+  border-color: var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--panel-raised);
+}
+
+.panel button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 52%, var(--line));
+  background: var(--accent-soft);
+  box-shadow: 0 5px 13px var(--shadow);
+}
+
+.panel-tabs,
+.inspector-tabs {
+  gap: 5px;
+}
+
+.inspector-tabs {
+  top: -16px;
+  margin: -16px -15px 16px;
+  padding: 10px 15px;
+  border-bottom-color: color-mix(in srgb, var(--accent) 20%, var(--line));
+  background: color-mix(in srgb, var(--panel) 95%, transparent);
+  box-shadow: 0 5px 14px var(--shadow);
+}
+
+.inspector-tabs button,
+.panel-tabs button {
+  min-height: 30px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.inspector-tabs button.active,
+.panel-tabs .active {
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--accent) 54%, var(--line));
+  background: var(--accent-soft);
+  box-shadow: inset 0 -2px var(--accent-strong), 0 4px 12px var(--shadow);
+}
+
+.base-object-list,
+.instrument-colors,
+.secondary-marble-colors {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+.base-object-list > label {
+  min-height: 50px;
+  padding: 8px;
+  border-color: var(--line);
+  border-radius: 9px;
+  background: var(--panel-raised);
+  transition: transform .16s ease, border-color .16s ease, background-color .16s ease, box-shadow .16s ease;
+}
+
+.base-object-list > label:hover {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
+  background: color-mix(in srgb, var(--accent-soft) 45%, var(--panel-raised));
+  box-shadow: 0 5px 14px var(--shadow);
+  transform: translateY(-1px);
+}
+
+.base-object-list > label.selected {
+  border-color: color-mix(in srgb, var(--accent) 65%, var(--line));
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 var(--accent-strong), 0 5px 15px var(--shadow);
+}
+
+.base-object-list strong {
+  font-size: 10px;
+}
+
+.base-object-list small {
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.regenerate-base,
+.panel :is(.add-subtitle-block, .smart-subtitle-generate) {
+  min-height: 35px;
+  border-color: var(--accent-strong);
+  color: var(--on-accent);
+  background: var(--accent-strong);
+  box-shadow: 0 7px 16px color-mix(in srgb, var(--accent) 18%, transparent);
+  font-weight: 800;
+}
+
+.regenerate-base:hover:not(:disabled),
+.panel :is(.add-subtitle-block, .smart-subtitle-generate):hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--on-accent);
+  background: var(--accent);
+}
+
+/* Home area cards and the compact artwork slot supplied by StudioHome. */
+.studio-area-grid {
+  gap: clamp(16px, 2vw, 24px);
+}
+
+.studio-area-card {
+  --card-accent: var(--accent);
+  min-height: 304px;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: 17px;
+  padding: clamp(20px, 2.2vw, 29px);
+  border-color: color-mix(in srgb, var(--card-accent) 32%, var(--line));
+  border-radius: 20px;
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--card-accent) 7%, var(--panel-raised)), var(--panel) 68%),
+    var(--panel);
+  box-shadow: 0 15px 42px var(--shadow), inset 0 1px color-mix(in srgb, #fff 38%, transparent);
+  transition: transform .22s cubic-bezier(.16, 1, .3, 1), border-color .22s ease, box-shadow .22s ease;
+}
+
+.studio-area-card::before {
+  top: -90px;
+  right: -64px;
+  width: 190px;
+  height: 190px;
+  background: color-mix(in srgb, var(--card-accent) 17%, transparent);
+  filter: blur(16px);
+  opacity: .75;
+}
+
+.studio-area-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border: 1px solid color-mix(in srgb, #fff 22%, transparent);
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.studio-area-card:hover {
+  border-color: color-mix(in srgb, var(--card-accent) 72%, var(--line));
+  box-shadow: 0 24px 58px var(--shadow), 0 0 0 1px color-mix(in srgb, var(--card-accent) 20%, transparent), inset 0 1px color-mix(in srgb, #fff 45%, transparent);
+  transform: translateY(-5px);
+}
+
+.studio-area-card:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 4px;
+}
+
+.studio-area-card__number {
+  top: 23px;
+  right: 24px;
+  color: color-mix(in srgb, var(--card-accent) 54%, var(--muted));
+  font-size: 10px;
+  letter-spacing: .16em;
+}
+
+.studio-area-card__icon {
+  width: 52px;
+  height: 52px;
+  flex-basis: 52px;
+  border-color: color-mix(in srgb, var(--card-accent) 48%, var(--line));
+  border-radius: 14px;
+  color: var(--card-accent);
+  background: color-mix(in srgb, var(--card-accent) 11%, var(--panel));
+  box-shadow: inset 0 1px color-mix(in srgb, #fff 46%, transparent), 0 9px 25px color-mix(in srgb, var(--card-accent) 15%, transparent);
+  transition: transform .25s cubic-bezier(.16, 1, .3, 1), box-shadow .25s ease;
+}
+
+.studio-area-card__icon svg {
+  width: 31px;
+  height: 31px;
+}
+
+.studio-area-card:hover .studio-area-card__icon {
+  transform: rotate(-4deg) scale(1.06);
+  box-shadow: inset 0 1px color-mix(in srgb, #fff 50%, transparent), 0 12px 30px color-mix(in srgb, var(--card-accent) 24%, transparent);
+}
+
+.studio-area-card__art {
+  position: relative;
+  grid-column: 1 / -1;
+  width: 100%;
+  height: 102px;
+  justify-self: stretch;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--card-accent) 30%, var(--line));
+  border-radius: 15px;
+  color: var(--card-accent);
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--card-accent) 13%, transparent), transparent 70%),
+    color-mix(in srgb, var(--panel) 76%, var(--card-accent));
+  box-shadow: inset 0 1px color-mix(in srgb, #fff 36%, transparent), 0 10px 24px color-mix(in srgb, var(--card-accent) 11%, transparent);
+  opacity: .94;
+  transform: translateZ(0);
+  transition: transform .28s cubic-bezier(.16, 1, .3, 1), border-color .22s ease, box-shadow .22s ease;
+  pointer-events: none;
+}
+
+.studio-area-card__art::before,
+.studio-area-card__art::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+}
+
+.studio-area-card__art::before {
+  inset: 10px;
+  border: 1px solid color-mix(in srgb, var(--card-accent) 22%, transparent);
+  border-radius: 10px;
+  opacity: .7;
+}
+
+.studio-area-card__art::after {
+  top: 0;
+  bottom: 0;
+  left: 34%;
+  width: 1px;
+  background: color-mix(in srgb, var(--card-accent) 24%, transparent);
+  box-shadow: 34px 0 color-mix(in srgb, var(--card-accent) 15%, transparent), 68px 0 color-mix(in srgb, var(--card-accent) 10%, transparent);
+}
+
+.studio-area-card__art svg {
+  position: relative;
+  z-index: 1;
+  width: 82%;
+  height: 82%;
+  overflow: visible;
+  color: currentColor;
+  filter: drop-shadow(0 5px 10px color-mix(in srgb, var(--card-accent) 18%, transparent));
+}
+
+.studio-area-card__art svg :is(path, line, polyline, rect, circle, ellipse, polygon) {
+  vector-effect: non-scaling-stroke;
+}
+
+.studio-area-card:hover .studio-area-card__art {
+  border-color: color-mix(in srgb, var(--card-accent) 60%, var(--line));
+  box-shadow: inset 0 1px color-mix(in srgb, #fff 45%, transparent), 0 15px 32px color-mix(in srgb, var(--card-accent) 19%, transparent);
+  transform: translateY(-2px) rotate(1deg);
+}
+
+.studio-area-card__copy {
+  position: relative;
+  z-index: 1;
+  max-width: 100%;
+  gap: 7px;
+}
+
+.studio-area-card__copy small {
+  color: var(--card-accent);
+  font-size: 9px;
+  letter-spacing: .14em;
+}
+
+.studio-area-card__copy strong {
+  color: var(--ink);
+  font-family: "Space Grotesk", Inter, sans-serif;
+  font-size: clamp(21px, 2.1vw, 29px);
+}
+
+.studio-area-card__copy em {
+  max-width: 400px;
+  min-height: 48px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.studio-area-card__action {
+  position: relative;
+  z-index: 1;
+  padding-top: 14px;
+  color: var(--ink);
+  border-top-color: color-mix(in srgb, var(--card-accent) 20%, var(--line));
+  font-size: 9px;
+  letter-spacing: .09em;
+}
+
+.studio-area-card__action b {
+  width: 28px;
+  height: 28px;
+  color: var(--on-accent);
+  background: var(--card-accent);
+  box-shadow: 0 5px 13px color-mix(in srgb, var(--card-accent) 25%, transparent);
+  transition: transform .22s ease, box-shadow .22s ease;
+}
+
+.studio-area-card:hover .studio-area-card__action b {
+  box-shadow: 0 7px 16px color-mix(in srgb, var(--card-accent) 35%, transparent);
+  transform: translate(2px, -2px) rotate(45deg);
+}
+
+/* Viewport and timeline chrome. Canvas/media internals are deliberately not
+ * recoloured here. */
+.viewport {
+  background: var(--panel-soft);
+}
+
+.viewport-tools {
+  min-width: 0;
+  gap: 7px;
+  padding-inline: 10px;
+  border-bottom-color: color-mix(in srgb, var(--accent) 16%, var(--line));
+  background: color-mix(in srgb, var(--panel) 88%, var(--panel-soft));
+}
+
+.viewport-tools button,
+.viewport-fullscreen-toggle {
+  min-height: 28px;
+  border-radius: 7px;
+  color: var(--muted);
+  border-color: var(--line);
+  background: var(--panel-raised);
+  font-size: 9px;
+  font-weight: 750;
+}
+
+.viewport-tools button:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--accent) 46%, var(--line));
+  background: var(--accent-soft);
+}
+
+.viewport-tools .active-control {
+  color: var(--accent-strong);
+  border-color: color-mix(in srgb, var(--accent) 44%, var(--line));
+  background: color-mix(in srgb, var(--accent-soft) 68%, var(--panel-raised));
+}
+
+.viewport-footer,
+.statusbar {
+  min-width: 0;
+  gap: 12px;
+  border-top-color: color-mix(in srgb, var(--accent) 16%, var(--line));
+  color: var(--muted);
+  background: var(--panel-soft);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.viewport-footer span,
+.statusbar span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timeline {
+  border-top-color: color-mix(in srgb, var(--accent) 24%, var(--line));
+  background: var(--panel);
+  box-shadow: 0 -10px 28px var(--shadow);
+}
+
+.transport {
+  /* Preserve the existing transport/timeline geometry; only finish its chrome. */
+  height: 43px;
+  gap: 6px;
+  padding-inline: 12px;
+  border-bottom-color: color-mix(in srgb, var(--accent) 18%, var(--line));
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 4%, transparent), transparent 55%), var(--panel-raised);
+}
+
+.transport button {
+  min-height: 29px;
+  padding-inline: 9px;
+  border-radius: 7px;
+  color: var(--muted);
+  border-color: var(--line);
+  background: var(--panel);
+  font-size: 9px;
+  font-weight: 750;
+}
+
+.transport button:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: var(--accent-soft);
+}
+
+.transport .play,
+.transport .active-control {
+  color: var(--accent-strong);
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
+  background: var(--accent-soft);
+}
+
+.timecode {
+  border: 1px solid var(--line);
+  color: var(--ink);
+  background: var(--panel);
+  font-weight: 750;
+}
+
+.tracks {
+  background: var(--panel);
+}
+
+.track-labels {
+  padding-inline: 10px;
+  border-right-color: color-mix(in srgb, var(--accent) 14%, var(--line));
+  background: var(--panel-raised);
+}
+
+.track-labels strong {
+  color: var(--ink);
+  font-size: 10px;
+}
+
+.track-content {
+  background-color: var(--panel);
+  background-image: repeating-linear-gradient(90deg, transparent 0, transparent 89px, color-mix(in srgb, var(--line) 55%, transparent) 90px);
+}
+
+.ruler,
+.marker-lane,
+.waveform-canvas,
+.empty-waveform {
+  border-color: color-mix(in srgb, var(--line) 82%, transparent);
+}
+
+.ruler {
+  color: var(--muted);
+  background: color-mix(in srgb, var(--panel-soft) 62%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+
+.empty-waveform {
+  color: var(--muted);
+  background: color-mix(in srgb, var(--panel-soft) 60%, transparent);
+}
+
+.timeline-resize-handle span {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+  background: var(--panel-raised);
+}
+
+.timeline-resize-handle:hover span,
+.timeline-resize-handle:focus-visible span {
+  border-color: var(--accent-strong);
+  box-shadow: 0 2px 12px color-mix(in srgb, var(--accent) 24%, transparent);
+}
+
+.workspace-resize-handle {
+  background: var(--panel-soft);
+}
+
+.workspace-resize-handle::before {
+  background: color-mix(in srgb, var(--line) 85%, var(--accent));
+}
+
+.workspace-resize-handle span {
+  background: var(--accent-strong);
+  opacity: .4;
+}
+
+/* Standalone tools ------------------------------------------------------- */
+.audio-workspace {
+  background:
+    radial-gradient(circle at 78% 0, color-mix(in srgb, var(--accent) 14%, transparent), transparent 37%),
+    var(--app-bg);
+}
+
+.audio-toolbar {
+  gap: 11px;
+  padding-inline: clamp(16px, 3vw, 30px);
+  border-bottom-color: color-mix(in srgb, var(--accent) 22%, var(--line));
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  box-shadow: 0 10px 28px var(--shadow), inset 0 -1px color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.audio-toolbar > button,
+.audio-toolbar label,
+.audio-toolbar select {
+  font-size: 10px;
+}
+
+.audio-toolbar > button {
+  min-height: 34px;
+  border-radius: 8px;
+}
+
+.audio-toolbar select {
+  min-height: 32px;
+  padding: 5px 7px;
+  color: var(--ink);
+  border-color: var(--line);
+  border-radius: 8px;
+  background: var(--panel-raised);
+}
+
+.audio-workspace > main {
+  width: min(1140px, calc(100% - 44px));
+  padding-block: clamp(34px, 6vw, 72px) 88px;
+}
+
+.audio-hero {
+  position: relative;
+  max-width: 760px;
+  padding: 22px 0 27px 24px;
+  border-left: 2px solid var(--accent-strong);
+}
+
+.audio-hero::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 48%;
+  height: 1px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 52%, transparent), transparent);
+}
+
+.audio-hero small {
+  color: var(--accent-strong);
+  font-size: 9px;
+  letter-spacing: .19em;
+}
+
+.audio-hero h1 {
+  margin: 12px 0 10px;
+  color: var(--ink);
+  font-family: "Space Grotesk", Inter, sans-serif;
+  font-size: clamp(42px, 6vw, 70px);
+  letter-spacing: -.065em;
+}
+
+.audio-hero p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+.audio-tabs {
+  grid-template-columns: repeat(2, minmax(170px, 260px));
+  justify-content: start;
+  gap: 7px;
+  margin: 26px 0 14px;
+}
+
+.audio-tabs button {
+  min-height: 42px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--muted);
+  background: var(--panel);
+  text-align: left;
+}
+
+.audio-tabs button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
+  background: var(--accent-soft);
+}
+
+.audio-tabs button.active {
+  color: var(--on-accent);
+  border-color: var(--accent-strong);
+  background: var(--accent-strong);
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--accent) 21%, transparent);
+}
+
+.audio-tool-card {
+  gap: 18px;
+  padding: clamp(19px, 3vw, 29px);
+  border-color: color-mix(in srgb, var(--accent) 21%, var(--line));
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--panel) 94%, var(--accent));
+  box-shadow: 0 17px 46px var(--shadow), inset 0 1px color-mix(in srgb, #fff 30%, transparent);
+}
+
+.audio-tool-card label {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.audio-tool-card :is(input:not([type="range"]), select, textarea) {
+  min-height: 38px;
+  padding: 9px 10px;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel-raised);
+}
+
+.audio-tool-card textarea {
+  min-height: 100px;
+}
+
+.audio-form-grid {
+  gap: 12px;
+}
+
+.audio-media-picker {
+  align-items: center;
+  gap: 12px;
+  padding: 13px;
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel-raised));
+}
+
+.audio-media-picker button {
+  min-height: 40px;
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--panel);
+  font-weight: 750;
+}
+
+.audio-media-picker small {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.audio-primary {
+  min-height: 45px;
+  color: var(--on-accent);
+  border-color: var(--accent-strong);
+  border-radius: 9px;
+  background: var(--accent-strong);
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.audio-primary:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent);
+  transform: translateY(-1px);
+}
+
+.audio-result {
+  gap: 13px;
+  padding: 16px;
+  border-color: color-mix(in srgb, var(--accent) 24%, var(--line));
+  border-radius: 13px;
+  background: var(--app-bg);
+}
+
+.audio-result h2 {
+  margin: 0;
+  color: var(--ink);
+  font-family: "Space Grotesk", Inter, sans-serif;
+  font-size: 17px;
+}
+
+.audio-actions button {
+  border-radius: 8px;
+  font-size: 10px;
+}
+
+.audio-job-progress {
+  margin-top: 20px;
+  padding: 13px 15px;
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--line));
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 12px 32px var(--shadow);
+}
+
+.audio-job-progress > div {
+  background: var(--panel-soft);
+}
+
+.audio-job-progress i {
+  background: linear-gradient(90deg, var(--accent-strong), var(--accent));
+}
+
+/* Settings and export dialogs ------------------------------------------- */
+.dialog-backdrop,
+.studio-settings-backdrop {
+  background: color-mix(in srgb, var(--ink) 55%, transparent);
+}
+
+.export-dialog {
+  width: min(540px, calc(100vw - 32px));
+  max-height: min(760px, calc(100dvh - 32px));
+  overflow: auto;
+  padding: 23px;
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
+  border-radius: 17px;
+  color: var(--ink);
+  background: var(--panel);
+  box-shadow: 0 27px 80px var(--shadow), inset 0 1px color-mix(in srgb, #fff 35%, transparent);
+}
+
+.export-dialog > header {
+  padding-bottom: 13px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+}
+
+.export-dialog h2 {
+  color: var(--ink);
+  font-family: "Space Grotesk", Inter, sans-serif;
+  letter-spacing: -.025em;
+}
+
+.export-dialog label {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.export-dialog :is(select, input[type="color"]) {
+  min-height: 36px;
+  color: var(--ink);
+  border-color: var(--line);
+  border-radius: 8px;
+  background: var(--panel-raised);
+}
+
+.estimate-grid {
+  gap: 7px;
+}
+
+.estimate-grid span {
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  background: var(--panel-soft);
+}
+
+.export-progress-stage {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+  background: color-mix(in srgb, var(--accent) 5%, var(--panel-raised));
+}
+
+.export-dialog > footer {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+}
+
+.export-dialog > footer .export {
+  min-height: 38px;
+  color: var(--on-accent);
+  border-color: var(--accent-strong);
+  background: var(--accent-strong);
+}
+
+.studio-settings-dialog {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--settings-border));
+  border-radius: 20px;
+  background: var(--panel);
+  box-shadow: 0 32px 100px var(--shadow), inset 0 1px color-mix(in srgb, #fff 30%, transparent);
+}
+
+.studio-settings-dialog > header {
+  min-height: 74px;
+  border-bottom-color: color-mix(in srgb, var(--accent) 18%, var(--settings-border));
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 10%, transparent), transparent 58%), var(--panel);
+}
+
+.settings-title-mark {
+  color: var(--on-accent);
+  background: var(--accent-strong);
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.studio-settings-body > nav {
+  border-right-color: color-mix(in srgb, var(--accent) 15%, var(--settings-border));
+  background: var(--panel-soft);
+}
+
+.studio-settings-body > nav button {
+  border-radius: 10px;
+}
+
+.studio-settings-body > nav button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--settings-border));
+  color: var(--ink);
+  background: var(--accent-soft);
+}
+
+.studio-settings-body > nav button[aria-current="page"] {
+  border-color: color-mix(in srgb, var(--accent) 44%, var(--settings-border));
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 var(--accent-strong), 0 6px 16px var(--shadow);
+}
+
+.studio-settings-body > nav button[aria-current="page"] > span:first-child {
+  border-color: var(--accent-strong);
+  color: var(--on-accent);
+  background: var(--accent-strong);
+}
+
+.studio-settings-body > main {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+.settings-api-zone,
+.settings-provider-editor,
+.settings-list-toolbar,
+.settings-history li,
+.settings-caches article {
+  border-color: color-mix(in srgb, var(--accent) 15%, var(--settings-border));
+  background: var(--panel-raised);
+  box-shadow: 0 7px 20px var(--shadow);
+}
+
+.settings-api-llm {
+  border-top-color: var(--accent-strong);
+}
+
+.settings-provider-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--settings-border));
+  box-shadow: 0 10px 24px var(--shadow);
+}
+
+.settings-provider-card[aria-pressed="true"] {
+  box-shadow: inset 3px 0 var(--accent-strong), 0 7px 18px var(--shadow);
+}
+
+.settings-empty-state {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--settings-border));
+  background: color-mix(in srgb, var(--accent) 4%, var(--panel-soft));
+}
+
+.settings-actions button.is-primary {
+  color: var(--on-accent);
+  border-color: var(--accent-strong);
+  background: var(--accent-strong);
+}
+
+/* Frame Booster / Upscaler surfaces ------------------------------------ */
+.frame-booster-app-shell .workspace {
+  background: var(--app-bg);
+}
+
+.frame-booster-panel,
+.frame-booster-inspector,
+.upscaler-settings,
+.upscaler-inspector {
+  color: var(--ink);
+}
+
+.frame-booster-panel,
+.upscaler-settings {
+  gap: 13px;
+  padding-bottom: 21px;
+}
+
+.frame-booster-heading {
+  padding-bottom: 11px;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 20%, var(--line));
+}
+
+.frame-booster-heading h2,
+.upscaler-settings > h2,
+.frame-booster-inspector h2,
+.upscaler-inspector > h2 {
+  color: var(--ink);
+  font-family: "Space Grotesk", Inter, sans-serif;
+  font-size: 13px;
+  letter-spacing: -.025em;
+}
+
+.frame-booster-upload {
+  padding: 16px;
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--line));
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel-raised));
+  box-shadow: inset 0 1px color-mix(in srgb, #fff 30%, transparent);
+}
+
+.frame-booster-upload:hover {
+  border-color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel-raised));
+}
+
+.frame-booster-source,
+.frame-booster-method-guide,
+.frame-booster-capability,
+.upscaler-model-card,
+.upscaler-hardware-card,
+.watermark-pixel-readout,
+.export-integrity-card,
+.remote-upscaler-card,
+.remote-upscaler-endpoint,
+.remote-upscaler-video-options {
+  border-color: color-mix(in srgb, var(--accent) 21%, var(--line));
+  border-radius: 11px;
+  background: var(--panel-raised);
+  box-shadow: 0 6px 17px var(--shadow);
+}
+
+.frame-booster-method-guide {
+  background: color-mix(in srgb, var(--accent) 5%, var(--panel-raised));
+}
+
+.frame-booster-controls {
+  gap: 10px;
+}
+
+.frame-booster-controls :is(select, input),
+.frame-booster-method-control select,
+.upscaler-settings :is(select, input[type="number"], textarea),
+.upscaler-inspector input {
+  min-height: 34px;
+  color: var(--ink);
+  border-color: var(--line);
+  border-radius: 8px;
+  background: var(--panel-raised);
+}
+
+.frame-booster-capability.is-ready {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+}
+
+.frame-booster-capability button {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+  background: var(--panel);
+}
+
+.frame-booster-preview {
+  padding: 20px;
+  background:
+    radial-gradient(circle at 50% 40%, color-mix(in srgb, var(--accent) 11%, var(--panel-soft)), transparent 62%),
+    var(--app-bg);
+}
+
+.frame-booster-canvas {
+  border-color: color-mix(in srgb, var(--accent) 24%, var(--line));
+  border-radius: 14px;
+  box-shadow: 0 20px 54px var(--shadow), inset 0 1px color-mix(in srgb, #fff 14%, transparent);
+}
+
+.frame-booster-empty {
+  max-width: 360px;
+  padding: 34px;
+}
+
+.frame-booster-empty > span {
+  width: 58px;
+  height: 58px;
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--line));
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel));
+  box-shadow: 0 9px 24px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.frame-booster-actions .primary,
+.frame-booster-actions button.primary {
+  min-height: 39px;
+  border-color: var(--accent-strong);
+  color: var(--on-accent);
+  background: var(--accent-strong);
+  box-shadow: 0 7px 17px color-mix(in srgb, var(--accent) 21%, transparent);
+  font-weight: 800;
+}
+
+.frame-booster-actions .primary:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent);
+  transform: translateY(-1px);
+}
+
+.frame-booster-progress,
+.frame-booster-notice {
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--line));
+  border-radius: 10px;
+  background: var(--panel-raised);
+}
+
+.frame-booster-progress__track span {
+  background: linear-gradient(90deg, var(--accent-strong), var(--accent));
+}
+
+.frame-booster-inspector {
+  gap: 13px;
+}
+
+.frame-booster-inspector dl {
+  padding: 13px;
+  border: 1px solid color-mix(in srgb, var(--accent) 17%, var(--line));
+  border-radius: 11px;
+  background: var(--panel-raised);
+}
+
+.frame-booster-inspector dd {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.upscaler-settings > h2 {
+  margin-top: 8px;
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 84%, transparent);
+}
+
+.upscaler-settings > h2:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.upscaler-model-card > strong,
+.upscaler-hardware-card > strong,
+.watermark-pixel-readout strong {
+  color: var(--accent-strong);
+}
+
+.upscaler-presets button,
+.remote-upscaler-card button,
+.upscaler-settings > button {
+  border-radius: 8px;
+}
+
+.upscaler-presets button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
+  background: var(--accent-soft);
+}
+
+.upscaler-range-control {
+  padding: 7px 0;
+}
+
+.upscaler-range-control output {
+  color: var(--accent-strong);
+}
+
+.upscaler-range-control input[type="range"]::-webkit-slider-thumb,
+.upscaler-range-control input[type="range"]::-moz-range-thumb {
+  background: var(--accent-strong);
+}
+
+.remote-upscaler-card {
+  background: color-mix(in srgb, var(--accent) 5%, var(--panel-raised));
+}
+
+/* Video Editor chrome ---------------------------------------------------- */
+.video-editor-workspace {
+  background: var(--app-bg);
+}
+
+.video-editor-subtoolbar {
+  min-height: 44px;
+  padding-inline: 11px;
+  border-bottom-color: color-mix(in srgb, var(--accent) 20%, var(--line));
+  background: var(--panel);
+  box-shadow: 0 6px 18px var(--shadow);
+}
+
+.video-editor-tab-list {
+  gap: 4px;
+}
+
+.video-editor-tab-list button,
+.video-editor-subtoolbar-actions button {
+  min-height: 30px;
+  border-radius: 7px;
+  color: var(--muted);
+  border-color: transparent;
+  background: transparent;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.video-editor-tab-list button:hover:not(:disabled),
+.video-editor-subtoolbar-actions button:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+  background: var(--accent-soft);
+}
+
+.video-editor-tab-list button.active-control,
+.video-editor-tab-list button[aria-selected="true"] {
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: var(--accent-soft);
+  box-shadow: inset 0 -2px var(--accent-strong);
+}
+
+.video-editor-left-dock,
+.video-editor-tool-placeholder,
+.video-editor-media-bin {
+  color: var(--ink);
+  background: var(--panel);
+}
+
+.video-editor-left-dock {
+  border-right-color: color-mix(in srgb, var(--accent) 16%, var(--line));
+  box-shadow: 7px 0 22px var(--shadow);
+}
+
+.video-editor-media-header {
+  padding-bottom: 10px;
+  border-bottom-color: color-mix(in srgb, var(--accent) 17%, var(--line));
+}
+
+.video-editor-media-import {
+  min-height: 35px;
+  padding: 8px 10px;
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--panel-raised);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.video-editor-media-import:hover {
+  border-color: var(--accent-strong);
+  background: var(--accent-soft);
+}
+
+.video-editor-media-tile,
+.video-editor-track-row,
+.video-editor-tool-list button,
+.video-editor-effect-readout {
+  border-color: color-mix(in srgb, var(--accent) 16%, var(--line));
+  border-radius: 10px;
+  background: var(--panel-raised);
+  box-shadow: 0 5px 14px var(--shadow);
+}
+
+.video-editor-media-tile:hover,
+.video-editor-tool-list button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 47%, var(--line));
+  background: var(--accent-soft);
+  transform: translateY(-1px);
+}
+
+.video-editor-media-empty {
+  margin: 0;
+  padding: 27px 14px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 35%, var(--line));
+  border-radius: 10px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--accent) 4%, var(--panel-soft));
+  text-align: center;
+}
+
+.video-editor-center-stage,
+.video-editor-timeline-dominant {
+  min-width: 0;
+  background: var(--panel-soft);
+}
+
+.video-editor-viewport {
+  background: var(--panel-soft);
+}
+
+.video-editor-viewport .viewport-tools {
+  background: var(--panel);
+}
+
+.video-editor-timeline {
+  border-top-color: color-mix(in srgb, var(--accent) 27%, var(--line));
+}
+
+.video-editor-timeline .tracks {
+  background: var(--panel);
+}
+
+.video-editor-track-label {
+  border-bottom-color: color-mix(in srgb, var(--line) 75%, transparent);
+}
+
+.video-editor-track-label strong {
+  color: var(--ink);
+}
+
+.video-editor-effect-track-label {
+  color: var(--accent-strong);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 10%, transparent), transparent);
+}
+
+.video-editor-effect-track-label small {
+  border-color: color-mix(in srgb, var(--accent) 37%, var(--line));
+  background: var(--panel-raised);
+}
+
+.video-editor-lane {
+  border-bottom-color: color-mix(in srgb, var(--line) 65%, transparent);
+  background: color-mix(in srgb, var(--panel-soft) 86%, transparent);
+}
+
+.video-editor-effect-lane {
+  border-top-color: color-mix(in srgb, var(--accent) 28%, var(--line));
+  border-bottom-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 8%, var(--panel-soft)), color-mix(in srgb, var(--accent) 2%, var(--panel-soft)));
+}
+
+.video-editor-clip.selected,
+.video-editor-effect-clip.selected {
+  border-color: var(--accent-strong);
+  box-shadow: 0 0 0 1px var(--accent-strong), 0 8px 20px var(--shadow);
+}
+
+.video-editor-timeline-footer {
+  border-top-color: color-mix(in srgb, var(--accent) 14%, var(--line));
+  background: var(--panel-raised);
+}
+
+.video-editor-tool-modal-backdrop {
+  background: color-mix(in srgb, var(--ink) 58%, transparent);
+}
+
+.video-editor-tool-modal {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+  border-radius: 15px;
+  color: var(--ink);
+  background: var(--panel);
+  box-shadow: 0 25px 75px var(--shadow);
+}
+
+.video-editor-tool-modal-close {
+  border-radius: 50%;
+}
+
+/* Music and Lipsync share the same surfaces as the main editing workspaces. */
+.ai-quantizer-workspace__bar,
+.lipsync-workspace__bar {
+  background: var(--panel);
+  border-bottom-color: color-mix(in srgb, var(--accent) 24%, var(--line));
+  box-shadow: 0 8px 24px var(--shadow);
+  backdrop-filter: none;
+}
+.ai-quantizer-workspace__identity img,
+.lipsync-workspace__identity img { border: 1px solid var(--line); box-shadow: 0 6px 18px var(--shadow); }
+.ai-quantizer-workspace__identity strong,
+.lipsync-workspace__identity strong { color: var(--ink); letter-spacing: -.035em; font-weight: 650; }
+.ai-quantizer-workspace__identity small,
+.lipsync-workspace__identity small { color: var(--muted); }
+.ai-quantizer-workspace__actions,
+.lipsync-workspace__actions { margin-left: auto; }
+.ai-quantizer-workspace__bar :is(button, select),
+.lipsync-workspace__bar :is(button, select) { border-radius: 8px; }
+.ai-quantizer-workspace__preparing > strong { font-size: clamp(22px, 3vw, 34px); letter-spacing: -.04em; }
+.ai-quantizer-bootstrap-log { border-radius: 14px; box-shadow: 0 14px 40px var(--shadow); }
+.lipsync-setup { background: var(--panel); border-color: var(--line); }
+.lipsync-input-card { border-radius: 12px; border-color: var(--line); background: var(--panel-raised); box-shadow: 0 5px 15px var(--shadow); }
+.lipsync-input-card:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
+.lipsync-input-card.complete { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+.lipsync-input-card > span { color: var(--accent-strong); font-variant-numeric: tabular-nums; }
+.lipsync-subtitle-paste textarea,
+.lipsync-exact-lyrics textarea,
+.lipsync-options select { color: var(--ink); background: var(--panel-raised); border: 1px solid var(--line); border-radius: 9px; }
+.lipsync-deep-analysis,
+.lipsync-prompt-launch { border-radius: 12px; background: var(--panel-raised); border-color: var(--line); }
+.lipsync-deep-analysis small,
+.lipsync-prompt-launch small { line-height: 1.6; }
+.lipsync-primary-actions button,
+.lipsync-anchor-tabs button { border-radius: 8px; }
+.lipsync-primary-actions .lipsync-analyze,
+.lipsync-workspace__actions .lipsync-export-top { color: var(--on-accent); background: var(--accent-strong); border-color: var(--accent-strong); box-shadow: 0 8px 20px var(--shadow); }
+.lipsync-anchor-editor,
+.lipsync-prompt-modal { border-color: var(--line); box-shadow: 0 16px 45px var(--shadow); }
+.lipsync-anchor-tabs button[aria-selected="true"] { color: var(--accent-strong); background: var(--accent-soft); border-color: var(--accent); }
+
+/* Compact alternatives at the desktop's narrow edge and reduced motion. */
+@media (max-width: 1180px) {
+  .toolbar {
+    gap: 7px;
+    padding-inline: 10px;
+  }
+
+  .toolbar .brand-copy small,
+  .audio-toolbar .brand-copy small {
+    display: none;
+  }
+
+  .toolbar nav button,
+  .toolbar-home,
+  .toolbar > .support-artist-button,
+  .toolbar > .memory-button {
+    padding-inline: 7px;
+  }
+}
+
+@media (max-width: 960px) {
+  .panel.library,
+  .panel.inspector,
+  .frame-booster-inspector {
+    padding-inline: 11px;
+  }
+
+  .inspector-tabs {
+    margin-inline: -11px;
+    padding-inline: 11px;
+  }
+
+  .studio-area-card {
+    min-height: 274px;
+  }
+
+  .studio-area-card__copy {
+    max-width: 100%;
+  }
+}
+
+@media (max-width: 720px) {
+  .audio-workspace > main {
+    width: min(100% - 28px, 620px);
+    padding-top: 29px;
+  }
+
+  .audio-toolbar {
+    padding-inline: 12px;
+  }
+
+  .audio-toolbar label > span,
+  .audio-toolbar .support-artist-button,
+  .audio-toolbar .memory-button {
+    display: none;
+  }
+
+  .audio-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .audio-tabs {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .studio-area-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toolbar *,
+  .audio-workspace *,
+  .studio-area-card *,
+  .frame-booster-preview *,
+  .video-editor-workspace * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

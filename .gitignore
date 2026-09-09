@@ -31,6 +31,8 @@ apps/desktop/public/upscaler-models/
 .venv-upscaler/
 .venv-ai-quantizer/
 .venv-song-player/
+.venv-avatar3d/
+.avatar3d-runtime/
 __pycache__/
 *.py[cod]
 
@@ -47,3 +49,12 @@ temp/
 
 # Riferimenti social locali dell'artista (contenuto non versionato)
 /social.md
+
+# Asset personali conservati localmente: non versionare foto, mesh o texture.
+# Queste regole sono intenzionalmente per namespace espliciti; non ignorare i
+# modelli generici già presenti nel repository (per esempio mixamo/*.fbx).
+/.avatar3d-private/
+/img/avatar/
+/img/avatar-*
+/apps/desktop/public/.avatar3d-private/
+/apps/desktop/public/avatar3d-models/
