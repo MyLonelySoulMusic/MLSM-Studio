@@ -1,0 +1,14 @@
+{
+  "intervalMinutes": 15,
+  "postsPerRun": 3,
+  "articles": [
+    {
+      "title": "Titolo dell’articolo",
+      "content": "<p>Testo dell’articolo in HTML.</p>",
+      "excerpt": "Riassunto opzionale",
+      "slug": "titolo-articolo",
+      "categories": [1],
+      "tags": [2]
+    }
+  ]
+}

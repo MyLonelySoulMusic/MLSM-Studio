@@ -43,11 +43,32 @@ enum ProjectIoError {
     InvalidUpscalerVideoPath,
     #[error("Servizio Upscaler locale non avviabile: {0}")]
     UpscalerRuntime(String),
+    #[error("Servizio AutoPost locale non avviabile: {0}")]
+    AutoPostRuntime(String),
 }
 
 #[derive(Default)]
 struct UpscalerServiceState {
     child: Mutex<Option<Child>>,
+}
+
+#[derive(Default)]
+struct AutoPostServiceState { child: Mutex<Option<Child>> }
+
+impl AutoPostServiceState {
+    fn shutdown(&self) {
+        if let Ok(mut child) = self.child.lock() {
+            if let Some(mut process) = child.take() { terminate_upscaler_child(&mut process); }
+        }
+    }
+}
+
+impl Drop for AutoPostServiceState {
+    fn drop(&mut self) {
+        if let Ok(child) = self.child.get_mut() {
+            if let Some(mut process) = child.take() { terminate_upscaler_child(&mut process); }
+        }
+    }
 }
 
 fn terminate_upscaler_child(process: &mut Child) {
@@ -106,6 +127,41 @@ struct UpscalerServiceStatus {
 fn upscaler_port_is_open() -> bool {
     let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8765);
     TcpStream::connect_timeout(&address, Duration::from_millis(150)).is_ok()
+}
+
+fn autopost_port_is_open() -> bool {
+    let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 1430);
+    TcpStream::connect_timeout(&address, Duration::from_millis(150)).is_ok()
+}
+
+fn autopost_server_from(start: &Path) -> Option<PathBuf> {
+    start.ancestors().map(|root| root.join("tools/autopost/server.mjs")).find(|path| path.is_file())
+}
+
+#[tauri::command]
+fn ensure_autopost_service(app: tauri::AppHandle, state: tauri::State<'_, AutoPostServiceState>) -> Result<UpscalerServiceStatus, ProjectIoError> {
+    let mut child = state.child.lock().map_err(|_| ProjectIoError::AutoPostRuntime("stato del processo non disponibile".into()))?;
+    if let Some(process) = child.as_mut() {
+        match process.try_wait() {
+            Ok(None) => return Ok(UpscalerServiceStatus { running: true, started: false, pid: Some(process.id()) }),
+            Ok(Some(_)) => { *child = None; }
+            Err(error) => return Err(ProjectIoError::AutoPostRuntime(error.to_string())),
+        }
+    }
+    // The Vite development plugin or the standalone legacy app may already own
+    // the service. Reuse it without ever terminating a process we did not start.
+    if autopost_port_is_open() {
+        return Ok(UpscalerServiceStatus { running: true, started: false, pid: None });
+    }
+    let bundled = app.path().resource_dir().ok().map(|root| root.join("autopost/server.mjs"));
+    let source = std::env::current_dir().ok().and_then(|root| autopost_server_from(&root))
+        .or_else(|| autopost_server_from(Path::new(env!("CARGO_MANIFEST_DIR"))));
+    let server = bundled.filter(|path| path.is_file()).or(source).ok_or_else(|| ProjectIoError::AutoPostRuntime("server.mjs non trovato nell’installazione".into()))?;
+    let node = find_tool("node").ok_or_else(|| ProjectIoError::AutoPostRuntime("Node.js 20 o successivo non è disponibile".into()))?;
+    let process = Command::new(node).arg(&server).current_dir(server.parent().unwrap_or(Path::new("."))).env("MLSM_AUTOPOST_PORT", "1430").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().map_err(|error| ProjectIoError::AutoPostRuntime(error.to_string()))?;
+    let pid = process.id();
+    *child = Some(process);
+    Ok(UpscalerServiceStatus { running: false, started: true, pid: Some(pid) })
 }
 
 fn upscaler_runtime_from(start: &Path) -> Option<(PathBuf, PathBuf, PathBuf)> {
@@ -445,6 +501,7 @@ pub fn run() {
         .manage(song_player::SongPlayerState::default())
         .manage(audio_tools::AudioToolsState::default())
         .manage(UpscalerServiceState::default())
+        .manage(AutoPostServiceState::default())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             read_project,
@@ -452,6 +509,7 @@ pub fn run() {
             detect_audio_tools,
             detect_upscaler_hardware,
             ensure_upscaler_service,
+            ensure_autopost_service,
             probe_audio,
             generate_waveform,
             read_audio_data,
@@ -483,6 +541,7 @@ pub fn run() {
     app.run(|app_handle, event| {
         if matches!(event, tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit) {
             app_handle.state::<UpscalerServiceState>().shutdown();
+            app_handle.state::<AutoPostServiceState>().shutdown();
             audio_tools::shutdown(app_handle.state::<audio_tools::AudioToolsState>().inner());
         }
     });

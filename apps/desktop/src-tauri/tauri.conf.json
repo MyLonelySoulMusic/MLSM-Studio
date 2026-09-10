@@ -7,7 +7,7 @@
   "app": {
     "windows": [{ "title": "MLSM Studio — My Lonely Soul Music Studio", "width": 1440, "height": 920, "minWidth": 960, "minHeight": 680, "resizable": true }],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' https://www.tiktok.com; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data: blob:; media-src 'self' asset: http://asset.localhost blob:; frame-src blob: https://open.spotify.com https://www.youtube.com https://www.youtube-nocookie.com https://www.tiktok.com https://*.tiktok.com; connect-src 'self' ipc: http://ipc.localhost blob: asset: http://asset.localhost http://localhost:1420 http://localhost:1421 ws://localhost:1420 ws://localhost:1421 http://127.0.0.1:8765 http://localhost:8765 https://*.gradio.live https://storage.googleapis.com https://huggingface.co https://*.huggingface.co https://*.hf.co https://*.xethub.hf.co https://www.tiktok.com https://*.tiktok.com",
+      "csp": "default-src 'self'; script-src 'self' https://www.tiktok.com; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data: blob: https://i.scdn.co https://i.ytimg.com https://*.googleusercontent.com; media-src 'self' asset: http://asset.localhost blob:; frame-src blob: https://open.spotify.com https://www.youtube.com https://www.youtube-nocookie.com https://www.tiktok.com https://*.tiktok.com; connect-src 'self' ipc: http://ipc.localhost blob: asset: http://asset.localhost http://localhost:1420 http://localhost:1421 ws://localhost:1420 ws://localhost:1421 http://127.0.0.1:1430 http://localhost:1430 http://127.0.0.1:8765 http://localhost:8765 https://*.gradio.live https://storage.googleapis.com https://huggingface.co https://*.huggingface.co https://*.hf.co https://*.xethub.hf.co https://www.tiktok.com https://*.tiktok.com",
       "assetProtocol": { "enable": true, "scope": ["$HOME/**", "$TEMP/**"] }
     }
   },
@@ -22,6 +22,8 @@
       ,"../../../tools/audio/worker.py": "audio/worker.py"
       ,"../../../tools/audio/requirements.txt": "audio/requirements.txt"
       ,"../../../tools/settings/worker.py": "settings/worker.py"
+      ,"../../../tools/autopost/server.mjs": "autopost/server.mjs"
+      ,"../../../tools/autopost/media.mjs": "autopost/media.mjs"
     }
   }
 }

@@ -47,6 +47,9 @@ temp/
 # Database, metadati e cache locali di Memory: mai nel repository.
 /.mlsm-memory/
 
+# Stato AutoPost locale: blog, coda, libreria, statistiche e chiave cifrata.
+/.mlsm-autopost/
+
 # Riferimenti social locali dell'artista (contenuto non versionato)
 /social.md
 

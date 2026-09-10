@@ -8,10 +8,13 @@ import { useProjectStore } from "../store/project-store";
 vi.mock("../App", () => ({
   App: ({ onHome }: { onHome?: () => void }) => <main aria-label="Editor MLSM"><button type="button" onClick={onHome}>Home editor</button></main>
 }));
+vi.mock("../stickman/StickmanWorkspace", () => ({
+  StickmanWorkspace: ({ onHome }: { onHome: () => void }) => <main aria-label="Stickman Animations"><button type="button" onClick={onHome}>Home Stickman Animations</button></main>
+}));
 
 describe("StudioExperience", () => {
   beforeEach(() => { localStorage.clear(); vi.useFakeTimers(); });
-  afterEach(() => { cleanup(); vi.useRealTimers(); });
+  afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
   it("naviga da intro ad aree, editor e di nuovo home", () => {
     render(<StudioExperience />);
@@ -47,5 +50,27 @@ describe("StudioExperience", () => {
     expect(screen.getByRole("region", { name: "Lonely Bot" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Chiudi Lonely Bot" }));
     expect(screen.getByRole("button", { name: "Apri Lonely Bot" })).toBeInTheDocument();
+  });
+
+  it("apre AutoPost come area separata e torna alla Home aree", () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("servizio test non avviato")));
+    render(<StudioExperience />);
+    fireEvent.click(screen.getByRole("button", { name: "Entra in MLSM Studio" }));
+    act(() => vi.advanceTimersByTime(850));
+    fireEvent.click(screen.getByRole("button", { name: /AutoPost/ }));
+    expect(screen.getByLabelText("MLSM AutoPost")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Torna alle aree" }));
+    expect(screen.getByRole("region", { name: "Aree creative disponibili" })).toBeInTheDocument();
+    vi.unstubAllGlobals();
+  });
+
+  it("apre Stickman Animations come area separata e torna alla Home aree", () => {
+    render(<StudioExperience />);
+    fireEvent.click(screen.getByRole("button", { name: "Entra in MLSM Studio" }));
+    act(() => vi.advanceTimersByTime(850));
+    fireEvent.click(screen.getByRole("button", { name: /Stickman Animations/ }));
+    expect(screen.getByRole("main", { name: "Stickman Animations" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Home Stickman Animations" }));
+    expect(screen.getByRole("region", { name: "Aree creative disponibili" })).toBeInTheDocument();
   });
 });
