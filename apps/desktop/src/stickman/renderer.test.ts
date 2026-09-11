@@ -38,6 +38,11 @@ describe("Bivio cyclic motion", () => {
     expect(normalizeBivioSettings({ colors: null }).colors).toEqual(defaultBivioColors);
   });
 
+  it("uses the MLSM pink, ink and white palette in the Bivio defaults", () => {
+    expect(new Set(Object.values(defaultBivioColors))).toEqual(new Set(["#ffffff", "#211b1f", "#ff4f9a"]));
+    expect(defaultBivioColors).toMatchObject({ paper: "#ffffff", road: "#ffffff", ink: "#211b1f", accentInk: "#ff4f9a" });
+  });
+
   it.each([.51, 8.04, 183.47, 241.913])("closes position and gait exactly after a %ss song", (duration) => {
     for (const pace of [.5, 1, 1.5]) {
       const settings = { ...defaultBivioSettings, pace };

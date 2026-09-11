@@ -16,6 +16,7 @@ mod memory;
 mod song_player;
 mod audio_tools;
 mod studio_settings;
+mod reports_storage;
 
 #[derive(Debug, thiserror::Error)]
 enum ProjectIoError {
@@ -529,6 +530,7 @@ pub fn run() {
             ,audio_tools::audio_get_tts_runtime
             ,audio_tools::audio_start_tts
             ,studio_settings::studio_settings
+            ,reports_storage::reports_storage
             ,audio_tools::audio_get_job
             ,audio_tools::audio_cancel_job
             ,audio_tools::audio_save_voice

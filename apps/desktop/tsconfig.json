@@ -8,5 +8,5 @@
     "types": ["node", "vite/client", "vitest/globals", "@testing-library/jest-dom"]
   },
   "references": [{ "path": "../../packages/project-schema" }, { "path": "../../packages/core" }, { "path": "../../packages/audio-analysis" }, { "path": "../../packages/trajectory" }, { "path": "../../packages/export" }],
-  "include": ["src", "vite.config.ts", "vite-model-cache.ts", "vite-pytorch-service.ts", "vite-ai-quantizer-service.ts", "vite-memory-service.ts", "vite-song-player-vocals-service.ts", "vite-audio-tools-service.ts", "vite-settings-service.ts", "vite-autopost-service.ts"]
+  "include": ["src", "vite.config.ts", "vite-model-cache.ts", "vite-pytorch-service.ts", "vite-ai-quantizer-service.ts", "vite-memory-service.ts", "vite-song-player-vocals-service.ts", "vite-audio-tools-service.ts", "vite-settings-service.ts", "vite-autopost-service.ts", "vite-reports-service.ts", "vite-reports-service.test.ts"]
 }

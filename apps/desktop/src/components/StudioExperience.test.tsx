@@ -4,6 +4,7 @@ import { StudioExperience } from "./StudioExperience";
 import { useAudioStore } from "../store/audio-store";
 import { useAnalysisStore } from "../store/analysis-store";
 import { useProjectStore } from "../store/project-store";
+import * as applicationAssistant from "../services/application-assistant";
 
 vi.mock("../App", () => ({
   App: ({ onHome }: { onHome?: () => void }) => <main aria-label="Editor MLSM"><button type="button" onClick={onHome}>Home editor</button></main>
@@ -11,10 +12,13 @@ vi.mock("../App", () => ({
 vi.mock("../stickman/StickmanWorkspace", () => ({
   StickmanWorkspace: ({ onHome }: { onHome: () => void }) => <main aria-label="Stickman Animations"><button type="button" onClick={onHome}>Home Stickman Animations</button></main>
 }));
+vi.mock("../reports/ReportsWorkspace", () => ({
+  ReportsWorkspace: ({ onHome, viewDashboardId }: { onHome: () => void; viewDashboardId?: string | null }) => <main aria-label="Reports"><span>{viewDashboardId ? `Viewer ${viewDashboardId}` : "Editor Reports"}</span><button type="button" onClick={onHome}>Home Reports</button></main>
+}));
 
 describe("StudioExperience", () => {
-  beforeEach(() => { localStorage.clear(); vi.useFakeTimers(); });
-  afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
+  beforeEach(() => { localStorage.clear(); window.history.replaceState(null, "", "/"); vi.useFakeTimers(); });
+  afterEach(() => { cleanup(); window.history.replaceState(null, "", "/"); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
   it("naviga da intro ad aree, editor e di nuovo home", () => {
     render(<StudioExperience />);
@@ -72,5 +76,30 @@ describe("StudioExperience", () => {
     expect(screen.getByRole("main", { name: "Stickman Animations" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Home Stickman Animations" }));
     expect(screen.getByRole("region", { name: "Aree creative disponibili" })).toBeInTheDocument();
+  });
+
+  it("apre Reports su richiesta, aggiorna il contesto di Lonely Bot e torna alle aree", async () => {
+    const answer = vi.spyOn(applicationAssistant, "answerApplicationQuestion").mockResolvedValue({ content: "Questa è l’area Reports.", source: "built-in" });
+    render(<StudioExperience />);
+    fireEvent.click(screen.getByRole("button", { name: "Entra in MLSM Studio" }));
+    act(() => vi.advanceTimersByTime(850));
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Reports/ })); });
+    expect(screen.getByRole("main", { name: "Reports" })).toBeInTheDocument();
+    expect(screen.queryByRole("main", { name: "Editor MLSM" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Apri Lonely Bot" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Domanda per Lonely Bot" }), { target: { value: "Dove mi trovo?" } });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Invia domanda" })); });
+    expect(answer).toHaveBeenCalledWith(expect.any(String), expect.any(Array), expect.objectContaining({ modeId: "reports", modeLabel: "Reports", aspectRatio: "dashboard", hasAudio: false, analysisReady: false, screen: "editor" }), expect.any(Function), expect.any(Object));
+    fireEvent.click(screen.getByRole("button", { name: "Home Reports" }));
+    expect(screen.getByRole("region", { name: "Aree creative disponibili" })).toBeInTheDocument();
+  });
+
+  it("opens a dashboard URL directly in read-only Reports without editor assistants", async () => {
+    vi.useRealTimers();
+    window.history.replaceState(null, "", "/#/reports/view/report_123");
+    await act(async () => { render(<StudioExperience />); });
+    expect(await screen.findByText("Viewer report_123")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Apri Lonely Bot" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Entra in MLSM Studio" })).not.toBeInTheDocument();
   });
 });

@@ -155,19 +155,6 @@ type FontState = "loading" | "ready" | "error";
 type AudioState = "idle" | "loading" | "ready" | "error";
 type ExportState = "idle" | "running" | "success" | "cancelled" | "error";
 
-function readPersistedSettings(): BivioSettings {
-  if (typeof window === "undefined") return normalizeBivioSettings(defaultBivioSettings);
-  try {
-    const parsed: unknown = JSON.parse(window.localStorage.getItem(STICKMAN_SETTINGS_STORAGE_KEY) ?? "null");
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return normalizeBivioSettings(parsed as Partial<BivioSettings>);
-    }
-  } catch {
-    // A malformed local preference should never prevent the workspace from opening.
-  }
-  return normalizeBivioSettings(defaultBivioSettings);
-}
-
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return "00:00";
   const whole = Math.floor(seconds);
@@ -189,7 +176,7 @@ function progressLabel(progress: ExportProgress | null, fallback: string): strin
 export function StickmanWorkspace({ onHome }: { onHome: () => void }) {
   const { language, theme, setLanguage, setTheme } = useUiPreferences();
   const t = copy[language];
-  const [settings, setSettings] = useState<BivioSettings>(readPersistedSettings);
+  const [settings, setSettings] = useState<BivioSettings>(() => normalizeBivioSettings(defaultBivioSettings));
   const [fontState, setFontState] = useState<FontState>("loading");
   const [audioState, setAudioState] = useState<AudioState>("idle");
   const [audioName, setAudioName] = useState("");
@@ -231,8 +218,8 @@ export function StickmanWorkspace({ onHome }: { onHome: () => void }) {
   }, []);
 
   useEffect(() => {
-    try { window.localStorage.setItem(STICKMAN_SETTINGS_STORAGE_KEY, JSON.stringify(settings)); } catch { /* Local persistence is best effort. */ }
-  }, [settings]);
+    try { window.localStorage.removeItem(STICKMAN_SETTINGS_STORAGE_KEY); } catch { /* Legacy cleanup is best effort. */ }
+  }, []);
 
   useEffect(() => {
     let active = true;

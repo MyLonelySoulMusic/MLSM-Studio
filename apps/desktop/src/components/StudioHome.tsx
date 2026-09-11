@@ -18,13 +18,13 @@ const areaCopyKeys = {
   audio: { label: "audio", description: "audioDescription" }
 } as const;
 
-export type StudioAreaDestination = AnimationCategoryId | "autopost" | "stickman";
+export type StudioAreaDestination = AnimationCategoryId | "autopost" | "stickman" | "reports";
 
 export function StudioHome({ onEnterArea }: { onEnterArea: (category: StudioAreaDestination) => void }) {
   const { language, theme, setLanguage, setTheme } = useUiPreferences(); const copy = uiCopy[language]; const setAnimationMode = useProjectStore((state) => state.setAnimationMode);
   const enter = (categoryId: StudioAreaDestination) => {
     resetWorkspaceForAreaEntry();
-    if (categoryId === "autopost" || categoryId === "stickman") { onEnterArea(categoryId); return; }
+    if (categoryId === "autopost" || categoryId === "stickman" || categoryId === "reports") { onEnterArea(categoryId); return; }
     const category = animationCategories.find((item) => item.id === categoryId) ?? animationCategories[0]!;
     const firstMode = getAnimationMode(category.groups[0]!.modeIds[0]!);
     setAnimationMode(firstMode.id, [...firstMode.defaultBaseObjectTypes]); onEnterArea(category.id);
@@ -57,6 +57,24 @@ export function StudioHome({ onEnterArea }: { onEnterArea: (category: StudioArea
           <span className="studio-area-card__number">0{animationCategories.length + 2}</span><span className="studio-area-card__icon"><svg viewBox="0 0 64 64" aria-hidden="true"><path d="M15 8h27l8 8v40H15Z"/><path d="M42 8v10h10M23 29h19M23 38h19M23 47h12"/><path d="m8 18 7-7 7 7"/></svg></span>
           <span className="studio-area-card__art" aria-hidden="true"><svg className="autopost-area-art" viewBox="0 0 560 300"><defs><linearGradient id="postPaper" x1="0" y1="0" x2="1" y2="1"><stop stopColor="var(--panel)"/><stop offset="1" stopColor="var(--accent-soft)"/></linearGradient></defs><rect x="98" y="42" width="246" height="195" rx="18" fill="url(#postPaper)" stroke="var(--line)"/><path d="M137 93h166M137 121h130M137 149h166M137 177h96" stroke="var(--ink)" strokeWidth="9" strokeLinecap="round" opacity=".72"/><rect x="304" y="91" width="155" height="126" rx="20" fill="var(--ink)"/><path d="M339 142h19l13-31 20 67 16-45 16 27h15" fill="none" stroke="var(--accent)" strokeWidth="8" strokeLinecap="round" strokeLinejoin="round"/><path d="m267 242 29 29 67-75" fill="none" stroke="var(--accent-strong)" strokeWidth="13" strokeLinecap="round" strokeLinejoin="round"/></svg></span>
           <span className="studio-area-card__copy"><small>{copy.autopostTools}</small><strong>{copy.autopost}</strong><em>{copy.autopostDescription}</em></span>
+          <span className="studio-area-card__action">{copy.enterArea}<b>↗</b></span><i className="studio-area-card__shine" aria-hidden="true" />
+        </button>
+        <button className="studio-area-card area-reports" style={{ "--area-index": animationCategories.length + 2 } as CSSProperties} type="button" onClick={() => enter("reports")}>
+          <span className="studio-area-card__number">{String(animationCategories.length + 3).padStart(2, "0")}</span>
+          <span className="studio-area-card__icon"><svg viewBox="0 0 64 64" aria-hidden="true"><rect x="8" y="8" width="48" height="48" rx="7"/><path d="M8 23h48M25 23v33M34 44V33m9 11V29m-27 4h2m-2 9h2"/></svg></span>
+          <span className="studio-area-card__art" aria-hidden="true">
+            <svg className="reports-area-art" viewBox="0 0 560 300">
+              <rect x="44" y="28" width="472" height="244" rx="20" fill="#ffffff" stroke="var(--line)"/>
+              <path d="M44 77h472M131 77v195" stroke="#211b1f" strokeOpacity=".12"/>
+              <circle cx="68" cy="52" r="5" fill="#ff4f9a"/><path d="M84 52h81" stroke="#211b1f" strokeWidth="7" strokeLinecap="round"/>
+              <g stroke="#211b1f" strokeOpacity=".3" strokeWidth="5" strokeLinecap="round"><path d="M64 103h45M64 126h34M64 149h39M64 172h28"/></g>
+              <rect x="151" y="94" width="99" height="52" rx="8" fill="#211b1f"/><rect x="264" y="94" width="99" height="52" rx="8" fill="#ff4f9a"/><rect x="377" y="94" width="117" height="52" rx="8" fill="#ff4f9a" fillOpacity=".12"/>
+              <g stroke="#ffffff" strokeWidth="6" strokeLinecap="round"><path d="M166 114h35M166 130h64M279 114h31M279 130h53"/></g><path d="M392 114h39M392 130h66" stroke="#211b1f" strokeWidth="6" strokeLinecap="round"/>
+              <path d="M151 249h195" stroke="#211b1f" strokeOpacity=".15"/><rect x="165" y="205" width="24" height="43" rx="4" fill="#ff4f9a" fillOpacity=".4"/><rect x="204" y="181" width="24" height="67" rx="4" fill="#ff4f9a" fillOpacity=".6"/><rect x="243" y="195" width="24" height="53" rx="4" fill="#ff4f9a" fillOpacity=".8"/><rect x="282" y="165" width="24" height="83" rx="4" fill="#ff4f9a"/>
+              <circle cx="426" cy="206" r="35" fill="none" stroke="#211b1f" strokeWidth="15"/><circle cx="426" cy="206" r="35" fill="none" stroke="#ff4f9a" strokeWidth="15" strokeDasharray="148 220" transform="rotate(-90 426 206)"/>
+            </svg>
+          </span>
+          <span className="studio-area-card__copy"><small>CSV · Excel · TXT</small><strong>Reports</strong><em>{language === "it" ? "Dai dati alle dashboard. Crea grafici, indicatori e report da condividere." : "Turn data into dashboards. Create charts, metrics and reports to share."}</em></span>
           <span className="studio-area-card__action">{copy.enterArea}<b>↗</b></span><i className="studio-area-card__shine" aria-hidden="true" />
         </button>
       </section>
