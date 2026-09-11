@@ -20,7 +20,7 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
-    "setup:runtimes": "node tools/setup_python_runtime.cjs upscaler && node tools/setup_python_runtime.cjs ai-quantizer && node tools/setup_python_runtime.cjs song-player",
+    "setup:runtimes": "node tools/setup_python_runtime.cjs upscaler && node tools/setup_python_runtime.cjs ai-quantizer && node tools/setup_python_runtime.cjs song-player && node tools/setup_python_runtime.cjs audio-tts",
     "install:verify": "node tools/verify_installation.cjs",
     "upscaler:setup": "node tools/setup_python_runtime.cjs upscaler",
     "upscaler:server": "node tools/run_python_service.cjs upscaler",

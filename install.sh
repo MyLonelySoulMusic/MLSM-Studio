@@ -39,6 +39,8 @@ export MLSM_PYTHON="$(brew --prefix python@3.11)/bin/python3.11"
 run npm ci
 run node tools/setup_python_runtime.cjs upscaler
 run node tools/setup_python_runtime.cjs ai-quantizer
+run node tools/setup_python_runtime.cjs song-player
+run node tools/setup_python_runtime.cjs audio-tts
 run cargo fetch --manifest-path apps/desktop/src-tauri/Cargo.toml
 if [[ "$DRY_RUN" == 0 ]]; then node tools/verify_installation.cjs; fi
 run chmod +x install.sh launch-mlsm.sh tools/setup_ai_quantizer_env.sh tools/setup_upscaler_env.sh

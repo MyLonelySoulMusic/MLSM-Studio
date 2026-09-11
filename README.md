@@ -25,7 +25,7 @@ install.bat
 launch-mlsm.bat
 ```
 
-Gli installer preparano Node.js, Python, FFmpeg, Rust/Tauri, dipendenze npm e ambienti Python isolati. I modelli AI pesanti vengono scaricati soltanto al primo utilizzo del relativo tool e poi riusati dalla cache locale.
+Gli installer installano e verificano **Python 3.11** (non una versione generica), quindi creano automaticamente i quattro ambienti isolati `.venv`, `.venv-ai-quantizer`, `.venv-song-player` e `.venv-audio-tts`. Preparano inoltre Node.js, FFmpeg, Rust/Tauri e le dipendenze npm. Un ambiente esistente creato con una versione Python diversa viene rigenerato con Python 3.11. I modelli AI pesanti vengono scaricati soltanto quando richiesti dal relativo runtime e poi riusati dalla cache locale.
 
 Per verificare una macchina senza aprire l’app:
 

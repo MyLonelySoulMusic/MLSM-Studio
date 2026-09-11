@@ -2,6 +2,8 @@ numpy>=1.26.4,<3
 yt-dlp>=2025.1.15,<2027
 demucs>=4.0.1,<5
 librosa>=0.10.2,<1
+# Combinazione riproducibile e verificata con Python 3.11/librosa.
+numba==0.61.2
 torchvision>=0.22,<1
 torchaudio>=2.7,<3
 sentencepiece>=0.2,<1

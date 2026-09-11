@@ -4,7 +4,7 @@
 
 - Node.js `>= 22.12`
 - npm
-- Python 3.11 gestito tramite `pyenv` o installazione compatibile
+- Python 3.11 esatto, installato automaticamente da Homebrew su macOS o Winget su Windows
 - FFmpeg/FFprobe
 - Rust/Cargo per i pacchetti Tauri
 - Rubber Band per le funzioni audio che lo richiedono
@@ -33,6 +33,9 @@ npm run upscaler:setup
 npm run upscaler:server
 npm run ai-quantizer:setup
 npm run ai-quantizer:server
+npm run song-player:setup
+npm run audio-tts:setup
+npm run setup:runtimes       # prepara tutti e quattro gli ambienti
 ```
 
 Il comando manuale resta utile per diagnostica. In sviluppo Vite gestisce il
@@ -46,7 +49,7 @@ PID del processo padre e chiude/reap tutti i propri FFmpeg se l'app o Vite
 terminano in modo anomalo. Anche il launcher CLI inoltra SIGINT/SIGTERM/SIGHUP,
 quindi non lascia un servizio sulla porta 8765 dopo la propria chiusura.
 
-Gli ambienti `.venv-upscaler` e `.venv-ai-quantizer` sono separati e ignorati da Git. I checkpoint vengono scaricati al primo uso del modello, non durante ogni avvio.
+Gli ambienti `.venv`, `.venv-ai-quantizer`, `.venv-song-player` e `.venv-audio-tts` sono separati, ignorati da Git e devono usare tutti Python 3.11. Gli installer li creano automaticamente e rigenerano quelli costruiti con una versione Python incompatibile. I checkpoint vengono conservati nelle cache locali e riutilizzati agli avvii successivi.
 
 Il runtime RIFE viene preparato solo quando richiesto dall’interpolazione
 opzionale del Video Editor. `npm run rife:verify` non scarica o simula un

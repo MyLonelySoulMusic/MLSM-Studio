@@ -1,16 +1,17 @@
 #!/usr/bin/env node
 /* eslint-disable @typescript-eslint/no-require-imports, no-undef */
 const { spawnSync } = require("node:child_process");
-const { existsSync, writeFileSync } = require("node:fs");
+const { existsSync, rmSync, writeFileSync } = require("node:fs");
 const { resolve } = require("node:path");
 
 const root = resolve(__dirname, "..");
 const runtimes = {
   upscaler: { directory: ".venv", requirements: "requirements-upscaler.txt" },
   "ai-quantizer": { directory: ".venv-ai-quantizer", requirements: "tools/ai-quantizer/requirements.txt" },
-  "song-player": { directory: ".venv-song-player", requirements: "tools/song-player/requirements.txt" }
-  ,"audio-tts": { directory: ".venv-audio-tts", requirements: "tools/audio/requirements.txt" }
+  "song-player": { directory: ".venv-song-player", requirements: "tools/song-player/requirements.txt" },
+  "audio-tts": { directory: ".venv-audio-tts", requirements: "tools/audio/requirements.txt" }
 };
+const python311Probe = "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 11) else 1)";
 
 function venvPython(directory, platform = process.platform) {
   return resolve(root, directory, platform === "win32" ? "Scripts/python.exe" : "bin/python");
@@ -20,11 +21,18 @@ function commandWorks(command, args = []) {
   return spawnSync(command, args, { stdio: "ignore" }).status === 0;
 }
 
+function isPython311(command, args = []) {
+  return commandWorks(command, [...args, "-c", python311Probe]);
+}
+
 function findPython(platform = process.platform) {
-  if (process.env.MLSM_PYTHON) return { command: process.env.MLSM_PYTHON, args: [] };
-  if (platform === "win32" && commandWorks("py", ["-3.11", "-c", "import sys"])) return { command: "py", args: ["-3.11"] };
+  if (process.env.MLSM_PYTHON) {
+    if (isPython311(process.env.MLSM_PYTHON)) return { command: process.env.MLSM_PYTHON, args: [] };
+    throw new Error(`MLSM_PYTHON non punta a Python 3.11: ${process.env.MLSM_PYTHON}`);
+  }
+  if (platform === "win32" && isPython311("py", ["-3.11"])) return { command: "py", args: ["-3.11"] };
   for (const command of ["python3.11", "python3", "python"]) {
-    if (commandWorks(command, ["-c", "import sys; raise SystemExit(not (sys.version_info[:2] == (3, 11)))"])) return { command, args: [] };
+    if (isPython311(command)) return { command, args: [] };
   }
   throw new Error("Python 3.11 non trovato. Esegui prima install.sh oppure install.bat.");
 }
@@ -46,10 +54,19 @@ function setup(name, { dryRun = false } = {}) {
   progress(5, "Verifica di Python 3.11");
   const python = findPython();
   const target = venvPython(config.directory);
-  if (!existsSync(target)) {
+  const runtimeDirectory = resolve(root, config.directory);
+  let createRuntime = !existsSync(target);
+  if (existsSync(target) && !isPython311(target)) {
+    progress(12, `Rigenerazione di ${config.directory}: richiede Python 3.11`);
+    if (dryRun) console.log(`[dry-run] rimozione ${runtimeDirectory}`);
+    else rmSync(runtimeDirectory, { recursive: true, force: true });
+    createRuntime = true;
+  }
+  if (createRuntime) {
     progress(18, `Creazione dell’ambiente isolato ${config.directory}`);
     run(python.command, [...python.args, "-m", "venv", config.directory], { dryRun });
   }
+  if (!dryRun && !isPython311(target)) throw new Error(`${config.directory} non usa Python 3.11 ed è stato rifiutato.`);
   progress(28, "Aggiornamento degli strumenti Python");
   run(target, ["-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"], { dryRun });
   if (name === "song-player") {
@@ -89,7 +106,7 @@ function setup(name, { dryRun = false } = {}) {
   }
   if (name === "audio-tts" && !dryRun) {
     progress(90, "Verifica del motore Chatterbox");
-    const check = spawnSync(target, ["tools/audio/worker.py"], { cwd: root, encoding: "utf8", input: '{"protocolVersion":1,"action":"capabilities"}\n' });
+    const check = spawnSync(target, ["-P", "tools/audio/worker.py"], { cwd: root, encoding: "utf8", input: '{"protocolVersion":1,"action":"capabilities"}\n' });
     const lastLine = check.stdout.trim().split(/\r?\n/).filter(Boolean).at(-1);
     let capability = null; try { capability = JSON.parse(lastLine); } catch { /* verified below */ }
     if (check.status !== 0 || capability?.type !== "result" || capability?.result?.ready !== true) throw new Error("Chatterbox non ha superato la verifica del runtime Audio.");
@@ -103,4 +120,4 @@ if (require.main === module) {
   catch (error) { console.error(`[MLSM setup] ${error.message}`); process.exitCode = 1; }
 }
 
-module.exports = { findPython, runtimes, setup, venvPython };
+module.exports = { findPython, isPython311, python311Probe, runtimes, setup, venvPython };

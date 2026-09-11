@@ -6,7 +6,7 @@ import { createRequire } from "node:module";
 const root = resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
 const { versionAtLeast } = require("./verify_installation.cjs");
-const { venvPython } = require("./setup_python_runtime.cjs");
+const { python311Probe, runtimes, venvPython } = require("./setup_python_runtime.cjs");
 
 describe("installer multipiattaforma", () => {
   it("rifiuta Node troppo vecchio", () => {
@@ -18,6 +18,18 @@ describe("installer multipiattaforma", () => {
     expect(venvPython(".venv", "win32")).toMatch(/\.venv[\\/]Scripts[\\/]python\.exe$/);
     expect(venvPython(".venv", "darwin")).toMatch(/\.venv[\\/]bin[\\/]python$/);
   });
+  it("blocca Python alla versione 3.11 e prepara tutti gli ambienti isolati", () => {
+    expect(python311Probe).toContain("(3, 11)");
+    expect(Object.fromEntries(Object.entries(runtimes).map(([name, value]) => [name, value.directory]))).toEqual({
+      upscaler: ".venv",
+      "ai-quantizer": ".venv-ai-quantizer",
+      "song-player": ".venv-song-player",
+      "audio-tts": ".venv-audio-tts",
+    });
+    const verify = readFileSync(resolve(root, "tools/verify_installation.cjs"), "utf8");
+    for (const runtime of [".venv", ".venv-ai-quantizer", ".venv-song-player", ".venv-audio-tts"]) expect(verify).toContain(runtime);
+    expect(verify).toContain("sys.version_info[:2] == (3, 11)");
+  });
   it("installa e verifica l'intero runtime visuale Auto-AVSR", () => {
     const requirements = readFileSync(resolve(root, "tools/song-player/requirements.txt"), "utf8");
     const setup = readFileSync(resolve(root, "tools/setup_python_runtime.cjs"), "utf8");
@@ -25,6 +37,7 @@ describe("installer multipiattaforma", () => {
     expect(requirements).toContain("mediapipe==0.10.21");
     expect(requirements).toContain("opencv-contrib-python>=4.10,<5");
     expect(requirements).toContain("faster-whisper>=1.2,<2");
+    expect(requirements).toContain("numba==0.61.2");
     expect(requirements).not.toContain("opencv-python-headless");
     expect(setup).toContain('features?.analyzeVisemes !== true');
     expect(setup).toContain('features?.transcribeWords !== true');
@@ -32,13 +45,18 @@ describe("installer multipiattaforma", () => {
     const tauri = JSON.parse(readFileSync(resolve(root, "apps/desktop/src-tauri/tauri.conf.json"), "utf8"));
     expect(tauri.bundle.resources["../../../tools/song-player/auto_avsr_runtime.py"]).toBe("song-player/auto_avsr_runtime.py");
   });
+  it("mantiene riproducibile il runtime Chatterbox su Python 3.11", () => {
+    const requirements = readFileSync(resolve(root, "tools/audio/requirements.txt"), "utf8");
+    expect(requirements).toContain("chatterbox-tts==0.1.7");
+    expect(requirements).toContain("numba==0.61.2");
+  });
   it("include l’intera catena macOS", () => {
     const script = readFileSync(resolve(root, "install.sh"), "utf8");
-    for (const command of ["xcode-select", "brew install", "npm ci", "setup_python_runtime.cjs upscaler", "cargo fetch", "verify_installation.cjs"]) expect(script).toContain(command);
+    for (const command of ["xcode-select", "brew install", "python@3.11", "npm ci", "setup_python_runtime.cjs upscaler", "setup_python_runtime.cjs ai-quantizer", "setup_python_runtime.cjs song-player", "setup_python_runtime.cjs audio-tts", "cargo fetch", "verify_installation.cjs"]) expect(script).toContain(command);
   });
   it("include l’intera catena Windows senza Bash", () => {
     const script = readFileSync(resolve(root, "install.bat"), "utf8");
-    for (const command of ["OpenJS.NodeJS.LTS", "Python.Python.3.11", "Rustlang.Rustup", "Gyan.FFmpeg", "MSYS2.MSYS2", "mingw-w64-ucrt-x86_64-rubberband", "Microsoft.EdgeWebView2Runtime", "Microsoft.VisualStudio.2022.BuildTools", "npm ci", "setup_python_runtime.cjs"]) expect(script).toContain(command);
+    for (const command of ["OpenJS.NodeJS.LTS", "Python.Python.3.11", "py -3.11", "Rustlang.Rustup", "Gyan.FFmpeg", "MSYS2.MSYS2", "mingw-w64-ucrt-x86_64-rubberband", "Microsoft.EdgeWebView2Runtime", "Microsoft.VisualStudio.2022.BuildTools", "npm ci", "setup_python_runtime.cjs upscaler", "setup_python_runtime.cjs ai-quantizer", "setup_python_runtime.cjs song-player", "setup_python_runtime.cjs audio-tts"]) expect(script).toContain(command);
     expect(script).not.toContain("setup_ai_quantizer_env.sh");
     expect(script).not.toContain("setup_upscaler_env.sh");
   });

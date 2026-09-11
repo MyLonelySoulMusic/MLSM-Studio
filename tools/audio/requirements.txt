@@ -1,2 +1,3 @@
 chatterbox-tts==0.1.7
-
+# Chatterbox importa librosa: manteniamo stabile il relativo runtime JIT.
+numba==0.61.2
