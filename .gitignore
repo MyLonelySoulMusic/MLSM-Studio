@@ -11,6 +11,10 @@ coverage/
 *.log
 *.partial
 
+# File di sessione effimeri creati da database aperti con `:memory:`.
+# Il carattere `:` rende questi percorsi impossibili da estrarre su Windows/NTFS.
+/:memory:*.ses
+
 # I pesi Whisper/LLM non fanno parte del repository né della build.
 # Transformers.js li scarica al primo utilizzo e li conserva nella cache locale.
 apps/desktop/public/models/
