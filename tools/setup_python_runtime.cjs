@@ -6,7 +6,7 @@ const { resolve } = require("node:path");
 
 const root = resolve(__dirname, "..");
 const runtimes = {
-  upscaler: { directory: ".venv", requirements: "requirements-upscaler.txt" },
+  upscaler: { directory: ".venv", requirements: "tools/upscaler/requirements.txt" },
   "ai-quantizer": { directory: ".venv-ai-quantizer", requirements: "tools/ai-quantizer/requirements.txt" },
   "song-player": { directory: ".venv-song-player", requirements: "tools/song-player/requirements.txt" },
   "audio-tts": { directory: ".venv-audio-tts", requirements: "tools/audio/requirements.txt" }
@@ -34,7 +34,7 @@ function findPython(platform = process.platform) {
   for (const command of ["python3.11", "python3", "python"]) {
     if (isPython311(command)) return { command, args: [] };
   }
-  throw new Error("Python 3.11 non trovato. Esegui prima install.sh oppure install.bat.");
+  throw new Error("Python 3.11 non trovato. Esegui scripts/macos/install.sh oppure scripts\\windows\\install.bat.");
 }
 
 function run(command, args, options = {}) {

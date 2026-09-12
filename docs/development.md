@@ -60,10 +60,10 @@ presente e la mini inferenza reale passa sul dispositivo selezionato.
 
 | Sistema | Installa | Avvia | Compila |
 | --- | --- | --- | --- |
-| macOS | `./install.sh` | `./launch-mlsm.sh` | `./build-macos.sh` |
-| Windows | `install.bat` | `launch-mlsm.bat` | `build-windows.bat` |
+| macOS | `bash scripts/macos/install.sh` | `npm run launch:mac` | `npm run package:mac` |
+| Windows | `scripts\windows\install.bat` | `npm run launch:windows` | `npm run package:windows` |
 
-Ogni script supporta `--check` dove documentato. La CI usa runner nativi macOS e Windows; Windows non viene simulato con Docker Linux.
+Gli script nativi sono raccolti in `scripts/macos/` e `scripts/windows/`. L’installazione iniziale usa direttamente lo script nativo perché Node/npm potrebbe non essere ancora presente; dopo il setup, gli alias npm sono gli ingressi stabili per l’uso quotidiano. La struttura completa è descritta in [`scripts/README.md`](../scripts/README.md). Ogni script supporta `--check` dove documentato. La CI usa runner nativi macOS e Windows; Windows non viene simulato con Docker Linux.
 
 ## Screenshot del manuale
 

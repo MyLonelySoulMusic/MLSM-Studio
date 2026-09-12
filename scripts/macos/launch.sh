@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd "$(dirname "$0")"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
+cd "$ROOT_DIR"
 
 if [[ "${1:-}" == "--check" ]]; then
   command -v node >/dev/null
@@ -12,8 +14,8 @@ if [[ "${1:-}" == "--check" ]]; then
   exit 0
 fi
 
-if [[ "$(uname -s)" != "Darwin" ]]; then echo "Su Windows usa launch-mlsm.bat." >&2; exit 2; fi
-if [[ ! -d node_modules ]]; then echo "Installazione assente: esegui prima ./install.sh" >&2; exit 3; fi
+if [[ "$(uname -s)" != "Darwin" ]]; then echo "Su Windows usa scripts\\windows\\launch.bat." >&2; exit 2; fi
+if [[ ! -d node_modules ]]; then echo "Installazione assente: esegui prima scripts/macos/install.sh" >&2; exit 3; fi
 
 echo "Avvio MLSM Studio su http://localhost:1421"
 echo "Per arrestare applicazione e servizi premi Ctrl+C."

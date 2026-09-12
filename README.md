@@ -11,9 +11,8 @@ I file dell’utente restano sul computer. Le esportazioni video sono offline e 
 ### macOS
 
 ```bash
-chmod +x install.sh launch-mlsm.sh
-./install.sh
-./launch-mlsm.sh
+bash scripts/macos/install.sh
+scripts/macos/launch.sh
 ```
 
 ### Windows
@@ -21,8 +20,8 @@ chmod +x install.sh launch-mlsm.sh
 Dal Prompt dei comandi:
 
 ```bat
-install.bat
-launch-mlsm.bat
+scripts\windows\install.bat
+scripts\windows\launch.bat
 ```
 
 Gli installer installano e verificano **Python 3.11** (non una versione generica), quindi creano automaticamente i quattro ambienti isolati `.venv`, `.venv-ai-quantizer`, `.venv-song-player` e `.venv-audio-tts`. Preparano inoltre Node.js, FFmpeg, Rust/Tauri e le dipendenze npm. Un ambiente esistente creato con una versione Python diversa viene rigenerato con Python 3.11. I modelli AI pesanti vengono scaricati soltanto quando richiesti dal relativo runtime e poi riusati dalla cache locale.
@@ -41,6 +40,21 @@ npm run dev
 ```
 
 L’indirizzo predefinito è `http://localhost:1420`. L’avvio è sempre esplicito; build e test non lasciano server attivi.
+
+## Struttura del repository
+
+| Percorso | Responsabilità |
+| --- | --- |
+| `apps/desktop/` | Applicazione React/Vite e shell Tauri. |
+| `packages/` | Librerie condivise del workspace. |
+| `tools/` | Runtime Python, servizi locali e utility di sviluppo. |
+| `scripts/macos/` | Installazione, avvio e packaging per macOS. |
+| `scripts/windows/` | Installazione, avvio e packaging per Windows. |
+| `docs/` | Manuali, architettura e requisiti storici. |
+| `assets/`, `img/`, `mixamo/` | Risorse grafiche e modelli usati dall’app. |
+| `tests/` | Test di integrazione trasversali. |
+
+La root contiene soltanto i manifest e le configurazioni necessarie agli strumenti, oltre a questo README.
 
 ## Le quattro aree
 
@@ -76,6 +90,7 @@ Il pulsante **Home** riporta sempre alla scelta delle aree. **Memory** apre l’
 - [Memory](docs/memory.md)
 - [Export offline](docs/export.md)
 - [Installazione e sviluppo](docs/development.md)
+- [Script per macOS e Windows](scripts/README.md)
 - [Architettura](docs/architecture.md)
 
 ## Controlli di qualità
@@ -97,13 +112,13 @@ node tools/capture_documentation_screenshots.mjs
 ## Pacchetti desktop
 
 ```bash
-./build-macos.sh          # DMG macOS
-./build-macos.sh --check  # sola verifica
+npm run package:mac                 # DMG macOS
+bash scripts/macos/build.sh --check # sola verifica
 ```
 
 ```bat
-build-windows.bat          REM EXE NSIS e MSI
-build-windows.bat --check  REM sola verifica
+npm run package:windows             REM EXE NSIS e MSI
+scripts\windows\build.bat --check   REM sola verifica
 ```
 
 Gli artefatti vengono creati in `apps/desktop/src-tauri/target/release/bundle/`. La distribuzione pubblica richiede firma Apple Developer o Authenticode; senza firma il pacchetto è installabile, ma il sistema operativo può mostrare un avviso.

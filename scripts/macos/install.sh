@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd "$(dirname "$0")"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
+cd "$ROOT_DIR"
 
 DRY_RUN=0
 [[ " ${*:-} " == *" --dry-run "* ]] && DRY_RUN=1
@@ -8,7 +10,7 @@ run() { if [[ "$DRY_RUN" == 1 ]]; then printf '[dry-run]'; printf ' %q' "$@"; pr
 need() { command -v "$1" >/dev/null 2>&1; }
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
-  echo "Questo installer è per macOS. Su Windows usa install.bat." >&2
+  echo "Questo installer è per macOS. Su Windows usa scripts\\windows\\install.bat." >&2
   exit 2
 fi
 
@@ -16,7 +18,7 @@ echo "MLSM Studio · installazione completa macOS ($(uname -m))"
 if ! xcode-select -p >/dev/null 2>&1; then
   if [[ "$DRY_RUN" == 1 ]]; then echo "[dry-run] xcode-select --install"; else
     xcode-select --install
-    echo "Completa l’installazione dei Command Line Tools, poi riesegui install.sh."
+    echo "Completa l’installazione dei Command Line Tools, poi riesegui scripts/macos/install.sh."
     exit 3
   fi
 fi
@@ -43,6 +45,6 @@ run node tools/setup_python_runtime.cjs song-player
 run node tools/setup_python_runtime.cjs audio-tts
 run cargo fetch --manifest-path apps/desktop/src-tauri/Cargo.toml
 if [[ "$DRY_RUN" == 0 ]]; then node tools/verify_installation.cjs; fi
-run chmod +x install.sh launch-mlsm.sh tools/setup_ai_quantizer_env.sh tools/setup_upscaler_env.sh
+run chmod +x scripts/macos/install.sh scripts/macos/launch.sh scripts/macos/build.sh scripts/macos/setup-ai-quantizer.sh scripts/macos/setup-upscaler.sh
 
 echo "MLSM Studio è pronto. L’installer non ha avviato alcun server."

@@ -11,7 +11,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version-file: ".nvmrc", cache: "npm" }
       - run: npm ci
-      - run: ./build-macos.sh
+      - run: scripts/macos/build.sh
       - uses: actions/upload-artifact@v4
         with:
           name: MLSM-Studio-macOS-DMG
@@ -26,7 +26,7 @@ jobs:
         with: { node-version-file: ".nvmrc", cache: "npm" }
       - run: npm ci
       - shell: cmd
-        run: build-windows.bat
+        run: scripts\windows\build.bat
       - uses: actions/upload-artifact@v4
         with:
           name: MLSM-Studio-Windows-installers

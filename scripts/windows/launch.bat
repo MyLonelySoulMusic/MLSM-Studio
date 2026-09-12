@@ -1,11 +1,12 @@
 @echo off
 setlocal EnableExtensions
-cd /d "%~dp0"
+for %%I in ("%~dp0\..\..") do set "ROOT_DIR=%%~fI"
+cd /d "%ROOT_DIR%"
 if exist C:\msys64\ucrt64\bin set "PATH=C:\msys64\ucrt64\bin;%PATH%"
 
 if /I "%~1"=="--check" goto check
-where node >nul 2>nul || (echo Node non trovato. Esegui prima install.bat.& exit /b 2)
-if not exist node_modules (echo Installazione assente. Esegui prima install.bat.& exit /b 3)
+where node >nul 2>nul || (echo Node non trovato. Esegui prima scripts\windows\install.bat.& exit /b 2)
+if not exist node_modules (echo Installazione assente. Esegui prima scripts\windows\install.bat.& exit /b 3)
 echo Avvio MLSM Studio su http://localhost:1421
 echo Per arrestare applicazione e servizi premi Ctrl+C.
 call npm run dev --workspace @rbs/desktop -- --port 1421

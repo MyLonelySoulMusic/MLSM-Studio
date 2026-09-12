@@ -29,4 +29,4 @@ Questa documentazione separa l’uso quotidiano dai dettagli tecnici.
 
 ## Materiale storico
 
-[New York Streets](new-york-streets.md), [roadmap](roadmap.md) e [stato web](web-mvp-status.md) descrivono decisioni archiviate o lo stato tecnico, non modalità da proporre nella Home.
+[Requisiti di prodotto originali](product-requirements.md), [New York Streets](new-york-streets.md), [roadmap](roadmap.md) e [stato web](web-mvp-status.md) descrivono decisioni archiviate o lo stato tecnico, non modalità da proporre nella Home.

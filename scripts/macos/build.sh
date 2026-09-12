@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # Crea un DMG nativo macOS con Tauri. Non avvia Vite né alcun servizio locale.
 set -euo pipefail
-cd "$(dirname "$0")"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
+cd "$ROOT_DIR"
 
 check() {
   [[ "$(uname -s)" == "Darwin" ]] || { echo "Questo script deve essere eseguito su macOS." >&2; exit 2; }
-  command -v node >/dev/null || { echo "Node non trovato: esegui prima ./install.sh" >&2; exit 3; }
-  command -v cargo >/dev/null || { echo "Cargo non trovato: esegui prima ./install.sh" >&2; exit 3; }
+  command -v node >/dev/null || { echo "Node non trovato: esegui prima scripts/macos/install.sh" >&2; exit 3; }
+  command -v cargo >/dev/null || { echo "Cargo non trovato: esegui prima scripts/macos/install.sh" >&2; exit 3; }
   xcode-select -p >/dev/null 2>&1 || { echo "Xcode Command Line Tools non disponibili." >&2; exit 3; }
-  [[ -d node_modules ]] || { echo "Dipendenze npm assenti: esegui prima ./install.sh" >&2; exit 3; }
+  [[ -d node_modules ]] || { echo "Dipendenze npm assenti: esegui prima scripts/macos/install.sh" >&2; exit 3; }
 }
 
 if [[ "${1:-}" == "--check" ]]; then check; echo "Packaging macOS pronto. Nessuna compilazione avviata."; exit 0; fi

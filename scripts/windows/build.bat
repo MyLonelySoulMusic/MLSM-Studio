@@ -1,7 +1,8 @@
 @echo off
 rem Crea installer .exe (NSIS) e .msi nativi Windows. Non avvia server locali.
 setlocal EnableExtensions
-cd /d "%~dp0"
+for %%I in ("%~dp0\..\..") do set "ROOT_DIR=%%~fI"
+cd /d "%ROOT_DIR%"
 
 if /I "%~1"=="--check" goto check
 if /I "%~1"=="--dry-run" (
@@ -17,8 +18,8 @@ exit /b 0
 
 :check
 if not "%OS%"=="Windows_NT" (echo Questo script deve essere eseguito su Windows.& exit /b 2)
-where node >nul 2>nul || (echo Node non trovato: esegui prima install.bat& exit /b 3)
-where cargo >nul 2>nul || (echo Cargo non trovato: esegui prima install.bat& exit /b 3)
-if not exist node_modules (echo Dipendenze npm assenti: esegui prima install.bat& exit /b 3)
+where node >nul 2>nul || (echo Node non trovato: esegui prima scripts\windows\install.bat& exit /b 3)
+where cargo >nul 2>nul || (echo Cargo non trovato: esegui prima scripts\windows\install.bat& exit /b 3)
+if not exist node_modules (echo Dipendenze npm assenti: esegui prima scripts\windows\install.bat& exit /b 3)
 echo Packaging Windows pronto. Nessuna compilazione avviata.
 exit /b 0

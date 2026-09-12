@@ -4,12 +4,14 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - "install.*"
-      - "launch-mlsm.*"
+      - ".github/workflows/installers.yml"
+      - "scripts/**"
       - "tools/setup_python_runtime.cjs"
       - "tools/run_python_service.cjs"
       - "tools/verify_installation.cjs"
       - "tools/installer.test.ts"
+      - "tools/upscaler/requirements.txt"
+      - "package.json"
 
 jobs:
   macos:
@@ -19,9 +21,10 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version-file: ".nvmrc", cache: "npm" }
       - run: npm ci
-      - run: bash -n install.sh launch-mlsm.sh tools/setup_ai_quantizer_env.sh tools/setup_upscaler_env.sh
-      - run: ./launch-mlsm.sh --check
-      - run: ./build-macos.sh --check
+      - run: bash -n scripts/macos/*.sh
+      - run: scripts/macos/install.sh --dry-run
+      - run: scripts/macos/launch.sh --check
+      - run: scripts/macos/build.sh --check
       - run: npx vitest run tools/installer.test.ts
 
   windows:
@@ -32,9 +35,9 @@ jobs:
         with: { node-version-file: ".nvmrc", cache: "npm" }
       - run: npm ci
       - shell: cmd
-        run: launch-mlsm.bat --check
+        run: scripts\windows\launch.bat --check
       - shell: cmd
-        run: install.bat --dry-run
+        run: scripts\windows\install.bat --dry-run
       - shell: cmd
-        run: build-windows.bat --check
+        run: scripts\windows\build.bat --check
       - run: npx vitest run tools/installer.test.ts
