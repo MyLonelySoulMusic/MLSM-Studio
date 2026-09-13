@@ -750,17 +750,22 @@ pub fn audio_copy_artifact(
 }
 
 pub fn shutdown(state: &AudioToolsState) {
-    if let Some(pid) = *state
+    if let Some(pid) = state
         .installer_pid
         .lock()
         .unwrap_or_else(|e| e.into_inner())
+        .take()
     {
         terminate_pid(pid);
     }
-    let jobs = state.jobs.lock().unwrap_or_else(|e| e.into_inner());
-    for job in jobs.values() {
-        if let Some(pid) = job.pid {
+    let mut jobs = state.jobs.lock().unwrap_or_else(|e| e.into_inner());
+    for job in jobs.values_mut() {
+        if let Some(pid) = job.pid.take() {
             terminate_pid(pid);
+        }
+        if job.snapshot.status == "queued" || job.snapshot.status == "running" {
+            job.snapshot.status = "cancelled".into();
+            job.snapshot.message = "Sintesi annullata al cambio modalità".into();
         }
     }
 }

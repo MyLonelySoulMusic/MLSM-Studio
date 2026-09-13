@@ -62,4 +62,15 @@ describe("AudioWorkspace", () => {
 
     await waitFor(() => expect(audioMocks.correctAudioTranscript).toHaveBeenCalledWith(document, "", expect.any(Function), expect.objectContaining({ reviewer: "openai", signal: expect.any(AbortSignal) })));
   });
+
+  it("mostra un errore Whisper float16 comprensibile su Windows", async () => {
+    const media = { name: "voce.wav", path: "C:\\Audio\\voce.wav", url: "blob:voce", durationSeconds: 2, imported: { metadata: { durationSeconds: 2 }, waveform: [], url: "data:audio/wav;base64," } };
+    audioMocks.selectAudioToolMedia.mockResolvedValue(media);
+    audioMocks.transcribeAudioMedia.mockRejectedValue(new Error("Requested float16 compute type, but the target device or backend do not support efficient float16 computation."));
+    render(<AudioWorkspace />);
+    fireEvent.click(screen.getByRole("button", { name: "＋" }));
+    await screen.findByRole("button", { name: /Sostituisci file voce\.wav/ });
+    fireEvent.click(screen.getByRole("button", { name: "Trascrivi" }));
+    expect(await screen.findByText(/Questo dispositivo non può eseguire Whisper.*precisione compatibile/)).toBeInTheDocument();
+  });
 });

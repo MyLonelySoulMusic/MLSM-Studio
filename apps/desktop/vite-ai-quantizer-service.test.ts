@@ -38,4 +38,11 @@ describe("AI Quantizer runtime interno", () => {
       logs: ["pip install beat-this"], message: "Installazione dipendenze"
     }));
   });
+
+  it("mantiene il runtime lazy fino all'ingresso nell'area e supporta lo stop di lifecycle", () => {
+    const source = readFileSync(resolve(process.cwd(), "apps/desktop/vite-ai-quantizer-service.ts"), "utf8");
+    expect(source).toContain("runtime lazy pronto; verrà avviato al primo ingresso nell’area");
+    expect(source).toContain('pathname === "/api/lifecycle/stop"');
+    expect(source).not.toContain("const backend = await ensureEngine(server)");
+  });
 });

@@ -64,20 +64,11 @@ export function localPyTorchService(
   let restartAttempt = 0;
   let restartTimer: ReturnType<typeof setTimeout> | null = null;
   let stabilityTimer: ReturnType<typeof setTimeout> | null = null;
+  let desiredRunning = false;
   return {
     name: "dynamic-sound-local-pytorch",
     apply: "serve",
     async configureServer(server) {
-      const service = await probe();
-      if (service.compatible) {
-        server.config.logger.info(`[PyTorch] servizio video frame-per-frame già attivo · API ${service.apiVersion ?? "compatibile"} · http://127.0.0.1:8765`);
-        return;
-      }
-      if (service.running) {
-        const message = `[PyTorch] la porta 8765 è occupata da un backend precedente${service.apiVersion ? ` (API ${service.apiVersion})` : ""}, privo della pipeline Canvas video diretta. Il server di sviluppo non userà un processo obsoleto.`;
-        server.config.logger.error(message);
-        throw new Error(message);
-      }
       const python = resolve(projectRoot, process.platform === "win32" ? ".venv/Scripts/python.exe" : ".venv/bin/python");
       const entrypoint = resolve(projectRoot, "tools/upscaler_server.py");
       if (!fileExists(python)) {
@@ -85,7 +76,7 @@ export function localPyTorchService(
         return;
       }
       const launch = () => {
-        if (stopping || child) return;
+        if (stopping || !desiredRunning || child) return;
         const owned = startService(python, [entrypoint], {
           cwd: projectRoot,
           env: {
@@ -94,12 +85,13 @@ export function localPyTorchService(
             MLSM_UPSCALER_OWNER_KIND: "vite",
           },
           stdio: "inherit",
+          detached: process.platform !== "win32",
         });
         child = owned;
         server.config.logger.info(`[PyTorch] avvio automatico con PID ${owned.pid ?? "in preparazione"} · http://127.0.0.1:8765`);
         let scheduled = false;
         const scheduleRestart = (reason: string) => {
-          if (scheduled || stopping || child !== owned) return;
+          if (scheduled || stopping || !desiredRunning || child !== owned) return;
           scheduled = true;
           if (stabilityTimer !== null) clearTimeout(stabilityTimer);
           stabilityTimer = null;
@@ -115,9 +107,10 @@ export function localPyTorchService(
         owned.once("exit", (code, signal) => scheduleRestart(`servizio terminato${code !== null ? ` con codice ${code}` : ""}${signal ? ` · ${signal}` : ""}`));
         owned.once("error", (error) => scheduleRestart(`avvio fallito: ${error.message}`));
       };
-      launch();
-      const stopChild = () => {
-        stopping = true;
+      server.config.logger.info("[PyTorch] runtime disponibile su richiesta; verrà avviato entrando in una modalità che lo usa.");
+      const stopChild = (permanent = false) => {
+        if (permanent) stopping = true;
+        desiredRunning = false;
         if (restartTimer !== null) clearTimeout(restartTimer);
         restartTimer = null;
         if (stabilityTimer !== null) clearTimeout(stabilityTimer);
@@ -125,7 +118,11 @@ export function localPyTorchService(
         const owned = child;
         child = null;
         if (!owned || owned.exitCode !== null) return;
-        owned.kill("SIGTERM");
+        try {
+          if (process.platform === "win32" && owned.pid) spawn("taskkill", ["/PID", String(owned.pid), "/T", "/F"], { stdio: "ignore" });
+          else if (owned.pid) process.kill(-owned.pid, "SIGTERM");
+          else owned.kill("SIGTERM");
+        } catch { owned.kill("SIGTERM"); }
         // A Python process blocked in native code can ignore/delay SIGTERM.
         // Never leave a backend owned by this Vite instance behind after close.
         const forceKillTimer = setTimeout(() => {
@@ -134,7 +131,29 @@ export function localPyTorchService(
         forceKillTimer.unref?.();
         owned.once("exit", () => clearTimeout(forceKillTimer));
       };
-      server.httpServer?.once("close", stopChild);
+      server.middlewares.use("/__mlsm/python/upscaler", async (request, response, next) => {
+        const pathname = new URL(request.url ?? "/", "http://localhost").pathname;
+        if (pathname === "/stop" && request.method === "POST") {
+          stopChild();
+          response.statusCode = 204;
+          response.end();
+          return;
+        }
+        if (pathname === "/start" && request.method === "POST") {
+          desiredRunning = true;
+          const current = await probe();
+          if (current.running && !current.compatible) {
+            server.config.logger.error(`[PyTorch] porta 8765 occupata da un backend incompatibile${current.apiVersion ? ` · API ${current.apiVersion}` : ""}.`);
+          }
+          if (!current.running) launch();
+          response.statusCode = current.running && !current.compatible ? 409 : 202;
+          response.setHeader("Content-Type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ started: !current.running, running: current.running }));
+          return;
+        }
+        next();
+      });
+      server.httpServer?.once("close", () => stopChild(true));
     }
   };
 }

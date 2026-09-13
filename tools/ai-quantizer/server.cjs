@@ -14,6 +14,27 @@ const PYTHON = process.env.AIQ_PYTHON || path.resolve(ROOT, '..', '..', '.venv-a
 const PORT = Number(process.env.PORT || 4173);
 const MAX_UPLOAD = 1024 * 1024 * 1024;
 const PROCESS_SAMPLE_RATE = 48000;
+const activeChildren = new Set();
+
+function spawnTracked(command, args, options = {}) {
+  const child = spawn(command, args, { ...options, detached: process.platform !== 'win32' });
+  activeChildren.add(child);
+  const release = () => activeChildren.delete(child);
+  child.once('close', release);
+  child.once('error', release);
+  return child;
+}
+
+function terminateChildren() {
+  for (const child of activeChildren) {
+    if (!child.pid || child.exitCode !== null) continue;
+    try {
+      if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+      else process.kill(-child.pid, 'SIGTERM');
+    } catch { child.kill('SIGTERM'); }
+  }
+  activeChildren.clear();
+}
 
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -155,7 +176,7 @@ async function bodyJson(req) {
 
 function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, options);
+    const child = spawnTracked(command, args, options);
     let stderr = '';
     child.stderr.on('data', d => { stderr += d; });
     child.on('error', reject);
@@ -166,7 +187,7 @@ function run(command, args, options = {}) {
 
 function runCapture(command, args) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args);
+    const child = spawnTracked(command, args);
     let stdout = '', stderr = '';
     child.stdout.on('data', d => { stdout += d; });
     child.stderr.on('data', d => { stderr += d; });
@@ -198,7 +219,7 @@ async function measureLoudness(file) {
 
 function runJson(command, args) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd: ROOT });
+    const child = spawnTracked(command, args, { cwd: ROOT });
     let stdout = '', stderr = '';
     child.stdout.on('data', d => { stdout += d; });
     child.stderr.on('data', d => { stderr += d; });
@@ -775,3 +796,11 @@ const server = http.createServer(async (req, res) => {
 fsp.mkdir(PROJECTS, { recursive: true }).then(() => {
   server.listen(PORT, () => console.log(`AI Quantizer disponibile su http://localhost:${PORT}`));
 });
+
+function shutdown() {
+  terminateChildren();
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 1500).unref();
+}
+process.once('SIGTERM', shutdown);
+process.once('SIGINT', shutdown);

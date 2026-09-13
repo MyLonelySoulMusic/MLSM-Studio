@@ -9,6 +9,7 @@ import { resetCommentsInvasionRuntime } from "../store/comments-invasion-store";
 import { resetFrameBoosterRuntimeForProjectReplacement } from "./frame-booster-source-file";
 import { clearOverlaySpectralBackground } from "./overlay-spectral-background-runtime";
 import { useVideoEditorPlayback } from "../store/video-editor-playback-store";
+import { shutdownAreaPythonServices } from "./python-service-lifecycle";
 
 /**
  * Area boundaries are new workspaces, not navigation tabs. Runtime media,
@@ -16,6 +17,7 @@ import { useVideoEditorPlayback } from "../store/video-editor-playback-store";
  * area selected from Studio Home.
  */
 export function resetWorkspaceForAreaEntry(): void {
+  void shutdownAreaPythonServices();
   const previousProject = useProjectStore.getState().project;
   clearVideoEditorSession(previousProject.animation.videoEditor.assets);
   resetUpscalerRuntimeForProjectReplacement();

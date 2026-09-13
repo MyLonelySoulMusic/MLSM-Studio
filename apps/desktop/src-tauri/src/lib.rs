@@ -77,11 +77,10 @@ fn terminate_upscaler_child(process: &mut Child) {
     {
         // Give Uvicorn a bounded graceful shutdown window. Its shutdown hook
         // terminates/reaps active ffmpeg workers before the Python process exits.
-        let _ = Command::new("kill")
-            .args(["-TERM", &process.id().to_string()])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        let pid = process.id() as libc::pid_t;
+        if unsafe { libc::kill(-pid, libc::SIGTERM) } != 0 {
+            unsafe { libc::kill(pid, libc::SIGTERM); }
+        }
         let deadline = Instant::now() + Duration::from_secs(3);
         while Instant::now() < deadline {
             match process.try_wait() {
@@ -91,10 +90,35 @@ fn terminate_upscaler_child(process: &mut Child) {
             }
         }
     }
+    #[cfg(unix)]
+    {
+        let pid = process.id() as libc::pid_t;
+        unsafe { libc::kill(-pid, libc::SIGKILL); }
+    }
+    #[cfg(windows)]
+    {
+        let _ = Command::new("taskkill")
+            .args(["/PID", &process.id().to_string(), "/T", "/F"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
     let _ = process.kill();
     // Reap synchronously: closing MLSM must not leave a zombie or a live
     // backend listening on 8765 after the application has gone away.
     let _ = process.wait();
+}
+
+fn configure_upscaler_command(command: &mut Command) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setpgid(0, 0) == -1 { Err(std::io::Error::last_os_error()) } else { Ok(()) }
+            });
+        }
+    }
 }
 
 impl UpscalerServiceState {
@@ -216,20 +240,32 @@ fn ensure_upscaler_service(
             "runtime .venv o tools/upscaler_server.py non trovati nell'installazione".into(),
         )
     })?;
-    let process = Command::new(python)
-        .arg(server)
+    let mut command = Command::new(python);
+    command.arg(server)
         .current_dir(root)
         .env("PYTHONUNBUFFERED", "1")
         .env("MLSM_UPSCALER_PARENT_PID", std::process::id().to_string())
         .env("MLSM_UPSCALER_OWNER_KIND", "tauri")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
+        .stderr(Stdio::null());
+    configure_upscaler_command(&mut command);
+    let process = command.spawn()
         .map_err(|error| ProjectIoError::UpscalerRuntime(error.to_string()))?;
     let pid = process.id();
     *child = Some(process);
     Ok(UpscalerServiceStatus { running: false, started: true, pid: Some(pid) })
+}
+
+#[tauri::command]
+fn shutdown_area_python_services(
+    upscaler: tauri::State<'_, UpscalerServiceState>,
+    song_player: tauri::State<'_, song_player::SongPlayerState>,
+    audio: tauri::State<'_, audio_tools::AudioToolsState>,
+) {
+    upscaler.shutdown();
+    song_player::shutdown(song_player.inner());
+    audio_tools::shutdown(audio.inner());
 }
 
 #[derive(Debug, Serialize)]
@@ -510,6 +546,7 @@ pub fn run() {
             detect_audio_tools,
             detect_upscaler_hardware,
             ensure_upscaler_service,
+            shutdown_area_python_services,
             ensure_autopost_service,
             probe_audio,
             generate_waveform,

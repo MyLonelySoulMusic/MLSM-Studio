@@ -89,6 +89,16 @@ const copy = {
   },
 } as const;
 
+function audioErrorMessage(reason: unknown, language: "it" | "en"): string {
+  const message = reason instanceof Error ? reason.message : String(reason);
+  if (/requested\s+float16\s+compute\s+type|support efficient float16 computation/i.test(message)) {
+    return language === "en"
+      ? "This device cannot run Whisper efficiently with float16. MLSM will use a compatible precision automatically; retry the transcription."
+      : "Questo dispositivo non può eseguire Whisper in modo efficiente con float16. MLSM userà automaticamente una precisione compatibile: riprova la trascrizione.";
+  }
+  return message;
+}
+
 function MediaPicker({ media, onPick, label }: { media: AudioToolMedia | null; onPick: (value: AudioToolMedia) => void; label: string }) {
   const [picking, setPicking] = useState(false);
   return <div className="audio-media-picker">
@@ -168,7 +178,7 @@ export function AudioWorkspace({ onHome }: { onHome?: () => void }) {
       setProgress(1);
       setStatus(`${result.words.length} timestamp Whisper`);
     } catch (reason) {
-      if (!(reason instanceof DOMException && reason.name === "AbortError")) setStatus(reason instanceof Error ? reason.message : String(reason));
+      if (!(reason instanceof DOMException && reason.name === "AbortError")) setStatus(audioErrorMessage(reason, uiLanguage));
     } finally {
       setRunning(false);
       abort.current = null;

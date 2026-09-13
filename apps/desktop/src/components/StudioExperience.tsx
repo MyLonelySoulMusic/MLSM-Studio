@@ -30,7 +30,8 @@ function StudioRouter() {
   const analysis = useAnalysisStore((state) => state.result);
   const mode = getAnimationMode(project.animation.modeId);
   useEffect(() => { const syncHash = () => { const id = reportViewIdFromHash(window.location.hash); if (id) { setReportViewId(id); setScreen("reports"); } }; window.addEventListener("hashchange", syncHash); return () => window.removeEventListener("hashchange", syncHash); }, []);
-  const closeReports = () => { if (reportViewId) window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`); setReportViewId(null); setScreen("areas"); };
+  const goHome = () => { resetWorkspaceForAreaEntry(); setScreen("areas"); };
+  const closeReports = () => { if (reportViewId) window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`); setReportViewId(null); goHome(); };
   const navigate = (modeId: string) => {
     if (modeId === "reports") { resetWorkspaceForAreaEntry(); setReportViewId(null); setScreen("reports"); return; }
     const destination = getAnimationMode(modeId);
@@ -43,12 +44,12 @@ function StudioRouter() {
     : screen === "areas"
       ? <StudioHome onEnterArea={(area) => { if (area === "reports") setReportViewId(null); setScreen(area === "autopost" || area === "stickman" || area === "reports" ? area : "editor"); }} />
       : screen === "autopost"
-        ? <AutoPostApp onHome={() => setScreen("areas")} />
+        ? <AutoPostApp onHome={goHome} />
         : screen === "stickman"
-          ? <StickmanWorkspace onHome={() => setScreen("areas")} />
+          ? <StickmanWorkspace onHome={goHome} />
         : screen === "reports"
           ? <Suspense fallback={<main className="studio-home"><p role="status">Caricamento Reports…</p></main>}><ReportsWorkspace onHome={closeReports} viewDashboardId={reportViewId} onOpenViewer={id => { setReportViewId(id); setScreen("reports"); }} /></Suspense>
-        : <App onHome={() => setScreen("areas")} />;
+        : <App onHome={goHome} />;
   const assistantScreen = screen === "editor" || screen === "stickman" || screen === "reports" ? "editor" : "areas";
   return <>{content}{screen !== "welcome" && !reportViewId ? <ApplicationAssistant context={{ modeId: screen === "autopost" ? "autopost" : screen === "stickman" ? "stickman" : screen === "reports" ? "reports" : mode.id, modeLabel: screen === "areas" ? "Home aree" : screen === "autopost" ? "AutoPost" : screen === "stickman" ? "Stickman Animations" : screen === "reports" ? "Reports" : mode.label, aspectRatio: screen === "stickman" ? "9:16" : screen === "reports" ? "dashboard" : project.canvas.aspectRatio, hasAudio: screen === "stickman" || screen === "reports" ? false : Boolean(imported), analysisReady: screen === "stickman" || screen === "reports" ? false : Boolean(analysis), screen: assistantScreen }} onNavigate={navigate} /> : null}</>;
 }

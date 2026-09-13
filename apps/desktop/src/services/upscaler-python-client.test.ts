@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createProject } from "@rbs/project-schema";
 import { activeRemoteUpscalerEndpoints } from "./remote-upscaler-client";
 import { activeUpscalerVideoJobs, buildUpscalerVideoForm, clearRemoteUpscalerVideoCache, generatePythonUpscaledVideo, getRemoteUpscalerVideoCache, preflightRemoteUpscalerVideo, pythonUpscalerHealth, pythonUpscalerSupportsVideoJobs, settingsWithReachableRemoteEndpoints, shouldUsePythonUpscaler, type PythonUpscalerHealth } from "./upscaler-python-client";
+import { shutdownAreaPythonServices } from "./python-service-lifecycle";
 
 const tauriInvoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke: tauriInvoke }));
@@ -42,6 +43,13 @@ describe("routing Upscaler PyTorch", () => {
     await expect(pythonUpscalerHealth(true)).resolves.toEqual(available);
     expect(tauriInvoke).toHaveBeenCalledWith("ensure_upscaler_service");
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("arresta i processi Python posseduti da MLSM al cambio modalità", async () => {
+    vi.stubGlobal("__TAURI_INTERNALS__", {});
+    tauriInvoke.mockResolvedValue(undefined);
+    await shutdownAreaPythonServices();
+    expect(tauriInvoke).toHaveBeenCalledWith("shutdown_area_python_services");
   });
 
   it("invia preserve_aspect_ratio insieme alla richiesta video", () => {

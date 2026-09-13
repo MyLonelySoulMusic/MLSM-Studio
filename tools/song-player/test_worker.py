@@ -187,6 +187,18 @@ class YoutubeValidationTests(unittest.TestCase):
         self.assertTrue(options["word_timestamps"])
         self.assertFalse(options["condition_on_previous_text"])
 
+    def test_whisper_precision_falls_back_when_cuda_cannot_use_float16(self):
+        runtime = mock.Mock()
+        runtime.get_cuda_device_count.return_value = 1
+        runtime.get_supported_compute_types.return_value = {"int8_float32", "float32"}
+        self.assertEqual(worker.whisper_device_and_compute_type(runtime), ("cuda", "int8_float32"))
+
+    def test_whisper_uses_int8_on_cpu(self):
+        runtime = mock.Mock()
+        runtime.get_cuda_device_count.return_value = 0
+        runtime.get_supported_compute_types.return_value = {"int8", "float32"}
+        self.assertEqual(worker.whisper_device_and_compute_type(runtime), ("cpu", "int8"))
+
 
 class MusicalContextTests(unittest.TestCase):
     def test_removes_html_coverage_namespace_that_breaks_numba(self):

@@ -2,6 +2,7 @@ import type { RhythmBallProject } from "@rbs/project-schema";
 import type { ModelLoadProgress } from "./upscaler-ai";
 import { canvasImageSourceSize } from "./canvas-image-source";
 import { activeRemoteUpscalerEndpoints, normalizeRemoteUpscalerEndpoint, usesRemoteUpscaler } from "./remote-upscaler-client";
+import { pythonServiceLifecycleRevision, waitForAreaPythonServicesShutdown } from "./python-service-lifecycle";
 
 type Settings = RhythmBallProject["animation"]["upscaler"];
 export type RemoteVideoCheckpointPolicy = "resume" | "restart";
@@ -101,6 +102,7 @@ export interface PythonVideoUpscaleStatus {
 }
 let healthPromise: Promise<PythonUpscalerHealth | null> | null = null;
 let healthCheckedAt = 0;
+let healthLifecycleRevision = pythonServiceLifecycleRevision();
 
 async function probePythonUpscalerHealth(timeoutMs = 2_500): Promise<PythonUpscalerHealth | null> {
   try {
@@ -110,7 +112,12 @@ async function probePythonUpscalerHealth(timeoutMs = 2_500): Promise<PythonUpsca
 }
 
 async function requestNativeUpscalerStart(): Promise<boolean> {
-  if (!("__TAURI_INTERNALS__" in globalThis)) return false;
+  if (!("__TAURI_INTERNALS__" in globalThis)) {
+    try {
+      const response = await fetch("/__mlsm/python/upscaler/start", { method: "POST" });
+      return response.ok;
+    } catch { return false; }
+  }
   try {
     const { invoke } = await import("@tauri-apps/api/core");
     await invoke("ensure_upscaler_service");
@@ -119,6 +126,7 @@ async function requestNativeUpscalerStart(): Promise<boolean> {
 }
 
 async function probeOrStartPythonUpscaler(): Promise<PythonUpscalerHealth | null> {
+  await waitForAreaPythonServicesShutdown();
   const current = await probePythonUpscalerHealth();
   if (current) return current;
   if (!await requestNativeUpscalerStart()) return null;
@@ -141,6 +149,12 @@ export function reportUpscalerDiagnostic(event: string, details: Record<string, 
 }
 
 export function pythonUpscalerHealth(refresh = false): Promise<PythonUpscalerHealth | null> {
+  const lifecycleRevision = pythonServiceLifecycleRevision();
+  if (healthLifecycleRevision !== lifecycleRevision) {
+    healthLifecycleRevision = lifecycleRevision;
+    healthPromise = null;
+    healthCheckedAt = 0;
+  }
   const stale = Date.now() - healthCheckedAt > 3_000;
   if (refresh || !healthPromise || stale) {
     healthCheckedAt = Date.now();

@@ -469,6 +469,20 @@ def capabilities() -> dict[str, Any]:
     }
 
 
+def whisper_device_and_compute_type(ctranslate2_module: Any) -> tuple[str, str]:
+    """Choose a precision supported by the installed CTranslate2 backend."""
+    device = "cuda" if ctranslate2_module.get_cuda_device_count() > 0 else "cpu"
+    try:
+        supported = set(ctranslate2_module.get_supported_compute_types(device))
+    except (AttributeError, RuntimeError, ValueError):
+        supported = set()
+    preference = ("float16", "int8_float16", "int8_float32", "int8", "float32") if device == "cuda" else ("int8", "int8_float32", "float32")
+    compute_type = next((candidate for candidate in preference if candidate in supported), None)
+    if compute_type is None:
+        compute_type = "float32" if device == "cuda" else "int8"
+    return device, compute_type
+
+
 def transcribe_words(request: dict[str, Any]) -> dict[str, Any]:
     """Measured word boundaries from native Faster-Whisper.
 
@@ -529,8 +543,7 @@ def transcribe_words(request: dict[str, Any]) -> dict[str, Any]:
         raise WorkerError("whisper_runtime_unavailable", "Faster-Whisper non è installato nel runtime MLSM") from error
     cache_root = Path(os.environ.get("MLSM_WHISPER_CACHE", str(Path.home() / ".cache" / "mlsm-studio" / "faster-whisper"))).expanduser()
     cache_root.mkdir(parents=True, exist_ok=True)
-    device = "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
-    compute_type = "float16" if device == "cuda" else "int8"
+    device, compute_type = whisper_device_and_compute_type(ctranslate2)
     progress(.08, f"Caricamento/download automatico Whisper {model_names[model_id].capitalize()} · {device.upper()}")
     try:
         model = WhisperModel(model_names[model_id], device=device, compute_type=compute_type, download_root=str(cache_root))

@@ -60,6 +60,7 @@ export function localAiQuantizerService(): Plugin {
   let phase: AiQuantizerBootstrapPhase = "idle";
   let phaseDetail = "";
   let progress = 0;
+  let requested = false;
   const logs: string[] = [];
 
   const recordLog = (line: string) => {
@@ -94,44 +95,47 @@ export function localAiQuantizerService(): Plugin {
   };
 
   const startBackend = (server: ViteDevServer) => {
-    if (closing || child || !existsSync(paths.python) || !existsSync(paths.readyMarker)) return;
+    if (closing || !requested || child || !existsSync(paths.python) || !existsSync(paths.readyMarker)) return;
     phase = "starting";
     progress = Math.max(progress, 94);
     phaseDetail = "Avvio del backend audio interno.";
     recordLog(phaseDetail);
-    child = spawn(process.execPath, [paths.server], {
+    const owned = spawn(process.execPath, [paths.server], {
       cwd: paths.sourceRoot,
       env: { ...process.env, PORT: "4173", AIQ_PYTHON: paths.python, AIQ_DATA_ROOT: paths.dataRoot },
-      stdio: "inherit"
+      stdio: "inherit",
+      detached: process.platform !== "win32",
     });
+    child = owned;
     server.config.logger.info(`[AI Quantizer] motore MLSM interno · ${paths.server} · http://127.0.0.1:4173`);
-    child.once("error", (error) => {
+    owned.once("error", (error) => {
       phase = "failed"; phaseDetail = error.message;
       server.config.logger.error(`[AI Quantizer] avvio fallito: ${error.message}`);
     });
-    child.once("exit", (code) => {
+    owned.once("exit", (code) => {
       if (!closing && code && code !== 0) server.config.logger.error(`[AI Quantizer] motore terminato con codice ${code}.`);
-      if (!closing) { phase = "failed"; phaseDetail = `Il motore si è arrestato con codice ${code ?? "sconosciuto"}.`; }
-      child = null;
+      if (child === owned) child = null;
+      if (!closing && requested) { phase = "failed"; phaseDetail = `Il motore si è arrestato con codice ${code ?? "sconosciuto"}.`; }
     });
   };
 
   const startSetup = (server: ViteDevServer) => {
-    if (closing || child) return;
+    if (closing || !requested || child) return;
     phase = "setting-up";
     progress = Math.max(progress, 2);
     phaseDetail = "Installazione delle dipendenze nel runtime isolato. Questa operazione avviene una sola volta.";
     recordLog(phaseDetail);
     server.config.logger.info("[AI Quantizer] primo utilizzo: preparo l’ambiente Python isolato. L’operazione avviene una sola volta…");
-    child = spawn(process.execPath, [paths.setup, "ai-quantizer"], { cwd: projectRoot, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
-    captureSetupOutput(child);
-    child.once("error", (error) => {
+    const owned = spawn(process.execPath, [paths.setup, "ai-quantizer"], { cwd: projectRoot, env: process.env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
+    child = owned;
+    captureSetupOutput(owned);
+    owned.once("error", (error) => {
       phase = "failed"; phaseDetail = error.message;
       server.config.logger.error(`[AI Quantizer] preparazione fallita: ${error.message}`);
     });
-    child.once("exit", (code) => {
-      child = null;
-      if (closing) return;
+    owned.once("exit", (code) => {
+      if (child === owned) child = null;
+      if (closing || !requested) return;
       if (code === 0) startBackend(server);
       else {
         phase = "failed"; phaseDetail = `Preparazione non riuscita (codice ${code ?? "sconosciuto"}).`;
@@ -141,6 +145,7 @@ export function localAiQuantizerService(): Plugin {
   };
 
   const ensureEngine = async (server: ViteDevServer) => {
+    requested = true;
     const backend = await probeBackend();
     if (backend.compatible) { phase = "ready"; progress = 100; phaseDetail = "Motore audio interno pronto."; recordLog(phaseDetail); return backend; }
     if (backend.running) {
@@ -153,6 +158,25 @@ export function localAiQuantizerService(): Plugin {
       else startSetup(server);
     }
     return backend;
+  };
+
+  const terminateProcessTree = (owned: ChildProcess | null) => {
+    if (!owned?.pid || owned.exitCode !== null) return;
+    try {
+      if (process.platform === "win32") spawn("taskkill", ["/PID", String(owned.pid), "/T", "/F"], { stdio: "ignore" });
+      else process.kill(-owned.pid, "SIGTERM");
+    } catch { owned.kill("SIGTERM"); }
+  };
+
+  const stopEngine = () => {
+    requested = false;
+    const owned = child;
+    child = null;
+    terminateProcessTree(owned);
+    phase = "idle";
+    phaseDetail = "";
+    progress = 0;
+    logs.splice(0);
   };
 
   const sendJson = (response: ServerResponse, status: number, value: unknown) => {
@@ -168,15 +192,16 @@ export function localAiQuantizerService(): Plugin {
     async configureServer(server) {
       if (!existsSync(paths.server)) throw new Error(`[AI Quantizer] runtime interno mancante: ${paths.server}`);
 
-      const backend = await ensureEngine(server);
-      if (backend.compatible) {
-        server.config.logger.info("[AI Quantizer] motore MLSM interno già disponibile · http://127.0.0.1:4173");
-      } else if (backend.running) {
-        server.config.logger.error("[AI Quantizer] la porta 4173 è occupata da un vecchio backend esterno. Chiudilo e riavvia MLSM Studio: il servizio esterno non verrà utilizzato.");
-      }
+      server.config.logger.info("[AI Quantizer] runtime lazy pronto; verrà avviato al primo ingresso nell’area.");
 
       server.middlewares.use(aiQuantizerRoutePrefix, async (request, response, next) => {
         const pathname = new URL(request.url ?? "/", "http://localhost").pathname;
+        if (pathname === "/api/lifecycle/stop" && request.method === "POST") {
+          stopEngine();
+          response.statusCode = 204;
+          response.end();
+          return;
+        }
         if (pathname === "/api/health") {
           const current = await ensureEngine(server);
           if (current.compatible) return sendJson(response, 200, current.health);
@@ -207,8 +232,7 @@ export function localAiQuantizerService(): Plugin {
 
       server.httpServer?.once("close", () => {
         closing = true;
-        if (child && child.exitCode === null && !child.killed) child.kill("SIGTERM");
-        child = null;
+        stopEngine();
       });
     }
   };

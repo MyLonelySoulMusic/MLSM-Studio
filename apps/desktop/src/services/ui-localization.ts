@@ -5,6 +5,8 @@ import type { UiLanguage } from "./ui-preferences";
  * Keep technical/product names unchanged and translate longest phrases first.
  */
 const PAIRS: ReadonlyArray<readonly [string, string]> = [
+  ["Questo dispositivo non può eseguire Whisper in modo efficiente con float16. MLSM userà automaticamente una precisione compatibile: riprova la trascrizione.", "This device cannot run Whisper efficiently with float16. MLSM will use a compatible precision automatically; retry the transcription."],
+  ["Il dispositivo o backend selezionato non supporta calcoli float16 efficienti.", "Requested float16 compute type, but the target device or backend do not support efficient float16 computation."],
   // Reports workspace. These reviewed phrases prevent the generic word-level
   // fallback from producing mixed or unnatural copy in the English UI.
   ["Report in sola visualizzazione", "Report in read-only view"],

@@ -1139,6 +1139,28 @@ fn terminate_worker(child: &mut Child) {
     let _ = child.kill();
 }
 
+pub fn shutdown(state: &SongPlayerState) {
+    let pids = {
+        let mut jobs = state.shared.jobs.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        jobs.values_mut().filter_map(|record| {
+            record.cancel.store(true, Ordering::Release);
+            if !record.snapshot.status.is_terminal() {
+                record.snapshot.status = SongPlayerJobStatus::Cancelled;
+                record.snapshot.message = Some("Job annullato al cambio modalità".into());
+                record.snapshot.error = None;
+                record.snapshot.updated_at_ms = now_ms();
+            }
+            record.process_id.take()
+        }).collect::<Vec<_>>()
+    };
+    for pid in pids {
+        #[cfg(unix)]
+        unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGKILL); }
+        #[cfg(windows)]
+        { let _ = Command::new("taskkill").args(["/PID", &pid.to_string(), "/T", "/F"]).status(); }
+    }
+}
+
 fn parse_capability_output(stdout: &[u8]) -> Result<Value, String> {
     if stdout.len() > MAX_STDOUT_BYTES {
         return Err("output capabilities troppo grande".into());
