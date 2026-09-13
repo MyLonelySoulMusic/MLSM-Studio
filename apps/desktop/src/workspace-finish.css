@@ -14,6 +14,91 @@
   background: var(--app-bg);
 }
 
+/* Sound Animation · configurazione sinistra a fisarmonica */
+/* Explicit grid/flex rules on controls override the browser's hidden style. */
+.animation-settings-accordion [hidden] {
+  display: none !important;
+}
+
+.animation-settings-accordion {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.animation-settings-accordion .animation-settings-heading {
+  position: relative;
+  min-height: 42px;
+  margin: 0 !important;
+  padding: 11px 36px 11px 12px;
+  border: 1px solid color-mix(in srgb, var(--line) 88%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--panel-raised) 92%, transparent);
+  color: color-mix(in srgb, var(--ink) 72%, var(--muted));
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  outline: none;
+  user-select: none;
+  transition: border-color .18s ease, background .18s ease, color .18s ease, box-shadow .18s ease;
+}
+
+.animation-settings-accordion .animation-settings-heading::after {
+  content: "";
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  border-right: 1.7px solid currentColor;
+  border-bottom: 1.7px solid currentColor;
+  transform: translateY(-68%) rotate(45deg);
+  transition: transform .22s cubic-bezier(.2, .8, .2, 1);
+}
+
+.animation-settings-accordion .animation-settings-heading:hover {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel-raised));
+  color: var(--ink);
+}
+
+.animation-settings-accordion .animation-settings-heading:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.animation-settings-accordion .animation-settings-heading.is-open {
+  border-color: color-mix(in srgb, var(--accent) 62%, var(--line));
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel-raised));
+  color: var(--accent-strong);
+  box-shadow: 0 7px 20px color-mix(in srgb, var(--accent) 9%, transparent);
+}
+
+.animation-settings-accordion .animation-settings-heading.is-open::after {
+  transform: translateY(-25%) rotate(225deg);
+}
+
+.animation-settings-accordion .animation-settings-heading.is-open ~ :not(.animation-settings-heading) {
+  animation: animation-settings-content-in .2s cubic-bezier(.2, .8, .2, 1) both;
+}
+
+@keyframes animation-settings-content-in {
+  from { opacity: 0; transform: translateY(-5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animation-settings-accordion .animation-settings-heading,
+  .animation-settings-accordion .animation-settings-heading::after {
+    transition: none;
+  }
+
+  .animation-settings-accordion .animation-settings-heading.is-open ~ :not(.animation-settings-heading) {
+    animation: none;
+  }
+}
+
 .toolbar {
   position: relative;
   z-index: 22;

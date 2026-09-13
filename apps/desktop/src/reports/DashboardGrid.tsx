@@ -5,6 +5,7 @@ import { WidgetView } from "./WidgetView";
 
 interface DashboardGridProps {
   dashboard: ReportDashboard;
+  tabId?: string | undefined;
   readOnly?: boolean;
   selectedWidgetId?: string | null;
   selectedRowId?: string | null;
@@ -16,14 +17,17 @@ interface DashboardGridProps {
   onDeleteWidget?: (widget: ReportWidget) => void;
   onSetRowColumns?: (rowId: string, columns: number | null) => void;
   onDeleteRow?: (rowId: string) => void;
+  onChangeWidgetType?: (widget: ReportWidget) => void;
+  onPlayAnimation?: (widget: ReportWidget) => void;
 }
 
 export function DashboardGrid({
-  dashboard, readOnly = false, selectedWidgetId, selectedRowId, onSelectWidget, onSelectRow,
-  onMoveWidget, onMoveWidgetTo, onDuplicateWidget, onDeleteWidget, onSetRowColumns, onDeleteRow,
+  dashboard, tabId, readOnly = false, selectedWidgetId, selectedRowId, onSelectWidget, onSelectRow,
+  onMoveWidget, onMoveWidgetTo, onDuplicateWidget, onDeleteWidget, onSetRowColumns, onDeleteRow, onChangeWidgetType, onPlayAnimation,
 }: DashboardGridProps) {
+  const rows = tabId ? dashboard.layoutRows.filter(row => row.tabId === tabId) : dashboard.layoutRows;
   return <div className="rpt-layout-rows">
-    {dashboard.layoutRows.map((row, rowIndex) => {
+    {rows.map((row, rowIndex) => {
       const widgets = dashboard.widgets.filter(widget => widget.rowId === row.id);
       const fixedColumns = row.columns !== null;
       return <section
@@ -45,7 +49,7 @@ export function DashboardGrid({
             />
           </label>
           <span>{fixedColumns ? `Griglia fissa · ${row.columns} per riga` : "Larghezze dei singoli widget"}</span>
-          {dashboard.layoutRows.length > 1 && <button type="button" className="rpt-icon-button" aria-label={`Elimina riga ${rowIndex + 1}`} onClick={event => { event.stopPropagation(); onDeleteRow?.(row.id); }}><ReportIcon name="trash" /></button>}
+          {rows.length > 1 && <button type="button" className="rpt-icon-button" aria-label={`Elimina riga ${rowIndex + 1}`} onClick={event => { event.stopPropagation(); onDeleteRow?.(row.id); }}><ReportIcon name="trash" /></button>}
         </header>}
         <div
           className={`rpt-widget-grid${fixedColumns ? " is-fixed-columns" : ""}`}
@@ -67,9 +71,11 @@ export function DashboardGrid({
               <button className="rpt-icon-button" title="Sposta prima" aria-label={`Sposta prima ${widget.title}`} disabled={widgetIndex === 0} onClick={event => { event.stopPropagation(); onMoveWidget?.(widget.id, -1); }}><ReportIcon name="up" /></button>
               <button className="rpt-icon-button" title="Sposta dopo" aria-label={`Sposta dopo ${widget.title}`} disabled={widgetIndex === widgets.length - 1} onClick={event => { event.stopPropagation(); onMoveWidget?.(widget.id, 1); }}><ReportIcon name="down" /></button>
               <button className="rpt-icon-button" title="Duplica widget" aria-label={`Duplica ${widget.title}`} onClick={event => { event.stopPropagation(); onDuplicateWidget?.(widget); }}><ReportIcon name="copy" /></button>
+              <button className="rpt-icon-button" title="Cambia tipo widget" aria-label={`Cambia tipo ${widget.title}`} onClick={event => { event.stopPropagation(); onSelectRow?.(row.id); onSelectWidget?.(widget.id); onChangeWidgetType?.(widget); }}><ReportIcon name="swap" /></button>
               <button className="rpt-icon-button" title="Elimina widget" aria-label={`Elimina ${widget.title}`} onClick={event => { event.stopPropagation(); onDeleteWidget?.(widget); }}><ReportIcon name="trash" /></button>
             </div>}</header>
             <WidgetView widget={widget} dataset={dashboard.datasets.find(dataset => dataset.id === widget.datasetId)} theme={dashboard.theme} filters={dashboard.filters} />
+            {widget.animation && <button type="button" className="rpt-widget-play" aria-label={`Riproduci animazione ${widget.title}`} title="Riproduci Time Series" onClick={event => { event.stopPropagation(); onPlayAnimation?.(widget); }}><ReportIcon name="play" /><span>Time Series</span></button>}
           </article>)}
           {!widgets.length && !readOnly && <button type="button" className="rpt-empty-row" onClick={() => onSelectRow?.(row.id)}><ReportIcon name="plus" />Seleziona questa riga, poi aggiungi i widget</button>}
         </div>

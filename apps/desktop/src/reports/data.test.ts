@@ -82,4 +82,12 @@ describe("Reports file import", () => {
     expect(dashboard.datasets[0]!.rows).toHaveLength(18);
     expect(dashboard.widgets.every(widget => widget.datasetId === dashboard.datasets[0]!.id)).toBe(true);
   });
+
+  it("creates English demo content when English is active", () => {
+    const dashboard = createDemoDashboard("en");
+    expect(dashboard.name).toBe("MLSM · Audience & growth");
+    expect(dashboard.datasets[0]!.name).toBe("Channel performance");
+    expect(dashboard.datasets[0]!.fields.map(field => field.name)).toEqual(["Month", "Channel", "Views", "Interactions", "Revenue"]);
+    expect(dashboard.widgets.map(widget => widget.title)).toContain("Total views");
+  });
 });

@@ -1,5 +1,6 @@
 import type { CassetteDeskSettings, RhythmBallProject } from "@rbs/project-schema";
 import { useProjectStore } from "../store/project-store";
+import { SoundInspectorAccordion } from "./SoundInspectorAccordion";
 
 const KEY_NAMES = ["C", "C# / Db", "D", "Eb", "E", "F", "F# / Gb", "G", "Ab", "A", "Bb", "B"];
 
@@ -26,7 +27,7 @@ export function CassetteDeskInspector({
   const settings = useProjectStore((state) => state.project.animation.cassetteDesk);
   const update = useProjectStore((state) => state.updateCassetteDesk);
 
-  return <aside className="panel inspector cassette-desk-inspector" aria-label="Inspector Cassette Desk">
+  return <SoundInspectorAccordion className="panel inspector cassette-desk-inspector" aria-label="Inspector Cassette Desk">
     <section>
       <h2>Formato e stereo</h2>
       <label>Formato
@@ -130,5 +131,5 @@ export function CassetteDeskInspector({
         <input type="range" min="3.6" max="8" step=".1" value={settings.introDurationSeconds} onChange={(event) => update({ introDurationSeconds: Number(event.target.value) })} />
       </label>
     </section>
-  </aside>;
+  </SoundInspectorAccordion>;
 }

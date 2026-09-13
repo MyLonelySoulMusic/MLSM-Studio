@@ -1,5 +1,6 @@
 import Papa from "papaparse";
 import { createDashboard, createWidget, reportId, type CellValue, type FieldType, type ReportDashboard, type ReportDataset } from "./types";
+import type { UiLanguage } from "../services/ui-preferences";
 
 export const REPORT_LIMITS = {
   fileBytes: 20 * 1024 * 1024,
@@ -11,6 +12,7 @@ export const REPORT_LIMITS = {
   datasets: 20,
   widgets: 100,
   filters: 100,
+  tabs: 20,
 } as const;
 
 function fail(message: string): never { throw new Error(message); }
@@ -148,11 +150,11 @@ export async function importReportFile(file: File): Promise<ReportDataset[]> {
   return datasets;
 }
 
-export function createDemoDashboard(): ReportDashboard {
-  const dashboard = createDashboard("MLSM · Audience & crescita");
-  dashboard.description = "Dashboard dimostrativa · dati di esempio, pronti da esplorare e personalizzare.";
+export function createDemoDashboard(language: UiLanguage = "it"): ReportDashboard {
+  const dashboard = createDashboard(language === "en" ? "MLSM · Audience & growth" : "MLSM · Audience & crescita", language);
+  dashboard.description = language === "en" ? "Demo dashboard · sample data, ready to explore and customize." : "Dashboard dimostrativa · dati di esempio, pronti da esplorare e personalizzare.";
   const dataset = parseTextDataset([
-    "Mese,Canale,Visualizzazioni,Interazioni,Ricavi",
+    language === "en" ? "Month,Channel,Views,Interactions,Revenue" : "Mese,Canale,Visualizzazioni,Interazioni,Ricavi",
     "2026-01-01,Instagram,42000,3600,1240", "2026-01-01,YouTube,31000,2100,980", "2026-01-01,TikTok,57000,4800,720",
     "2026-02-01,Instagram,49500,4200,1510", "2026-02-01,YouTube,34800,2450,1120", "2026-02-01,TikTok,63200,5100,890",
     "2026-03-01,Instagram,56800,4700,1850", "2026-03-01,YouTube,39500,3100,1420", "2026-03-01,TikTok,71500,6200,1080",
@@ -160,7 +162,7 @@ export function createDemoDashboard(): ReportDashboard {
     "2026-05-01,Instagram,71800,6300,2640", "2026-05-01,YouTube,52800,4300,2090", "2026-05-01,TikTok,91400,8100,1670",
     "2026-06-01,Instagram,79600,7100,3120", "2026-06-01,YouTube,61400,5200,2480", "2026-06-01,TikTok,104200,9300,2140",
   ].join("\n"), "MLSM-demo.csv");
-  dataset.name = "Performance dei canali";
+  dataset.name = language === "en" ? "Channel performance" : "Performance dei canali";
   dashboard.datasets = [dataset];
   const month = dataset.fields[0]!;
   const channel = dataset.fields[1]!;
@@ -169,11 +171,11 @@ export function createDemoDashboard(): ReportDashboard {
   const revenue = dataset.fields[4]!;
   const rowId = dashboard.layoutRows[0]!.id;
   dashboard.widgets = [
-    { ...createWidget("kpi", dataset, rowId), title: "Visualizzazioni totali", measure: views.id, width: 4 },
-    { ...createWidget("kpi", dataset, rowId), title: "Interazioni", measure: interactions.id, width: 4 },
-    { ...createWidget("kpi", dataset, rowId), title: "Ricavi generati", measure: revenue.id, format: "currency", width: 4 },
-    { ...createWidget("area", dataset, rowId), title: "Un pubblico in crescita", dimension: month.id, measure: views.id, width: 8, height: 320 },
-    { ...createWidget("bar", dataset, rowId), title: "Ricavi per canale", dimension: channel.id, measure: revenue.id, format: "currency", sort: "desc", width: 4, height: 320 },
+    { ...createWidget("kpi", dataset, rowId, language), title: language === "en" ? "Total views" : "Visualizzazioni totali", measure: views.id, width: 4 },
+    { ...createWidget("kpi", dataset, rowId, language), title: language === "en" ? "Interactions" : "Interazioni", measure: interactions.id, width: 4 },
+    { ...createWidget("kpi", dataset, rowId, language), title: language === "en" ? "Generated revenue" : "Ricavi generati", measure: revenue.id, format: "currency", width: 4 },
+    { ...createWidget("area", dataset, rowId, language), title: language === "en" ? "A growing audience" : "Un pubblico in crescita", dimension: month.id, measure: views.id, width: 8, height: 320 },
+    { ...createWidget("bar", dataset, rowId, language), title: language === "en" ? "Revenue by channel" : "Ricavi per canale", dimension: channel.id, measure: revenue.id, format: "currency", sort: "desc", width: 4, height: 320 },
   ];
   return dashboard;
 }

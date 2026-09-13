@@ -67,5 +67,9 @@ export async function settingsRequest<T>(request: Record<string, unknown>, signa
   return payload.result;
 }
 export const getLlmSettings = () => settingsRequest<LlmSettings>({ action: "status" });
-export const saveLlmSettings = (settings: { provider: LlmProvider; activeProvider?: LlmProvider | "local"; model: string; enabled: boolean; apiKey?: string; removeKey?: boolean }) => settingsRequest<LlmSettings>({ action: "configure", ...settings });
-export const requestRemoteAnswer = (messages: LocalChatMessage[]) => settingsRequest<RemoteLlmReply>({ action: "chat", messages });
+export async function saveLlmSettings(settings: { provider: LlmProvider; activeProvider?: LlmProvider | "local"; model: string; enabled: boolean; apiKey?: string; removeKey?: boolean }): Promise<LlmSettings> {
+  const result = await settingsRequest<LlmSettings>({ action: "configure", ...settings });
+  if (typeof window !== "undefined") window.dispatchEvent(new Event("mlsm-llm-settings-changed"));
+  return result;
+}
+export const requestRemoteAnswer = (messages: LocalChatMessage[], options: { provider?: LlmProvider; maxTokens?: number; signal?: AbortSignal } = {}) => settingsRequest<RemoteLlmReply>({ action: "chat", messages, ...(options.provider ? { provider: options.provider } : {}), ...(options.maxTokens ? { maxTokens: options.maxTokens } : {}) }, options.signal);

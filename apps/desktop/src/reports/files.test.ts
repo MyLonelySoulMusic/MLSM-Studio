@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDemoDashboard } from "./data";
-import { downloadDashboard } from "./files";
+import { dashboardEmbedCode, downloadDashboard } from "./files";
 
 const nativeMocks = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -53,7 +53,13 @@ describe("Reports JSON file export", () => {
     await expect(downloadDashboard(dashboard)).resolves.toBe(true);
     expect(nativeMocks.invoke).toHaveBeenCalledWith("write_project", {
       path: "/tmp/report.mlsm-report.json",
-      content: expect.stringContaining('"schemaVersion": 5'),
+      content: expect.stringContaining('"schemaVersion": 9'),
     });
+  });
+
+  it("creates a portable iframe snippet with a safe local filename", () => {
+    const dashboard = createDemoDashboard();
+    dashboard.name = 'Vendite Europa <2026> "Q1"';
+    expect(dashboardEmbedCode(dashboard)).toBe('<iframe src="./Vendite-Europa-2026-Q1-.html" title="Vendite Europa 2026 Q1" loading="lazy" style="width:100%;min-height:720px;border:0" allowfullscreen></iframe>');
   });
 });

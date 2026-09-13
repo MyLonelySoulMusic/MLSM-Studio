@@ -72,7 +72,14 @@ async function ensureNativeRuntime(signal: AbortSignal | undefined, onProgress: 
     await wait(600, signal);
     status = await getSongPlayerRuntimeSetup();
   }
-  if (status.status === "failed") throw new Error(status.error ?? "Installazione automatica di Whisper Medium non riuscita.");
+  if (status.status === "failed") {
+    // Il runtime condiviso contiene anche Demucs, pYIN e Auto-AVSR. Uno di quei
+    // moduli può fallire la verifica globale mentre Faster-Whisper è già pronto:
+    // la trascrizione deve dipendere dalla propria capability, non dalle altre.
+    const partialCapabilities = await getSongPlayerCapabilities();
+    if (partialCapabilities.wordTranscription) return;
+    throw new Error(status.error ?? "Installazione automatica di Whisper Medium non riuscita.");
+  }
   capabilities = await getSongPlayerCapabilities();
   if (!capabilities.wordTranscription) throw new Error("Il runtime MLSM non espone Whisper parola per parola dopo l’installazione.");
 }

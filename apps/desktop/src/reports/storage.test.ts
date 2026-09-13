@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { IDBFactory } from "fake-indexeddb";
 import { createDemoDashboard } from "./data";
 import { deleteDashboard, exportDashboard, importDashboard, listDashboards, saveDashboard, validateDashboard } from "./storage";
+import { DEFAULT_MAP_BACKGROUND } from "./types";
 
 vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => false, invoke: vi.fn() }));
 
@@ -82,6 +83,7 @@ describe("Reports portable JSON", () => {
     original.widgets[0]!.format = "currency";
     original.widgets[0]!.currency = "USD";
     original.widgets[0]!.decimals = 3;
+    original.widgets[0]!.mapBackground = "#E8E8E8";
     const serialized = exportDashboard(original);
     const imported = importDashboard(serialized);
     expect(imported.id).not.toBe(original.id);
@@ -98,7 +100,7 @@ describe("Reports portable JSON", () => {
     expect(() => importDashboard("{broken")).toThrow(/JSON valido/);
     expect(() => importDashboard("null")).toThrow(/oggetto/);
     const dashboard = createDemoDashboard();
-    expect(() => importDashboard(JSON.stringify({ ...dashboard, schemaVersion: 6 }))).toThrow(/versione non supportata/);
+    expect(() => importDashboard(JSON.stringify({ ...dashboard, schemaVersion: 10 }))).toThrow(/versione non supportata/);
     expect(() => importDashboard(JSON.stringify({ ...dashboard, executable: "alert(1)" }))).toThrow(/struttura/);
   });
 
@@ -124,7 +126,7 @@ describe("Reports portable JSON", () => {
     legacy.widgets.forEach((widget: Record<string, unknown>) => { delete widget.secondaryDimension; delete widget.timeGrain; delete widget.rowId; delete widget.currency; delete widget.decimals; delete widget.xSort; });
     legacy.filters = [{ id: "legacy-filter", datasetId: legacy.datasets[0].id, fieldId: "field-2", value: "Instagram" }];
     const migrated = importDashboard(JSON.stringify(legacy));
-    expect(migrated.schemaVersion).toBe(5);
+    expect(migrated.schemaVersion).toBe(9);
     expect(migrated.widgets.every(widget => widget.timeGrain === "exact" && widget.secondaryDimension === "")).toBe(true);
     expect(migrated.layoutRows).toHaveLength(1);
     expect(migrated.widgets.every(widget => widget.rowId === migrated.layoutRows[0]!.id && widget.currency === "EUR" && widget.decimals === 2 && widget.xSort === "asc")).toBe(true);
@@ -137,8 +139,9 @@ describe("Reports portable JSON", () => {
     delete legacy.layoutRows;
     legacy.widgets.forEach((widget: Record<string, unknown>) => { delete widget.rowId; delete widget.currency; delete widget.decimals; delete widget.xSort; });
     const migrated = importDashboard(JSON.stringify(legacy));
-    expect(migrated.schemaVersion).toBe(5);
-    expect(migrated.layoutRows).toEqual([{ id: "row-main", columns: null }]);
+    expect(migrated.schemaVersion).toBe(9);
+    expect(migrated.tabs).toEqual([{ id: "tab-main", name: "Pagina 1" }]);
+    expect(migrated.layoutRows).toEqual([{ id: "row-main", tabId: "tab-main", columns: null }]);
     expect(migrated.widgets.every(widget => widget.rowId === "row-main" && widget.currency === "EUR" && widget.decimals === 2 && widget.xSort === "asc")).toBe(true);
   });
 
@@ -147,7 +150,7 @@ describe("Reports portable JSON", () => {
     legacy.schemaVersion = 3;
     legacy.widgets.forEach((widget: Record<string, unknown>) => { delete widget.xSort; });
     const migrated = importDashboard(JSON.stringify(legacy));
-    expect(migrated.schemaVersion).toBe(5);
+    expect(migrated.schemaVersion).toBe(9);
     expect(migrated.widgets.every(widget => widget.xSort === "asc")).toBe(true);
   });
 
@@ -156,8 +159,77 @@ describe("Reports portable JSON", () => {
     legacy.schemaVersion = 4;
     legacy.filters = [{ id: "legacy-filter", datasetId: legacy.datasets[0].id, fieldId: "field-2", value: "Instagram", targetMode: "all", widgetIds: [] }];
     const migrated = importDashboard(JSON.stringify(legacy));
-    expect(migrated.schemaVersion).toBe(5);
+    expect(migrated.schemaVersion).toBe(9);
     expect(migrated.filters[0]).toMatchObject({ value: "Instagram", defaultValue: "Instagram", includeAll: true });
+  });
+
+  it("migrates Reports v5 to tabs and removes the old implicit 12-category cap", () => {
+    const legacy = JSON.parse(JSON.stringify(createDemoDashboard()));
+    legacy.schemaVersion = 5;
+    delete legacy.tabs;
+    legacy.layoutRows.forEach((row: Record<string, unknown>) => { delete row.tabId; });
+    legacy.widgets[0].limit = 12;
+    legacy.widgets[1].limit = 7;
+
+    const migrated = importDashboard(JSON.stringify(legacy));
+
+    expect(migrated.schemaVersion).toBe(9);
+    expect(migrated.tabs).toEqual([{ id: "tab-main", name: "Pagina 1" }]);
+    expect(migrated.layoutRows.every(row => row.tabId === "tab-main")).toBe(true);
+    expect(migrated.widgets[0]!.limit).toBeNull();
+    expect(migrated.widgets[1]!.limit).toBe(7);
+  });
+
+  it("migrates Reports v6 adding the neutral map background", () => {
+    const legacy = JSON.parse(JSON.stringify(createDemoDashboard()));
+    legacy.schemaVersion = 6;
+    legacy.widgets.forEach((widget: Record<string, unknown>) => { delete widget.mapBackground; });
+
+    const migrated = importDashboard(JSON.stringify(legacy));
+
+    expect(migrated.schemaVersion).toBe(9);
+    expect(migrated.widgets.every(widget => widget.mapBackground === DEFAULT_MAP_BACKGROUND)).toBe(true);
+  });
+
+  it("migrates Reports v7 adding an empty widget animation", () => {
+    const legacy = JSON.parse(JSON.stringify(createDemoDashboard()));
+    legacy.schemaVersion = 7;
+    legacy.widgets.forEach((widget: Record<string, unknown>) => { delete widget.animation; });
+
+    const migrated = importDashboard(JSON.stringify(legacy));
+
+    expect(migrated.schemaVersion).toBe(9);
+    expect(migrated.widgets.every(widget => widget.animation === null)).toBe(true);
+  });
+
+  it("migrates Reports v8 animations to period values", () => {
+    const legacy = JSON.parse(JSON.stringify(createDemoDashboard()));
+    legacy.schemaVersion = 8;
+    legacy.widgets[0].animation = {
+      type: "timeSeries", chartType: "line", dimension: "field-1", timeGrain: "month",
+      showTrendLine: false, highlightMaximum: true,
+    };
+
+    const migrated = importDashboard(JSON.stringify(legacy));
+
+    expect(migrated.schemaVersion).toBe(9);
+    expect(migrated.widgets[0]!.animation?.valueMode).toBe("period");
+  });
+
+  it("validates Time Series animation configuration and its date axis", () => {
+    const dashboard = createDemoDashboard();
+    dashboard.widgets[0]!.animation = {
+      type: "timeSeries", chartType: "area", dimension: "field-1", timeGrain: "month",
+      valueMode: "cumulative", showTrendLine: true, highlightMaximum: true,
+    };
+    expect(validateDashboard(dashboard).widgets[0]!.animation).toEqual(dashboard.widgets[0]!.animation);
+
+    const invalidAxis = JSON.parse(JSON.stringify(dashboard));
+    invalidAxis.widgets[0].animation.dimension = "field-2";
+    expect(() => validateDashboard(invalidAxis)).toThrow(/campo data/);
+    const invalidChart = JSON.parse(JSON.stringify(dashboard));
+    invalidChart.widgets[0].animation.chartType = "pie";
+    expect(() => validateDashboard(invalidChart)).toThrow(/grafico animazione/);
   });
 
   it("rejects unsafe colors, nonfinite numbers, object cells and inconsistent field types", () => {
@@ -184,6 +256,9 @@ describe("Reports portable JSON", () => {
     const invalidCurrency = JSON.parse(JSON.stringify(createDemoDashboard()));
     invalidCurrency.widgets[0].currency = "BTC";
     expect(() => validateDashboard(invalidCurrency)).toThrow(/valuta/);
+    const invalidMapBackground = JSON.parse(JSON.stringify(createDemoDashboard()));
+    invalidMapBackground.widgets[0].mapBackground = "transparent";
+    expect(() => validateDashboard(invalidMapBackground)).toThrow(/colore sfondo mappa/);
   });
 
   it("does not silently discard unknown cell keys or missing values", () => {

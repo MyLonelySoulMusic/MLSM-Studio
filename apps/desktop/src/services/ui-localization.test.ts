@@ -56,4 +56,10 @@ describe("localizeUiText", () => {
     expect(localizeUiText("Transitions · Audio mixer · AI Tools", "it")).toBe("Transizioni · Mixer audio · Strumenti AI");
     expect(localizeUiText("Play/Pause (Space)", "it")).toBe("Riproduci/Pausa (Spazio)");
   });
+
+  it("copre i controlli e i messaggi principali di Reports", () => {
+    expect(localizeUiText("Aggiungi widget · Anteprima dati · Salva dashboard", "en")).toBe("Add widget · Data preview · Save dashboard");
+    expect(localizeUiText("Raggruppa il tempo · Conteggio distinti · Deviazione standard", "en")).toBe("Group time by · Distinct count · Standard deviation");
+    expect(localizeUiText("Nessun dato disponibile con i filtri attuali.", "en")).toBe("No data available with the current filters.");
+  });
 });

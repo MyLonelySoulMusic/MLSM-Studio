@@ -15,7 +15,7 @@ export function studioSettingsService(): Plugin {
         try {
           if (request.headers.origin && new URL(request.headers.origin).host !== request.headers.host) return send(403, { error: "Origin rejected" });
           let raw = "";
-          for await (const chunk of request) { raw += Buffer.from(chunk).toString("utf8"); if (raw.length > 140_000) return send(413, { error: "Request too large" }); }
+          for await (const chunk of request) { raw += Buffer.from(chunk).toString("utf8"); if (raw.length > 2_000_000) return send(413, { error: "Request too large" }); }
           JSON.parse(raw);
           const child = spawn(process.platform === "win32" ? "python" : "python3", [resolve(root, "tools/settings/worker.py"), root, resolve(root, ".mlsm-settings")], { cwd: root, stdio: ["pipe", "pipe", "ignore"], windowsHide: true });
           children.add(child);

@@ -44,6 +44,7 @@ describe("report aggregation", () => {
     expect(formatReportNumber(1234.5, "currency", "USD", 2)).toContain("$");
     expect(formatReportNumber(1234.5, "currency", "EUR", 2)).toContain("€");
     expect(formatReportNumber(0.256, "percent", "EUR", 1)).toContain("25,6");
+    expect(formatReportNumber(1234.5, "number", "EUR", 2, "en")).toBe("1,234.5");
   });
 
   it("counts rows including empty measurements and does not require a numeric measure", () => {
@@ -71,6 +72,19 @@ describe("report aggregation", () => {
     expect(aggregateWidget(widget({ sort: "asc", limit: 1 }), dataset).points).toEqual([{ label: "Sud", value: -10 }]);
     expect(aggregateWidget(widget({ sort: "desc", limit: 1 }), dataset).points).toEqual([{ label: "Nord", value: 60 }]);
     expect(aggregateWidget(widget({ type: "line", dimension: "date" }), dataset).points.map(point => point.label)).toEqual(["2026-01-01", "2026-02-01", "2026-03-01"]);
+  });
+
+  it("includes every category by default and limits only when explicitly configured", () => {
+    const manyCategories: ReportDataset = {
+      id: "many", name: "Categorie", sourceName: "categorie.csv",
+      fields: [{ id: "category", name: "Categoria", type: "text" }, { id: "value", name: "Valore", type: "number" }],
+      rows: Array.from({ length: 18 }, (_, index) => ({ category: `Categoria ${index + 1}`, value: index + 1 })),
+    };
+    const all = { ...createWidget("bar", manyCategories), dimension: "category", measure: "value" };
+
+    expect(all.limit).toBeNull();
+    expect(aggregateWidget(all, manyCategories).points).toHaveLength(18);
+    expect(aggregateWidget({ ...all, limit: 12 }, manyCategories).points).toHaveLength(12);
   });
 
   it("orders an X axis chronologically or numerically without changing value sorting", () => {

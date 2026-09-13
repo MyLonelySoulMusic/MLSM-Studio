@@ -8,6 +8,8 @@ const reportMocks = vi.hoisted(() => ({
   saveDashboard: vi.fn(),
   deleteDashboard: vi.fn(),
   downloadDashboard: vi.fn(),
+  downloadDashboardHtml: vi.fn(),
+  dashboardEmbedCode: vi.fn(),
 }));
 
 vi.mock("./storage", () => ({
@@ -17,7 +19,7 @@ vi.mock("./storage", () => ({
   saveDashboard: reportMocks.saveDashboard,
 }));
 
-vi.mock("./files", () => ({ downloadDashboard: reportMocks.downloadDashboard }));
+vi.mock("./files", () => ({ downloadDashboard: reportMocks.downloadDashboard, downloadDashboardHtml: reportMocks.downloadDashboardHtml, dashboardEmbedCode: reportMocks.dashboardEmbedCode }));
 
 vi.mock("./WidgetView", () => ({
   WidgetView: ({ widget }: { widget: { title: string } }) => <div data-testid="report-widget-preview">{widget.title}</div>,
@@ -37,6 +39,8 @@ describe("ReportsWorkspace", () => {
     reportMocks.saveDashboard.mockResolvedValue(undefined);
     reportMocks.deleteDashboard.mockResolvedValue(undefined);
     reportMocks.downloadDashboard.mockResolvedValue(true);
+    reportMocks.downloadDashboardHtml.mockResolvedValue(true);
+    reportMocks.dashboardEmbedCode.mockReturnValue('<iframe src="MLSM-Report.html"></iframe>');
   });
 
   afterEach(() => {
@@ -51,7 +55,7 @@ describe("ReportsWorkspace", () => {
     expect(screen.getByRole("heading", { name: /Una storia da raccontare/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Carica il tuo primo file" })).toBeInTheDocument();
     expect(screen.getByRole("complementary", { name: "Origini e campi" })).toHaveTextContent("Carica un file per esplorare dimensioni e misure.");
-    expect(screen.getByRole("complementary", { name: "Widget e proprietà" })).toHaveTextContent("9 tipi");
+    expect(screen.getByRole("complementary", { name: "Widget e proprietà" })).toHaveTextContent("10 tipi");
     expect(screen.getByRole("button", { name: /Le mie dashboard/ })).toHaveTextContent("0");
     expect(onHome).not.toHaveBeenCalled();
   });
@@ -96,6 +100,57 @@ describe("ReportsWorkspace", () => {
     expect(screen.getByLabelText("Titolo")).toHaveValue("Tabella pivot");
     expect(screen.getByLabelText(/^Righe/)).toBeInTheDocument();
     expect(screen.getByLabelText("Colonne")).toBeInTheDocument();
+  });
+
+  it("creates independent dashboard tabs and lets each tab be renamed", async () => {
+    await renderReports();
+    fireEvent.click(screen.getByRole("button", { name: /Esplora un esempio/ }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Nuovo tab" }));
+    expect(screen.getByRole("button", { name: /Pagina 2/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryAllByTestId("report-widget-preview")).toHaveLength(0);
+    fireEvent.change(screen.getByLabelText("Nome tab attivo"), { target: { value: "Geografia" } });
+    expect(screen.getByRole("button", { name: /Geografia/ })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Aggiungi widget" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Scegli un widget" })).getByRole("button", { name: /Mappa geografica/ }));
+    expect(screen.getByLabelText("Titolo")).toHaveValue("Mappa geografica");
+    expect(screen.getByLabelText("Tipo widget")).toHaveValue("map");
+
+    fireEvent.click(screen.getByRole("button", { name: /Pagina 1/ }));
+    expect(screen.getAllByTestId("report-widget-preview")).toHaveLength(5);
+  });
+
+  it("changes an existing widget type without recreating its title or layout", async () => {
+    await renderReports();
+    fireEvent.click(screen.getByRole("button", { name: /Esplora un esempio/ }));
+    const widget = screen.getByRole("article", { name: "Widget Visualizzazioni totali" });
+
+    fireEvent.click(within(widget).getByRole("button", { name: "Cambia tipo Visualizzazioni totali" }));
+    const chooser = screen.getByRole("dialog", { name: "Cambia tipo di widget" });
+    fireEvent.click(within(chooser).getByRole("button", { name: /Mappa geografica/ }));
+
+    expect(screen.getByLabelText("Titolo")).toHaveValue("Visualizzazioni totali");
+    expect(screen.getByLabelText("Tipo widget")).toHaveValue("map");
+    expect(screen.getByLabelText("Larghezza manuale (1–12)")).toHaveValue(4);
+    expect(screen.getByLabelText("Colore sfondo mappa")).toHaveValue("#f2f0f1");
+    expect(screen.getByLabelText("Colore pallini mappa")).toHaveValue("#ff4f9a");
+
+    fireEvent.change(screen.getByLabelText("Colore sfondo mappa"), { target: { value: "#e0e0e0" } });
+    fireEvent.change(screen.getByLabelText("Colore pallini mappa"), { target: { value: "#211b1f" } });
+    expect(screen.getByLabelText("Colore sfondo mappa")).toHaveValue("#e0e0e0");
+    expect(screen.getByLabelText("Colore pallini mappa")).toHaveValue("#211b1f");
+  });
+
+  it("exports standalone HTML and shows the iframe embed snippet", async () => {
+    await renderReports();
+    fireEvent.click(screen.getByRole("button", { name: /Esplora un esempio/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Esporta HTML" }));
+
+    await waitFor(() => expect(reportMocks.downloadDashboardHtml).toHaveBeenCalledOnce());
+    const dialog = await screen.findByRole("dialog", { name: "Dashboard pronta da incorporare" });
+    expect(within(dialog).getByLabelText("Codice HTML incorporamento")).toHaveValue('<iframe src="MLSM-Report.html"></iframe>');
+    expect(reportMocks.dashboardEmbedCode).toHaveBeenCalledOnce();
   });
 
   it("crea un filtro e permette di associarlo solo ai widget selezionati", async () => {
@@ -196,6 +251,33 @@ describe("ReportsWorkspace", () => {
     fireEvent.change(order, { target: { value: "x-desc" } });
     expect(order).toHaveValue("x-desc");
     expect(screen.getByText(/Sequenza temporale protetta/)).toBeInTheDocument();
+  });
+
+  it("configura e visualizza un'animazione Time Series professionale su un KPI", async () => {
+    await renderReports();
+    fireEvent.click(screen.getByRole("button", { name: /Esplora un esempio/ }));
+    fireEvent.click(screen.getByRole("article", { name: "Widget Visualizzazioni totali" }));
+
+    fireEvent.click(screen.getByText("AGGIUNGI ANIMAZIONE"));
+    fireEvent.click(screen.getByRole("button", { name: /Time Series/ }));
+    expect(screen.getByLabelText("Animazione widget")).toHaveValue("timeSeries");
+    fireEvent.change(screen.getByLabelText("Grafico animato"), { target: { value: "area" } });
+    fireEvent.change(screen.getByLabelText("Raggruppa asse X animazione"), { target: { value: "week" } });
+    fireEvent.change(screen.getByLabelText("Valore animazione Time Series"), { target: { value: "cumulative" } });
+    expect(screen.getByLabelText("Valore animazione Time Series")).toHaveValue("cumulative");
+    fireEvent.click(screen.getByRole("checkbox", { name: /Linea di tendenza/ }));
+
+    const widget = screen.getByRole("article", { name: "Widget Visualizzazioni totali" });
+    const play = within(widget).getByRole("button", { name: "Riproduci animazione Visualizzazioni totali" });
+    expect(play).toBeInTheDocument();
+    fireEvent.click(play);
+
+    const dialog = screen.getByRole("dialog", { name: "Visualizzazioni totali" });
+    expect(dialog).toHaveTextContent("TIME SERIES");
+    expect(dialog).toHaveTextContent("CUMULATIVO");
+    expect(dialog).toHaveTextContent("MASSIMO");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Chiudi animazione" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Visualizzazioni totali" })).not.toBeInTheDocument());
   });
 
   it("lets a selected row override widget widths with a custom column count", async () => {

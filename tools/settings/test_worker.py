@@ -75,6 +75,19 @@ class SettingsTest(unittest.TestCase):
                 self.assertEqual(request.headers["Authorization"], "Bearer sample-key")
                 self.assertEqual(result["source"], name)
 
+    def test_chat_can_select_a_configured_provider_and_token_budget(self):
+        self.call(action="configure", provider="openai", apiKey="openai-secret", model="gpt-4.1", activeProvider="openai")
+        self.call(action="configure", provider="xai", apiKey="xai-secret", model="grok-4.6")
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = json.dumps({"choices": [{"message": {"content": "Reviewed"}}]}).encode()
+        with patch.object(worker.urllib.request, "build_opener") as opener:
+            opener.return_value.open.return_value = response
+            result = self.call(action="chat", provider="xai", maxTokens=2048, messages=[{"role": "user", "content": "Review"}])
+        payload = json.loads(opener.return_value.open.call_args.args[0].data)
+        self.assertEqual(result["source"], "xai")
+        self.assertEqual(payload["model"], "grok-4.6")
+        self.assertEqual(payload["max_tokens"], 2048)
+
     def test_connection_check_uses_selected_model_and_reasoning_safe_completion(self):
         self.call(action="configure", provider="nvidia", apiKey="sample-key", model="moonshotai/kimi-k3")
         response = MagicMock()

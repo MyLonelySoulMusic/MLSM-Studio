@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bucketTimeValue, TIME_GRAIN_LABELS, type TimeGrain } from "./time-buckets";
+import { bucketTimeValue, TIME_GRAIN_LABELS, TIME_GRAIN_LABELS_BY_LANGUAGE, type TimeGrain } from "./time-buckets";
 
 describe("report time buckets", () => {
   it("exposes Italian labels for every supported grain", () => {
@@ -32,6 +32,13 @@ describe("report time buckets", () => {
     expect(bucketTimeValue("2026-04-01", "quarter")).toEqual({ key: "2026-Q2", label: "T2 2026", sortKey: Date.parse("2026-04-01T00:00:00Z") });
     expect(bucketTimeValue("2026-12-31", "quarter")).toEqual({ key: "2026-Q4", label: "T4 2026", sortKey: Date.parse("2026-10-01T00:00:00Z") });
     expect(bucketTimeValue("2026-12-31", "year")).toEqual({ key: "2026", label: "2026", sortKey: Date.parse("2026-01-01T00:00:00Z") });
+  });
+
+  it("creates English labels for controls and grouped chart axes", () => {
+    expect(TIME_GRAIN_LABELS_BY_LANGUAGE.en).toEqual({ exact: "Exact date", day: "Day", week: "Week", month: "Month", quarter: "Quarter", year: "Year" });
+    expect(bucketTimeValue("2026-09-30", "week", "en")?.label).toBe("Week 40 · 2026");
+    expect(bucketTimeValue("2026-09-30", "month", "en")?.label).toBe("Sep 2026");
+    expect(bucketTimeValue("2026-09-30", "quarter", "en")?.label).toBe("Q3 2026");
   });
 
   it("returns null for empty, non-text and invalid ISO values", () => {

@@ -20,11 +20,11 @@ export type DashboardFilterLike = {
  * applies to every widget in that dataset; a selected filter applies only
  * when the widget id is explicitly listed (an empty list targets none).
  */
-export function filtersForWidget(
-  filters: readonly DashboardFilterLike[],
+export function filtersForWidget<T extends DashboardFilterLike>(
+  filters: readonly T[],
   widgetId: string,
   datasetId: string,
-): DashboardFilterLike[] {
+): T[] {
   return filters.filter((filter) => {
     if (filter.datasetId !== datasetId) return false;
     if (filter.targetMode !== "selected") return true;

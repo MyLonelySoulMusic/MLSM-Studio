@@ -99,7 +99,7 @@ def complete(config, messages, max_tokens=1024):
         raise ValueError("Invalid conversation")
     if any(not isinstance(m, dict) or m.get("role") not in ("system", "user", "assistant") or not isinstance(m.get("content"), str) for m in messages):
         raise ValueError("Invalid messages")
-    if sum(len(m["content"]) for m in messages) > 100_000:
+    if sum(len(m["content"]) for m in messages) > 1_800_000:
         raise ValueError("Conversation too large")
     payload = {"model": config["model"], "messages": messages, "stream": False}
     payload["max_completion_tokens" if config["provider"] == "openai" else "max_tokens"] = max_tokens
@@ -213,7 +213,7 @@ def local_cache_error(error):
 
 def dispatch(request, root, data, native=None):
     action = request.get("action")
-    config = configuration(root, data, request.get("provider") if action == "test" else None)
+    config = configuration(root, data, request.get("provider") if action in ("test", "chat") else None)
     if action == "status":
         return public_settings(root, data)
     if action == "configure":
@@ -247,7 +247,10 @@ def dispatch(request, root, data, native=None):
         write_json(data / "providers.json", settings)
         return public_settings(root, data)
     if action == "chat":
-        return complete(config, request.get("messages"))
+        max_tokens = request.get("maxTokens", 1024)
+        if not isinstance(max_tokens, int) or isinstance(max_tokens, bool) or not 128 <= max_tokens <= 8192:
+            raise ValueError("Invalid max token limit")
+        return complete(config, request.get("messages"), max_tokens=max_tokens)
     if action == "test":
         if "model" in request:
             model = request["model"]
@@ -277,7 +280,7 @@ if __name__ == "__main__":
                     os._exit(1)
         threading.Thread(target=watch_parent, daemon=True).start()
     try:
-        request = json.loads(sys.stdin.buffer.readline(150_001))
+        request = json.loads(sys.stdin.buffer.readline(2_000_001))
         result = dispatch(request, Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]) if len(sys.argv) > 3 else None)
         print(json.dumps({"result": result}, ensure_ascii=False))
     except Exception as error:

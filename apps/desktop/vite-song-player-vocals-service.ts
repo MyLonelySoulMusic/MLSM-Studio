@@ -95,7 +95,10 @@ export function localSongPlayerVocalsService(): Plugin {
     setupProcess.once("error", (cause) => { phase = "failed"; error = cause.message; message = "Installazione automatica non riuscita"; setupProcess = null; });
     setupProcess.once("exit", async (code) => {
       setupProcess = null;
-      if (code === 0 && await verifyRuntimeFeature(requiredFeature)) { phase = "ready"; progress = 100; message = runtimeReadyMessage(requiredFeature); }
+      // Il setup condiviso verifica anche funzioni non richieste. Se, per
+      // esempio, pYIN fallisce ma Faster-Whisper è pronto, la trascrizione deve
+      // essere utilizzabile anche quando il processo di setup esce con errore.
+      if (await verifyRuntimeFeature(requiredFeature)) { phase = "ready"; progress = 100; message = runtimeReadyMessage(requiredFeature); error = null; }
       else { phase = "failed"; error = `Preparazione non riuscita (codice ${code ?? "sconosciuto"}).`; message = "Runtime vocale non disponibile"; }
     });
     server.config.logger.info("[Song Player] installazione automatica del runtime vocale avviata");

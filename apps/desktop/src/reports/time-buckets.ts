@@ -1,15 +1,13 @@
 import type { CellValue } from "./types";
+import type { UiLanguage } from "../services/ui-preferences";
 
 export type TimeGrain = "exact" | "day" | "week" | "month" | "quarter" | "year";
 
-export const TIME_GRAIN_LABELS: Record<TimeGrain, string> = {
-  exact: "Data esatta",
-  day: "Giorno",
-  week: "Settimana",
-  month: "Mese",
-  quarter: "Trimestre",
-  year: "Anno",
+export const TIME_GRAIN_LABELS_BY_LANGUAGE: Record<UiLanguage, Record<TimeGrain, string>> = {
+  it: { exact: "Data esatta", day: "Giorno", week: "Settimana", month: "Mese", quarter: "Trimestre", year: "Anno" },
+  en: { exact: "Exact date", day: "Day", week: "Week", month: "Month", quarter: "Quarter", year: "Year" },
 };
+export const TIME_GRAIN_LABELS = TIME_GRAIN_LABELS_BY_LANGUAGE.it;
 
 export interface TimeBucket {
   key: string;
@@ -27,6 +25,7 @@ interface ParsedIsoDate {
 const ISO_DATE_VALUE = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?(Z|[+-]\d{2}:\d{2})?)?$/;
 const MILLIS_PER_DAY = 86_400_000;
 const ITALIAN_MONTHS = ["gen", "feb", "mar", "apr", "mag", "giu", "lug", "ago", "set", "ott", "nov", "dic"] as const;
+const ENGLISH_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"] as const;
 
 function pad(value: number, length = 2): string {
   return String(value).padStart(length, "0");
@@ -92,7 +91,7 @@ function dayBucket(date: Date): TimeBucket {
   return { key, label: `${pad(day)}/${pad(month)}/${pad(year, 4)}`, sortKey: utcTimestamp(year, month, day) };
 }
 
-function weekBucket(date: Date): TimeBucket {
+function weekBucket(date: Date, language: UiLanguage): TimeBucket {
   const current = new Date(date.getTime());
   current.setUTCHours(0, 0, 0, 0);
   const weekday = current.getUTCDay() || 7;
@@ -106,19 +105,20 @@ function weekBucket(date: Date): TimeBucket {
   firstThursday.setUTCHours(0, 0, 0, 0);
   const week = 1 + Math.round((thursday.getTime() - firstThursday.getTime()) / (MILLIS_PER_DAY * 7));
   const key = `${pad(isoYear, 4)}-W${pad(week)}`;
-  return { key, label: `Settimana ${week} · ${pad(isoYear, 4)}`, sortKey: current.getTime() };
+  return { key, label: `${language === "en" ? "Week" : "Settimana"} ${week} · ${pad(isoYear, 4)}`, sortKey: current.getTime() };
 }
 
-function monthBucket(date: Date): TimeBucket {
+function monthBucket(date: Date, language: UiLanguage): TimeBucket {
   const { year, month } = dateParts(date);
   const key = `${pad(year, 4)}-${pad(month)}`;
-  return { key, label: `${ITALIAN_MONTHS[month - 1]} ${pad(year, 4)}`, sortKey: utcTimestamp(year, month, 1) };
+  const months = language === "en" ? ENGLISH_MONTHS : ITALIAN_MONTHS;
+  return { key, label: `${months[month - 1]} ${pad(year, 4)}`, sortKey: utcTimestamp(year, month, 1) };
 }
 
-function quarterBucket(date: Date): TimeBucket {
+function quarterBucket(date: Date, language: UiLanguage): TimeBucket {
   const { year, month } = dateParts(date);
   const quarter = Math.floor((month - 1) / 3) + 1;
-  return { key: `${pad(year, 4)}-Q${quarter}`, label: `T${quarter} ${pad(year, 4)}`, sortKey: utcTimestamp(year, (quarter - 1) * 3 + 1, 1) };
+  return { key: `${pad(year, 4)}-Q${quarter}`, label: `${language === "en" ? "Q" : "T"}${quarter} ${pad(year, 4)}`, sortKey: utcTimestamp(year, (quarter - 1) * 3 + 1, 1) };
 }
 
 function yearBucket(date: Date): TimeBucket {
@@ -126,13 +126,13 @@ function yearBucket(date: Date): TimeBucket {
   return { key: pad(year, 4), label: pad(year, 4), sortKey: utcTimestamp(year, 1, 1) };
 }
 
-export function bucketTimeValue(value: CellValue | undefined, grain: TimeGrain): TimeBucket | null {
+export function bucketTimeValue(value: CellValue | undefined, grain: TimeGrain, language: UiLanguage = "it"): TimeBucket | null {
   const parsed = parseIsoDate(value);
   if (!parsed) return null;
   if (grain === "exact") return { key: String(value), label: String(value), sortKey: parsed.instant.getTime() };
   if (grain === "day") return dayBucket(parsed.instant);
-  if (grain === "week") return weekBucket(parsed.instant);
-  if (grain === "month") return monthBucket(parsed.instant);
-  if (grain === "quarter") return quarterBucket(parsed.instant);
+  if (grain === "week") return weekBucket(parsed.instant, language);
+  if (grain === "month") return monthBucket(parsed.instant, language);
+  if (grain === "quarter") return quarterBucket(parsed.instant, language);
   return yearBucket(parsed.instant);
 }

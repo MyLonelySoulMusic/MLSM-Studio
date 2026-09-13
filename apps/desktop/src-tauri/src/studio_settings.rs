@@ -12,7 +12,7 @@ pub async fn studio_settings(app: tauri::AppHandle, request: Value) -> Result<Va
         let data = if development { root.join(".mlsm-settings") } else { native.join("settings") };
         let scan_root = if development { root.to_path_buf() } else { native.clone() };
         let payload = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
-        if payload.len() > 140_000 { return Err("Settings request too large".into()); }
+        if payload.len() > 2_000_000 { return Err("Settings request too large".into()); }
         let mut programs = vec!["python3".to_string(), "python".to_string()];
         let managed = if cfg!(windows) { native.join("audio/tts-runtime/Scripts/python.exe") } else { native.join("audio/tts-runtime/bin/python") };
         if managed.is_file() { programs.insert(0, managed.to_string_lossy().into_owned()); }

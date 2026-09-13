@@ -1,5 +1,6 @@
 import type { Aggregation, CellValue, ReportDataset, ReportField, ReportFilter, ReportWidget } from "./types";
 import { bucketTimeValue } from "./time-buckets";
+import type { UiLanguage } from "../services/ui-preferences";
 
 export interface AggregatePoint { label: string; value: number }
 export interface ScatterPoint { x: number; y: number }
@@ -78,7 +79,7 @@ export function isTemporalDimension(field: ReportField | undefined, rows: Report
   return values.length > 0 && values.every(value => temporalDimensionKey(value) !== null);
 }
 
-function compareDimensionGroups(left: AggregateGroup, right: AggregateGroup, type: ReportDataset["fields"][number]["type"], direction: "asc" | "desc"): number {
+function compareDimensionGroups(left: AggregateGroup, right: AggregateGroup, type: ReportDataset["fields"][number]["type"], direction: "asc" | "desc", language: UiLanguage): number {
   let comparison = 0;
   if (type === "date") {
     const leftValid = Number.isFinite(left.date);
@@ -96,7 +97,7 @@ function compareDimensionGroups(left: AggregateGroup, right: AggregateGroup, typ
     const leftEmpty = left.raw === null || left.raw === undefined || left.raw === "";
     const rightEmpty = right.raw === null || right.raw === undefined || right.raw === "";
     if (leftEmpty !== rightEmpty) return leftEmpty ? 1 : -1;
-    comparison = left.label.localeCompare(right.label, "it", { numeric: true, sensitivity: "base" });
+    comparison = left.label.localeCompare(right.label, language, { numeric: true, sensitivity: "base" });
   }
   return (direction === "desc" ? -comparison : comparison) || left.sourceIndex - right.sourceIndex;
 }
@@ -126,7 +127,7 @@ export function reduceReportValues(sourceValues: (CellValue | undefined)[], coun
   return Number.isFinite(result) ? result : null;
 }
 
-export function aggregateWidget(widget: ReportWidget, dataset: ReportDataset | undefined, filters: ReportFilter[] = []): WidgetData {
+export function aggregateWidget(widget: ReportWidget, dataset: ReportDataset | undefined, filters: ReportFilter[] = [], language: UiLanguage = "it"): WidgetData {
   const result: WidgetData = { points: [], scatter: [], value: null, rowCount: 0, excludedRows: 0, message: "" };
   if (widget.type === "text") return result;
   if (!dataset) return { ...result, message: "Collega una fonte dati per iniziare." };
@@ -173,7 +174,7 @@ export function aggregateWidget(widget: ReportWidget, dataset: ReportDataset | u
   const groups = new Map<string, AggregateGroup>();
   for (const [sourceIndex, row] of rows.entries()) {
     const cell = row[widget.dimension];
-    const timeBucket = dimension?.type === "date" && widget.timeGrain !== "exact" ? bucketTimeValue(cell, widget.timeGrain) : null;
+    const timeBucket = dimension?.type === "date" && widget.timeGrain !== "exact" ? bucketTimeValue(cell, widget.timeGrain, language) : null;
     if (dimension?.type === "date" && widget.timeGrain !== "exact" && !timeBucket) { result.excludedRows += 1; continue; }
     const key = timeBucket?.key ?? (cell === null || cell === undefined || cell === "" ? "empty:" : `${typeof cell}:${String(cell)}`);
     let group = groups.get(key);
@@ -192,7 +193,7 @@ export function aggregateWidget(widget: ReportWidget, dataset: ReportDataset | u
   const lockTemporalSequence = temporalAxis && (widget.type === "line" || widget.type === "area");
   const valueSort = lockTemporalSequence ? "source" : widget.sort;
   if (dimension && valueSort === "source" && xSort !== "source") {
-    entries = entries.sort((left, right) => compareDimensionGroups(left, right, temporalAxis ? "date" : dimension.type, xSort));
+    entries = entries.sort((left, right) => compareDimensionGroups(left, right, temporalAxis ? "date" : dimension.type, xSort, language));
   }
   result.points = entries.flatMap(group => {
     const value = reduceReportValues(group.values, group.count, widget.aggregation);
@@ -201,7 +202,7 @@ export function aggregateWidget(widget: ReportWidget, dataset: ReportDataset | u
   if (valueSort !== "source") {
     result.points.sort((a, b) => valueSort === "asc" ? a.value - b.value : b.value - a.value);
   }
-  result.points = result.points.slice(0, Math.max(1, Math.floor(widget.limit)));
+  if (widget.limit !== null) result.points = result.points.slice(0, Math.max(1, Math.floor(widget.limit)));
   if (!result.points.length) result.message = "Nessun valore numerico disponibile per questa misura.";
   if (widget.type === "doughnut" && result.points.some(point => point.value < 0)) {
     result.message = "La ciambella non supporta valori negativi. Usa un grafico a barre o modifica la misura.";
@@ -211,8 +212,8 @@ export function aggregateWidget(widget: ReportWidget, dataset: ReportDataset | u
   return result;
 }
 
-export function formatReportNumber(value: number, format: ReportWidget["format"], currency: ReportWidget["currency"] = "EUR", decimals = 2): string {
-  return new Intl.NumberFormat("it-IT", {
+export function formatReportNumber(value: number, format: ReportWidget["format"], currency: ReportWidget["currency"] = "EUR", decimals = 2, language: UiLanguage = "it"): string {
+  return new Intl.NumberFormat(language === "en" ? "en-GB" : "it-IT", {
     maximumFractionDigits: Math.max(0, Math.min(6, decimals)),
     ...(format === "currency" ? { style: "currency", currency, currencyDisplay: "narrowSymbol" as const } : {}),
     ...(format === "percent" ? { style: "percent" } : {}),

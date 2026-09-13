@@ -79,4 +79,18 @@ describe("Reports widget views", () => {
     expect(screen.getByRole("rowheader", { name: "feb 2026" })).toBeInTheDocument();
     expect(screen.getAllByText("60").length).toBeGreaterThan(0);
   });
+
+  it("renders an interactive OpenStreetMap from city and country labels", async () => {
+    Object.defineProperty(SVGSVGElement.prototype, "createSVGRect", { configurable: true, value: () => ({}) });
+    const mapDataset: ReportDataset = {
+      ...dataset,
+      rows: [{ city: "Roma", value: 20 }, { city: "IT", value: 10 }, { city: "Atlantide", value: 5 }],
+    };
+    const widget = { ...createWidget("map", mapDataset), dimension: "city", measure: "value", mapBackground: "#E0E0E0", color: "#211B1F" };
+    render(<WidgetView widget={widget} dataset={mapDataset} theme={DEFAULT_REPORT_THEME} filters={[]} />);
+
+    expect(await screen.findByRole("img", { name: /mappa OpenStreetMap con 2 località riconosciute/ })).toHaveStyle({ backgroundColor: "#E0E0E0" });
+    expect(screen.getByText(/1 località non riconosciute: Atlantide/)).toBeInTheDocument();
+    expect(screen.getByText(/cartografia OpenStreetMap/)).toBeInTheDocument();
+  });
 });

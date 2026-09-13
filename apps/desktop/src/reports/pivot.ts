@@ -1,6 +1,7 @@
 import { aggregationNeedsMeasure, aggregationNeedsNumericMeasure, displayCell, filterRows, reduceReportValues } from "./aggregation";
 import { bucketTimeValue, type TimeGrain } from "./time-buckets";
 import type { Aggregation, CellValue, ReportDataset, ReportFilter } from "./types";
+import type { UiLanguage } from "../services/ui-preferences";
 
 export const PIVOT_MAX_ROWS = 100;
 export const PIVOT_MAX_COLUMNS = 50;
@@ -14,6 +15,7 @@ export interface BuildPivotTableArgs {
   aggregation: Aggregation;
   timeGrain?: TimeGrain;
   timeAxis?: "row" | "column" | "none";
+  language?: UiLanguage;
 }
 
 export interface PivotResult {
@@ -105,11 +107,11 @@ function normalizeBucket(value: unknown): NormalizedBucket | null {
   return key ? { key, label, sortKey } : null;
 }
 
-function timeBucket(value: CellValue | undefined, grain: TimeGrain): NormalizedBucket | null {
+function timeBucket(value: CellValue | undefined, grain: TimeGrain, language: UiLanguage): NormalizedBucket | null {
   // The time-bucket helper is intentionally normalized here so the pivot remains
   // compatible with both string buckets and richer { key, label } buckets.
   try {
-    const bucket = (bucketTimeValue as unknown as (input: CellValue | undefined, selectedGrain: TimeGrain) => unknown)(value, grain);
+    const bucket = bucketTimeValue(value, grain, language);
     return normalizeBucket(bucket);
   } catch {
     return null;
@@ -122,9 +124,10 @@ function dimensionValue(
   sourceIndex: number,
   shouldBucket: boolean,
   grain: TimeGrain | undefined,
+  language: UiLanguage,
 ): { value: DimensionValue | null; invalidDate: boolean } {
   if (shouldBucket && grain && fieldType === "date") {
-    const bucket = timeBucket(value, grain);
+    const bucket = timeBucket(value, grain, language);
     if (!bucket) return { value: null, invalidDate: true };
     return {
       value: {
@@ -173,6 +176,7 @@ export function buildPivotTable({
   aggregation,
   timeGrain,
   timeAxis = "none",
+  language = "it",
 }: BuildPivotTableArgs): PivotResult {
   const rowField = dataset.fields.find(field => field.id === rowFieldId);
   const columnField = dataset.fields.find(field => field.id === columnFieldId);
@@ -195,8 +199,8 @@ export function buildPivotTable({
   let invalidDateRows = 0;
 
   for (const [sourceIndex, row] of rows.entries()) {
-    const rowDimension = dimensionValue(row[rowField.id], rowField.type, sourceIndex, timeAxis === "row", timeGrain);
-    const columnDimension = dimensionValue(row[columnField.id], columnField.type, sourceIndex, timeAxis === "column", timeGrain);
+    const rowDimension = dimensionValue(row[rowField.id], rowField.type, sourceIndex, timeAxis === "row", timeGrain, language);
+    const columnDimension = dimensionValue(row[columnField.id], columnField.type, sourceIndex, timeAxis === "column", timeGrain, language);
     if (rowDimension.invalidDate || columnDimension.invalidDate || !rowDimension.value || !columnDimension.value) {
       if (rowDimension.invalidDate || columnDimension.invalidDate) invalidDateRows += 1;
       continue;
