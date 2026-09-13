@@ -199,6 +199,19 @@ class YoutubeValidationTests(unittest.TestCase):
         runtime.get_supported_compute_types.return_value = {"int8", "float32"}
         self.assertEqual(worker.whisper_device_and_compute_type(runtime), ("cpu", "int8"))
 
+    def test_whisper_uses_cpu_when_cuda_detection_cannot_load_windows_runtime(self):
+        runtime = mock.Mock()
+        runtime.get_cuda_device_count.side_effect = OSError("nvcuda.dll could not be loaded")
+        runtime.get_supported_compute_types.return_value = {"int8", "float32"}
+        self.assertEqual(worker.whisper_device_and_compute_type(runtime), ("cpu", "int8"))
+
+    def test_whisper_recognizes_missing_windows_cublas_as_cuda_runtime_error(self):
+        error = RuntimeError("Library cublas64_12.dll is not found or cannot be loaded")
+        self.assertTrue(worker.is_cuda_runtime_load_error(error))
+
+    def test_whisper_does_not_hide_unrelated_transcription_errors(self):
+        self.assertFalse(worker.is_cuda_runtime_load_error(RuntimeError("Audio stream is corrupt")))
+
 
 class MusicalContextTests(unittest.TestCase):
     def test_removes_html_coverage_namespace_that_breaks_numba(self):

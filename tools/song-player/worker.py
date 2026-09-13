@@ -469,18 +469,39 @@ def capabilities() -> dict[str, Any]:
     }
 
 
-def whisper_device_and_compute_type(ctranslate2_module: Any) -> tuple[str, str]:
-    """Choose a precision supported by the installed CTranslate2 backend."""
-    device = "cuda" if ctranslate2_module.get_cuda_device_count() > 0 else "cpu"
+def whisper_compute_type_for_device(ctranslate2_module: Any, device: str) -> str:
+    """Choose a precision supported by one CTranslate2 device backend."""
     try:
         supported = set(ctranslate2_module.get_supported_compute_types(device))
-    except (AttributeError, RuntimeError, ValueError):
+    except (AttributeError, OSError, RuntimeError, ValueError):
         supported = set()
     preference = ("float16", "int8_float16", "int8_float32", "int8", "float32") if device == "cuda" else ("int8", "int8_float32", "float32")
     compute_type = next((candidate for candidate in preference if candidate in supported), None)
     if compute_type is None:
         compute_type = "float32" if device == "cuda" else "int8"
-    return device, compute_type
+    return compute_type
+
+
+def whisper_device_and_compute_type(ctranslate2_module: Any) -> tuple[str, str]:
+    """Choose a device and precision supported by the installed backend."""
+    try:
+        device = "cuda" if ctranslate2_module.get_cuda_device_count() > 0 else "cpu"
+    except (AttributeError, OSError, RuntimeError, ValueError):
+        device = "cpu"
+    return device, whisper_compute_type_for_device(ctranslate2_module, device)
+
+
+def is_cuda_runtime_load_error(error: Exception) -> bool:
+    """Recognize missing/incompatible NVIDIA runtime libraries on Windows/Linux."""
+    message = str(error).lower()
+    return any(marker in message for marker in (
+        "cublas",
+        "cudnn",
+        "cudart",
+        "cuda driver",
+        "cuda runtime",
+        "nvcuda.dll",
+    ))
 
 
 def transcribe_words(request: dict[str, Any]) -> dict[str, Any]:
@@ -544,9 +565,9 @@ def transcribe_words(request: dict[str, Any]) -> dict[str, Any]:
     cache_root = Path(os.environ.get("MLSM_WHISPER_CACHE", str(Path.home() / ".cache" / "mlsm-studio" / "faster-whisper"))).expanduser()
     cache_root.mkdir(parents=True, exist_ok=True)
     device, compute_type = whisper_device_and_compute_type(ctranslate2)
-    progress(.08, f"Caricamento/download automatico Whisper {model_names[model_id].capitalize()} · {device.upper()}")
-    try:
-        model = WhisperModel(model_names[model_id], device=device, compute_type=compute_type, download_root=str(cache_root))
+    def run_whisper(selected_device: str, selected_compute_type: str) -> tuple[Any, list[dict[str, Any]], list[dict[str, Any]], list[str]]:
+        progress(.08, f"Caricamento/download automatico Whisper {model_names[model_id].capitalize()} · {selected_device.upper()} · {selected_compute_type}")
+        model = WhisperModel(model_names[model_id], device=selected_device, compute_type=selected_compute_type, download_root=str(cache_root))
         segments, info = model.transcribe(
             str(source),
             language=language,
@@ -570,6 +591,17 @@ def transcribe_words(request: dict[str, Any]) -> dict[str, Any]:
                 if text and all(math.isfinite(value) for value in (start, end, probability)) and 0 <= start < end <= duration_seconds + .1:
                     words_result.append({"text": text, "start": round(start, 4), "end": round(min(duration_seconds, end), 4), "confidence": round(max(0.0, min(1.0, probability)), 4)})
             progress(.15 + .8 * min(1.0, float(segment.end) / max(.001, duration_seconds)), "Whisper Medium · timestamp parola per parola")
+        return info, words_result, phrases, texts
+
+    try:
+        try:
+            info, words_result, phrases, texts = run_whisper(device, compute_type)
+        except Exception as error:
+            if device != "cuda" or not is_cuda_runtime_load_error(error):
+                raise
+            cpu_compute_type = whisper_compute_type_for_device(ctranslate2, "cpu")
+            progress(.08, f"Runtime NVIDIA non disponibile · fallback automatico CPU · {cpu_compute_type}")
+            info, words_result, phrases, texts = run_whisper("cpu", cpu_compute_type)
     except WorkerError:
         raise
     except Exception as error:

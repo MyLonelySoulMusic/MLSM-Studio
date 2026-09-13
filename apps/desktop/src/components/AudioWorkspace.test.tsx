@@ -58,9 +58,66 @@ describe("AudioWorkspace", () => {
     const reviewer = await screen.findByRole("combobox", { name: "Modello di revisione testo / SRT" });
     expect(reviewer).toHaveValue("openai");
     expect(screen.getByRole("option", { name: "OpenAI · gpt-5.6-terra" })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Attiva revisione LLM" })).not.toBeChecked();
+    expect(reviewer).toBeDisabled();
+    fireEvent.change(screen.getByRole("textbox", { name: "Testo originale · opzionale" }), { target: { value: "ciao mondo" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Attiva revisione LLM" }));
+    expect(reviewer).not.toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Trascrivi" }));
 
-    await waitFor(() => expect(audioMocks.correctAudioTranscript).toHaveBeenCalledWith(document, "", expect.any(Function), expect.objectContaining({ reviewer: "openai", signal: expect.any(AbortSignal) })));
+    await waitFor(() => {
+      expect(audioMocks.correctAudioTranscript).toHaveBeenCalledWith(
+        document,
+        "ciao mondo",
+        expect.any(Function),
+        expect.objectContaining({ reviewer: "openai", signal: expect.any(AbortSignal) }),
+      );
+    });
+  });
+
+  it("non avvia la review LLM di default né con testo vuoto", async () => {
+    const document = {
+      schemaVersion: 1 as const, engine: "Whisper", model: "whisper-medium_timestamped" as const, durationSeconds: 2,
+      transcript: "ciao mondo", words: [{ text: "ciao", start: 0, end: .8, confidence: .9 }],
+      phrases: [{ text: "ciao mondo", start: 0, end: 2, confidence: .9 }],
+    };
+    const media = { name: "voce.wav", path: "/tmp/voce.wav", url: "blob:voce", durationSeconds: 2, imported: { metadata: { durationSeconds: 2 }, waveform: [], url: "data:audio/wav;base64," } };
+    audioMocks.selectAudioToolMedia.mockResolvedValue(media);
+    audioMocks.transcribeAudioMedia.mockResolvedValue(document);
+    render(<AudioWorkspace />);
+
+    fireEvent.click(screen.getByRole("button", { name: "＋" }));
+    await screen.findByRole("button", { name: /Sostituisci file voce\.wav/ });
+    const reviewToggle = screen.getByRole("checkbox", { name: "Attiva revisione LLM" });
+    expect(reviewToggle).not.toBeChecked();
+    expect(reviewToggle).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Trascrivi" }));
+
+    await waitFor(() => expect(audioMocks.transcribeAudioMedia).toHaveBeenCalled());
+    expect(audioMocks.correctAudioTranscript).not.toHaveBeenCalled();
+  });
+
+  it("disattiva la review se il testo viene cancellato o contiene solo spazi", async () => {
+    const document = {
+      schemaVersion: 1 as const, engine: "Whisper", model: "whisper-medium_timestamped" as const, durationSeconds: 2,
+      transcript: "ciao mondo", words: [{ text: "ciao", start: 0, end: .8, confidence: .9 }],
+      phrases: [{ text: "ciao mondo", start: 0, end: 2, confidence: .9 }],
+    };
+    const media = { name: "voce.wav", path: "/tmp/voce.wav", url: "blob:voce", durationSeconds: 2, imported: { metadata: { durationSeconds: 2 }, waveform: [], url: "data:audio/wav;base64," } };
+    audioMocks.selectAudioToolMedia.mockResolvedValue(media);
+    audioMocks.transcribeAudioMedia.mockResolvedValue(document);
+    render(<AudioWorkspace />);
+
+    fireEvent.click(screen.getByRole("button", { name: "＋" }));
+    await screen.findByRole("button", { name: /Sostituisci file voce\.wav/ });
+    const reference = screen.getByRole("textbox", { name: "Testo originale · opzionale" });
+    const reviewToggle = screen.getByRole("checkbox", { name: "Attiva revisione LLM" });
+    fireEvent.change(reference, { target: { value: "ciao mondo" } });
+    fireEvent.click(reviewToggle);
+    expect(reviewToggle).toBeChecked();
+    fireEvent.change(reference, { target: { value: "   \n\t" } });
+    expect(reviewToggle).not.toBeChecked();
+    expect(reviewToggle).toBeDisabled();
   });
 
   it("mostra un errore Whisper float16 comprensibile su Windows", async () => {
@@ -72,5 +129,16 @@ describe("AudioWorkspace", () => {
     await screen.findByRole("button", { name: /Sostituisci file voce\.wav/ });
     fireEvent.click(screen.getByRole("button", { name: "Trascrivi" }));
     expect(await screen.findByText(/Questo dispositivo non può eseguire Whisper.*precisione compatibile/)).toBeInTheDocument();
+  });
+
+  it("non mostra il messaggio tecnico ibrido quando manca cuBLAS su Windows", async () => {
+    const media = { name: "voce.wav", path: "C:\\Audio\\voce.wav", url: "blob:voce", durationSeconds: 2, imported: { metadata: { durationSeconds: 2 }, waveform: [], url: "data:audio/wav;base64," } };
+    audioMocks.selectAudioToolMedia.mockResolvedValue(media);
+    audioMocks.transcribeAudioMedia.mockRejectedValue(new Error("Library cublas64_12.dll is not found or cannot be loaded"));
+    render(<AudioWorkspace />);
+    fireEvent.click(screen.getByRole("button", { name: "＋" }));
+    await screen.findByRole("button", { name: /Sostituisci file voce\.wav/ });
+    fireEvent.click(screen.getByRole("button", { name: "Trascrivi" }));
+    expect(await screen.findByText(/runtime NVIDIA CUDA.*fallback automatico su CPU/)).toBeInTheDocument();
   });
 });
