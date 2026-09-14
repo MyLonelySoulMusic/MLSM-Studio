@@ -55,7 +55,7 @@ describe("ReportsWorkspace", () => {
     expect(screen.getByRole("heading", { name: /Una storia da raccontare/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Carica il tuo primo file" })).toBeInTheDocument();
     expect(screen.getByRole("complementary", { name: "Origini e campi" })).toHaveTextContent("Carica un file per esplorare dimensioni e misure.");
-    expect(screen.getByRole("complementary", { name: "Widget e proprietà" })).toHaveTextContent("10 tipi");
+    expect(screen.getByRole("complementary", { name: "Widget e proprietà" })).toHaveTextContent("11 tipi");
     expect(screen.getByRole("button", { name: /Le mie dashboard/ })).toHaveTextContent("0");
     expect(onHome).not.toHaveBeenCalled();
   });
@@ -73,16 +73,92 @@ describe("ReportsWorkspace", () => {
     expect(screen.getByText("Modifiche da salvare")).toBeInTheDocument();
   });
 
+  it("configura come opt-in i dettagli KPI e personalizza separatamente le tacche X e Y", async () => {
+    await renderReports();
+    fireEvent.click(screen.getByRole("button", { name: /Esplora un esempio/ }));
+
+    fireEvent.click(screen.getByRole("article", { name: "Widget Visualizzazioni totali" }));
+    const aggregationDetail = screen.getByRole("checkbox", { name: /Mostra aggregazione e misura/ });
+    const sourceDetail = screen.getByRole("checkbox", { name: /Mostra righe e origine dati/ });
+    expect(aggregationDetail).not.toBeChecked();
+    expect(sourceDetail).not.toBeChecked();
+    fireEvent.click(aggregationDetail);
+    fireEvent.click(sourceDetail);
+
+    fireEvent.click(screen.getByRole("article", { name: "Widget Un pubblico in crescita" }));
+    fireEvent.click(screen.getByText("ASSI E TACCHE"));
+    fireEvent.change(screen.getByLabelText("Etichetta asse X"), { target: { value: "Periodo editoriale" } });
+    fireEvent.change(screen.getByLabelText("Etichetta asse Y"), { target: { value: "Stream totali" } });
+    fireEvent.change(screen.getByLabelText("Numero massimo tacche X"), { target: { value: "7" } });
+    fireEvent.change(screen.getByLabelText("Numero massimo tacche Y"), { target: { value: "5" } });
+    fireEvent.change(screen.getByLabelText("Minimo asse Y"), { target: { value: "100" } });
+    fireEvent.change(screen.getByLabelText("Massimo asse Y"), { target: { value: "100000" } });
+    fireEvent.click(screen.getAllByRole("checkbox", { name: "Mostra etichette delle tacche" })[0]!);
+
+    fireEvent.click(screen.getByRole("button", { name: "Salva dashboard" }));
+    await waitFor(() => expect(reportMocks.saveDashboard).toHaveBeenCalledOnce());
+    const saved = reportMocks.saveDashboard.mock.calls[0]![0];
+    expect(saved.widgets.find((widget: { title: string }) => widget.title === "Visualizzazioni totali")).toMatchObject({ showKpiLabel: true, showKpiMeta: true });
+    expect(saved.widgets.find((widget: { title: string }) => widget.title === "Un pubblico in crescita")).toMatchObject({ xAxisLabel: "Periodo editoriale", yAxisLabel: "Stream totali", showXTicks: false, showYTicks: true, xTickCount: 7, yTickCount: 5, yAxisMin: 100, yAxisMax: 100000 });
+  });
+
+  it("creates an aggregate calculated field and exposes it in fields, preview and saved JSON", async () => {
+    await renderReports();
+    fireEvent.click(screen.getByRole("button", { name: /Esplora un esempio/ }));
+
+    expect(screen.getByRole("button", { name: "Impostazioni Reports" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Crea campo calcolato/ }));
+    const dialog = screen.getByRole("dialog", { name: "Crea un campo calcolato" });
+    fireEvent.change(within(dialog).getByLabelText("Nome campo"), { target: { value: "Ricavo per vista" } });
+    fireEvent.change(within(dialog).getByLabelText("Formula"), { target: { value: "SUM([Ricavi]) / SUM([Visualizzazioni])" } });
+    expect(dialog).toHaveTextContent("Formula aggregata");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Crea campo" }));
+
+    expect(screen.getByRole("button", { name: /Ricavo per vista Aggregato/ })).toHaveTextContent("ƒx");
+    fireEvent.click(screen.getByRole("button", { name: /Anteprima dati/ }));
+    expect(screen.getByRole("columnheader", { name: /Ricavo per vista MLSM Formula/ })).toHaveClass("is-calculated");
+    fireEvent.click(screen.getByRole("button", { name: "Salva dashboard" }));
+    await waitFor(() => expect(reportMocks.saveDashboard).toHaveBeenCalledOnce());
+    expect(reportMocks.saveDashboard.mock.calls[0]![0].datasets[0].fields.at(-1)).toMatchObject({ name: "Ricavo per vista", calculated: { formula: "SUM([Ricavi]) / SUM([Visualizzazioni])" } });
+  });
+
+  it("sostituisce il file mantenendo dataset e riferimenti dei widget anche con colonne riordinate", async () => {
+    await renderReports();
+    fireEvent.click(screen.getByRole("button", { name: /Esplora un esempio/ }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Sostituisci origine Performance dei canali" }));
+    const replacement = new File([
+      "Ricavi,Canale,Mese,Visualizzazioni,Regione\n2200,Instagram,2026-07-01,88000,Europa\n1750,YouTube,2026-07-01,64000,Europa",
+    ], "aggiornato.csv", { type: "text/csv" });
+    fireEvent.change(screen.getByLabelText("Scegli file dati sostitutivo"), { target: { files: [replacement] } });
+
+    await waitFor(() => expect(screen.getByText(/Origine sostituita/)).toBeInTheDocument());
+    expect(screen.getByText("aggiornato")).toBeInTheDocument();
+    expect(screen.getByText("2 righe · 6 campi")).toBeInTheDocument();
+    expect(screen.getAllByTestId("report-widget-preview")).toHaveLength(5);
+
+    fireEvent.click(screen.getByRole("button", { name: "Salva dashboard" }));
+    await waitFor(() => expect(reportMocks.saveDashboard).toHaveBeenCalledOnce());
+    const savedDashboard = reportMocks.saveDashboard.mock.calls[0]![0];
+    const dataset = savedDashboard.datasets[0]!;
+    expect(dataset.sourceName).toBe("aggiornato.csv");
+    expect(dataset.fields.find((field: { name: string }) => field.name === "Ricavi")?.id).toBe("field-5");
+    expect(dataset.fields.find((field: { name: string }) => field.name === "Mese")?.id).toBe("field-1");
+    expect(dataset.fields.find((field: { name: string }) => field.name === "Interazioni")?.id).toBe("field-4");
+    expect(dataset.rows.every((row: Record<string, unknown>) => row["field-4"] === null)).toBe(true);
+    expect(savedDashboard.widgets.every((widget: { datasetId: string }) => widget.datasetId === dataset.id)).toBe(true);
+  });
+
   it("aggiunge un widget alla dashboard e lo seleziona nell'inspector", async () => {
     await renderReports();
     fireEvent.click(screen.getByRole("button", { name: /Esplora un esempio/ }));
 
     const inspector = screen.getByRole("complementary", { name: "Widget e proprietà" });
-    fireEvent.click(within(inspector).getByRole("button", { name: "Barre" }));
+    fireEvent.click(within(inspector).getByRole("button", { name: "Barre orizzontali" }));
 
     expect(screen.getAllByText(/6 widget/).length).toBeGreaterThan(0);
     expect(screen.getAllByTestId("report-widget-preview")).toHaveLength(6);
-    expect(screen.getByLabelText("Titolo")).toHaveValue("Barre");
+    expect(screen.getByLabelText("Titolo")).toHaveValue("Barre orizzontali");
   });
 
   it("apre la scelta dei widget dal pulsante Aggiungi widget e crea una pivot", async () => {
@@ -253,6 +329,37 @@ describe("ReportsWorkspace", () => {
     expect(screen.getByText(/Sequenza temporale protetta/)).toBeInTheDocument();
   });
 
+  it("permette di mostrare tutte, le prime N o le ultime N categorie", async () => {
+    await renderReports();
+    fireEvent.click(screen.getByRole("button", { name: /Esplora un esempio/ }));
+    fireEvent.click(screen.getByRole("article", { name: "Widget Ricavi per canale" }));
+
+    const categoryMode = screen.getByLabelText("Mostra categorie");
+    expect(categoryMode).toHaveValue("all");
+    fireEvent.change(categoryMode, { target: { value: "last" } });
+    expect(categoryMode).toHaveValue("last");
+    const count = screen.getByLabelText("Numero di categorie");
+    expect(count).toHaveValue(12);
+    fireEvent.change(count, { target: { value: "2" } });
+    expect(count).toHaveValue(2);
+    fireEvent.change(categoryMode, { target: { value: "first" } });
+    expect(categoryMode).toHaveValue("first");
+    fireEvent.change(categoryMode, { target: { value: "all" } });
+    expect(screen.queryByLabelText("Numero di categorie")).not.toBeInTheDocument();
+  });
+
+  it("adds a dedicated vertical bar widget", async () => {
+    await renderReports();
+    fireEvent.click(screen.getByRole("button", { name: /Esplora un esempio/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Aggiungi widget" }));
+    const chooser = screen.getByRole("dialog", { name: "Scegli un widget" });
+
+    fireEvent.click(within(chooser).getByRole("button", { name: /Barre verticali/ }));
+
+    expect(screen.getByLabelText("Tipo widget")).toHaveValue("column");
+    expect(screen.getByLabelText("Titolo")).toHaveValue("Barre verticali");
+  });
+
   it("configura e visualizza un'animazione Time Series professionale su un KPI", async () => {
     await renderReports();
     fireEvent.click(screen.getByRole("button", { name: /Esplora un esempio/ }));
@@ -278,6 +385,36 @@ describe("ReportsWorkspace", () => {
     expect(dialog).toHaveTextContent("MASSIMO");
     fireEvent.click(within(dialog).getByRole("button", { name: "Chiudi animazione" }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Visualizzazioni totali" })).not.toBeInTheDocument());
+  });
+
+  it("configura una Corsa delle barre fluida con dati di periodo o cumulativi", async () => {
+    await renderReports();
+    fireEvent.click(screen.getByRole("button", { name: /Esplora un esempio/ }));
+    fireEvent.click(screen.getByRole("article", { name: "Widget Visualizzazioni totali" }));
+
+    fireEvent.click(screen.getByText("AGGIUNGI ANIMAZIONE"));
+    fireEvent.click(screen.getByRole("button", { name: /Corsa delle barre/ }));
+    expect(screen.getByLabelText("Animazione widget")).toHaveValue("barRace");
+    expect(screen.getByLabelText("Gruppo corsa delle barre")).toHaveValue("field-2");
+    fireEvent.change(screen.getByLabelText("Aggregazione corsa delle barre"), { target: { value: "avg" } });
+    fireEvent.change(screen.getByLabelText("Raggruppamento data corsa delle barre"), { target: { value: "week" } });
+    fireEvent.change(screen.getByLabelText("Valore corsa delle barre"), { target: { value: "cumulative" } });
+    fireEvent.change(screen.getByLabelText("Orientamento corsa delle barre"), { target: { value: "vertical" } });
+    fireEvent.change(screen.getByLabelText("Ordinamento corsa delle barre"), { target: { value: "asc" } });
+    fireEvent.change(screen.getByLabelText("Secondi per step corsa delle barre"), { target: { value: "2.4" } });
+
+    expect(screen.getByLabelText("Secondi per step corsa delle barre")).toHaveValue(2.4);
+    const widget = screen.getByRole("article", { name: "Widget Visualizzazioni totali" });
+    expect(within(widget).getByText("Bar Chart Race")).toBeInTheDocument();
+    fireEvent.click(within(widget).getByRole("button", { name: "Riproduci animazione Visualizzazioni totali" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Visualizzazioni totali" });
+    expect(dialog).toHaveTextContent("CORSA DELLE BARRE");
+    expect(dialog).toHaveTextContent("Cumulativo");
+    expect(dialog).toHaveTextContent("2,4s / step");
+    const progress = within(dialog).getByLabelText(/Avanzamento/);
+    expect(dialog.querySelector(".rpt-bar-race-stage")).not.toContainElement(progress);
+    expect(progress.parentElement).toHaveClass("rpt-bar-race-viewport");
   });
 
   it("lets a selected row override widget widths with a custom column count", async () => {

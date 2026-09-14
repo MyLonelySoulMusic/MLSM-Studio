@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildPivotTable } from "./pivot";
 import type { ReportDataset } from "./types";
+import { createCalculatedField } from "./calculated-fields";
 
 const dataset: ReportDataset = {
   id: "sales",
@@ -67,6 +68,20 @@ describe("report pivot", () => {
     expect(count.rowTotals).toEqual([3, 2]);
     expect(count.columnTotals).toEqual([3, 2]);
     expect(count.grandTotal).toBe(5);
+  });
+
+  it("evaluates an aggregate calculated measure independently for every pivot cell and total", () => {
+    const withUnits: ReportDataset = {
+      ...dataset,
+      fields: [...dataset.fields, { id: "units", name: "Unità", type: "number" }],
+      rows: dataset.rows.map((row, index) => ({ ...row, units: [2, 3, 10, 8, 1][index]! })),
+    };
+    const calculated = createCalculatedField(withUnits, { id: "rate", name: "Ricavo unitario", formula: "SUM([Ricavi]) / SUM([Unità])" });
+    const result = buildPivotTable({ dataset: calculated, filters: [], rowFieldId: "region", columnFieldId: "channel", measureFieldId: "rate", aggregation: "sum" });
+
+    expect(result.cells[0]?.[0]).toBe(6);
+    expect(result.rowTotals[0]).toBeCloseTo(130 / 15);
+    expect(result.grandTotal).toBeCloseTo(170 / 24);
   });
 
   it("applies the existing exact filters before creating cells", () => {

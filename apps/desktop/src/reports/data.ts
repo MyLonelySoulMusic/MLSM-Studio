@@ -1,6 +1,7 @@
 import Papa from "papaparse";
-import { createDashboard, createWidget, reportId, type CellValue, type FieldType, type ReportDashboard, type ReportDataset } from "./types";
+import { createDashboard, createWidget, reportId, type CellValue, type FieldType, type ReportDashboard, type ReportDataset, type ReportField } from "./types";
 import type { UiLanguage } from "../services/ui-preferences";
+import { materializeCalculatedFields } from "./calculated-fields";
 
 export const REPORT_LIMITS = {
   fileBytes: 20 * 1024 * 1024,
@@ -148,6 +149,81 @@ export async function importReportFile(file: File): Promise<ReportDataset[]> {
   }
   if (!datasets.length) fail("Il file Excel non contiene fogli con dati.");
   return datasets;
+}
+
+function normalizedFieldName(value: string): string {
+  return value.normalize("NFKC").trim().toLocaleLowerCase().replace(/\s+/g, " ");
+}
+
+export interface DatasetReplacementResult {
+  dataset: ReportDataset;
+  matchedFields: number;
+  addedFields: number;
+  preservedMissingFields: number;
+}
+
+/**
+ * Reuses the previous field IDs whenever headers match. Dashboard widgets,
+ * filters and animations therefore keep pointing to the same logical columns
+ * even when the replacement file changes their physical order.
+ */
+export function reconcileReplacementDataset(
+  previous: ReportDataset,
+  incoming: ReportDataset,
+  protectedFieldIds: Iterable<string> = previous.fields.map(field => field.id),
+): DatasetReplacementResult {
+  const previousByName = new Map<string, ReportField[]>();
+  for (const field of previous.fields.filter(field => !field.calculated)) {
+    const key = normalizedFieldName(field.name);
+    previousByName.set(key, [...(previousByName.get(key) ?? []), field]);
+  }
+
+  const usedPreviousIds = new Set<string>();
+  const reservedIds = new Set(previous.fields.map(field => field.id));
+  const usedIds = new Set<string>();
+  let nextFieldNumber = 1;
+  const nextFieldId = () => {
+    while (reservedIds.has(`field-${nextFieldNumber}`) || usedIds.has(`field-${nextFieldNumber}`)) nextFieldNumber += 1;
+    const id = `field-${nextFieldNumber}`;
+    nextFieldNumber += 1;
+    return id;
+  };
+
+  const remapped = incoming.fields.map(field => {
+    const candidates = previousByName.get(normalizedFieldName(field.name)) ?? [];
+    const match = candidates.find(candidate => !usedPreviousIds.has(candidate.id) && candidate.type === field.type)
+      ?? candidates.find(candidate => !usedPreviousIds.has(candidate.id));
+    const id = match?.id ?? nextFieldId();
+    if (match) usedPreviousIds.add(match.id);
+    usedIds.add(id);
+    return { incomingId: field.id, field: { ...field, id }, matched: Boolean(match) };
+  });
+
+  const protectedIds = new Set(protectedFieldIds);
+  const missing = previous.fields.filter(field => !field.calculated && protectedIds.has(field.id) && !usedPreviousIds.has(field.id));
+  const calculated = previous.fields.filter(field => field.calculated);
+  if (remapped.length + missing.length + calculated.length > REPORT_LIMITS.fields) {
+    fail(`La sostituzione richiede ${remapped.length + missing.length + calculated.length} campi per mantenere i collegamenti della dashboard, oltre il limite di ${REPORT_LIMITS.fields}. Rimuovi alcune colonne dal nuovo file.`);
+  }
+
+  const fields = [...remapped.map(item => item.field), ...missing, ...calculated];
+  const rows = incoming.rows.map(source => Object.fromEntries([
+    ...remapped.map(item => [item.field.id, source[item.incomingId] ?? null]),
+    ...missing.map(field => [field.id, null]),
+    ...calculated.map(field => [field.id, null]),
+  ]));
+  return {
+    dataset: materializeCalculatedFields({ ...incoming, id: previous.id, fields, rows }),
+    matchedFields: remapped.filter(item => item.matched).length,
+    addedFields: remapped.filter(item => !item.matched).length,
+    preservedMissingFields: missing.length,
+  };
+}
+
+export function selectReplacementDataset(previous: ReportDataset, candidates: ReportDataset[]): ReportDataset {
+  if (!candidates.length) fail("Il file sostitutivo non contiene origini dati valide.");
+  if (candidates.length === 1) return candidates[0]!;
+  return candidates.find(candidate => normalizedFieldName(candidate.name) === normalizedFieldName(previous.name)) ?? candidates[0]!;
 }
 
 export function createDemoDashboard(language: UiLanguage = "it"): ReportDashboard {

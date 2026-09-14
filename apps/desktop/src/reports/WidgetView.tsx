@@ -39,12 +39,15 @@ function ChartView({ widget, dataset, theme, data, language }: Omit<WidgetViewPr
   const measureName = widget.aggregation === "count" && widget.type !== "scatter" ? (language === "en" ? "Rows" : "Righe") : dataset?.fields.find(field => field.id === widget.measure)?.name ?? (language === "en" ? "Value" : "Valore");
   const valueLabel = widget.type === "scatter" ? measureName : `${AGGREGATION_LABELS_BY_LANGUAGE[language][widget.aggregation]} · ${measureName}`;
   const scatter = widget.type === "scatter";
+  const horizontalBar = widget.type === "bar";
+  const xAxisTitle = widget.xAxisLabel.trim() || (horizontalBar ? valueLabel : dimensionName);
+  const yAxisTitle = widget.yAxisLabel.trim() || (horizontalBar ? dimensionName : measureName);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const doughnut = widget.type === "doughnut";
-    const type: SupportedChart = widget.type === "area" ? "line" : widget.type === "bar" || widget.type === "line" || widget.type === "doughnut" || widget.type === "scatter" ? widget.type : "bar";
+    const type: SupportedChart = widget.type === "area" ? "line" : widget.type === "bar" || widget.type === "column" ? "bar" : widget.type === "line" || widget.type === "doughnut" || widget.type === "scatter" ? widget.type : "bar";
     const configuration: ChartConfiguration<SupportedChart> = {
       type,
       data: {
@@ -67,6 +70,7 @@ function ChartView({ widget, dataset, theme, data, language }: Omit<WidgetViewPr
         responsive: true,
         maintainAspectRatio: false,
         animation: false,
+        ...(type === "bar" ? { indexAxis: widget.type === "bar" ? "y" as const : "x" as const } : {}),
         color: theme.ink,
         font: { family: "Inter, system-ui, sans-serif", size: 11 },
         plugins: {
@@ -91,18 +95,28 @@ function ChartView({ widget, dataset, theme, data, language }: Omit<WidgetViewPr
         ...(doughnut ? { cutout: "66%" } : {
           scales: {
             x: {
-              type: scatter ? "linear" : "category",
-              grid: { display: false },
+              type: scatter || horizontalBar ? "linear" : "category",
+              beginAtZero: horizontalBar,
+              ...(scatter || horizontalBar ? {
+                ...(widget.xAxisMin !== null ? { min: widget.xAxisMin } : {}),
+                ...(widget.xAxisMax !== null ? { max: widget.xAxisMax } : {}),
+              } : {}),
+              grid: { display: horizontalBar },
               border: { display: false },
-              ticks: { color: withAlpha(theme.ink, "b3"), maxRotation: 40, autoSkip: true, maxTicksLimit: 14 },
-              title: { display: scatter, text: dimensionName, color: theme.ink },
+              ticks: { display: widget.showXTicks, color: withAlpha(theme.ink, "b3"), maxRotation: 40, autoSkip: true, maxTicksLimit: widget.xTickCount ?? 14, ...(horizontalBar ? { callback: (value: string | number) => formatWidgetNumber(Number(value), widget, language) } : {}) },
+              title: { display: true, text: xAxisTitle, color: theme.ink },
             },
             y: {
-              beginAtZero: !scatter,
-              grid: { color: withAlpha(theme.ink, "10") },
+              type: horizontalBar ? "category" : "linear",
+              beginAtZero: !scatter && !horizontalBar,
+              ...(!horizontalBar ? {
+                ...(widget.yAxisMin !== null ? { min: widget.yAxisMin } : {}),
+                ...(widget.yAxisMax !== null ? { max: widget.yAxisMax } : {}),
+              } : {}),
+              grid: horizontalBar ? { display: false } : { color: withAlpha(theme.ink, "10") },
               border: { display: false },
-              ticks: { color: withAlpha(theme.ink, "b3"), maxTicksLimit: 6, callback: value => formatWidgetNumber(Number(value), widget, language) },
-              title: { display: scatter, text: measureName, color: theme.ink },
+              ticks: { display: widget.showYTicks, color: withAlpha(theme.ink, "b3"), maxTicksLimit: widget.yTickCount ?? (horizontalBar ? 20 : 6), ...(!horizontalBar ? { callback: (value: string | number) => formatWidgetNumber(Number(value), widget, language) } : {}) },
+              title: { display: true, text: yAxisTitle, color: theme.ink },
             },
           },
         }),
@@ -110,12 +124,12 @@ function ChartView({ widget, dataset, theme, data, language }: Omit<WidgetViewPr
     };
     const chart = new Chart(canvas, configuration);
     return () => chart.destroy();
-  }, [color, data, dimensionName, language, measureName, scatter, theme.ink, theme.paper, valueLabel, widget]);
+  }, [color, data, dimensionName, horizontalBar, language, measureName, scatter, theme.ink, theme.paper, valueLabel, widget, xAxisTitle, yAxisTitle]);
 
   const count = scatter ? data.scatter.length : data.points.length;
   return <>
     <div className="rpt-chart-shell">
-      <canvas ref={canvasRef} role="img" aria-label={`${widget.title}. ${dimensionName}, ${valueLabel}. ${count} ${scatter ? "punti" : "categorie"}. Valori disponibili in Mostra dati del grafico.`} />
+      <canvas ref={canvasRef} role="img" aria-label={`${widget.title}. Asse X: ${xAxisTitle}. Asse Y: ${yAxisTitle}. ${count} ${scatter ? "punti" : "categorie"}. Valori disponibili in Mostra dati del grafico.`} />
     </div>
     {data.excludedRows > 0 && <p className="rpt-widget-note">{data.excludedRows.toLocaleString(language === "en" ? "en-GB" : "it-IT")} righe senza valori numerici escluse.</p>}
     <details className="rpt-chart-data">
@@ -194,10 +208,10 @@ export function WidgetView({ widget, dataset, theme, filters }: WidgetViewProps)
   if (widget.type === "kpi") {
     const measureName = dataset?.fields.find(field => field.id === widget.measure)?.name;
     return <div className="rpt-widget-content rpt-kpi">
-      <span className="rpt-kpi-label">{widget.aggregation === "count" ? AGGREGATION_LABELS_BY_LANGUAGE[language].count : `${AGGREGATION_LABELS_BY_LANGUAGE[language][widget.aggregation]} · ${measureName ?? (language === "en" ? "Measure" : "Misura")}`}</span>
+      {widget.showKpiLabel && <span className="rpt-kpi-label">{widget.aggregation === "count" ? AGGREGATION_LABELS_BY_LANGUAGE[language].count : `${AGGREGATION_LABELS_BY_LANGUAGE[language][widget.aggregation]} · ${measureName ?? (language === "en" ? "Measure" : "Misura")}`}</span>}
       <strong className="rpt-kpi-value" style={{ color: widget.color || theme.accent }}>{data.value === null ? "—" : formatWidgetNumber(data.value, widget, language)}</strong>
-      <span className="rpt-kpi-meta">{data.rowCount.toLocaleString(language === "en" ? "en-GB" : "it-IT")} righe · {dataset?.name}</span>
-      {data.excludedRows > 0 && <span className="rpt-widget-note">{data.excludedRows.toLocaleString("it-IT")} righe senza valori numerici escluse.</span>}
+      {widget.showKpiMeta && <span className="rpt-kpi-meta">{data.rowCount.toLocaleString(language === "en" ? "en-GB" : "it-IT")} {language === "en" ? "rows" : "righe"} · {dataset?.name}</span>}
+      {data.excludedRows > 0 && <span className="rpt-widget-note">{data.excludedRows.toLocaleString(language === "en" ? "en-GB" : "it-IT")} {language === "en" ? "rows without numeric values excluded." : "righe senza valori numerici escluse."}</span>}
     </div>;
   }
   return <div className="rpt-widget-content rpt-chart-widget"><ChartView widget={widget} dataset={dataset} theme={theme} data={data} language={language} /></div>;

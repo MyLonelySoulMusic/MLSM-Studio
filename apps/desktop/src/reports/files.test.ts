@@ -53,7 +53,7 @@ describe("Reports JSON file export", () => {
     await expect(downloadDashboard(dashboard)).resolves.toBe(true);
     expect(nativeMocks.invoke).toHaveBeenCalledWith("write_project", {
       path: "/tmp/report.mlsm-report.json",
-      content: expect.stringContaining('"schemaVersion": 9'),
+      content: expect.stringContaining('"schemaVersion": 14'),
     });
   });
 

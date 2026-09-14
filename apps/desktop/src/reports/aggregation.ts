@@ -1,6 +1,7 @@
 import type { Aggregation, CellValue, ReportDataset, ReportField, ReportFilter, ReportWidget } from "./types";
 import { bucketTimeValue } from "./time-buckets";
 import type { UiLanguage } from "../services/ui-preferences";
+import { calculatedMeasureValue } from "./calculated-fields";
 
 export interface AggregatePoint { label: string; value: number }
 export interface ScatterPoint { x: number; y: number }
@@ -37,6 +38,7 @@ interface AggregateGroup {
   raw: CellValue | undefined;
   values: (CellValue | undefined)[];
   count: number;
+  rows: ReportDataset["rows"];
   date: number;
   sourceIndex: number;
 }
@@ -127,6 +129,10 @@ export function reduceReportValues(sourceValues: (CellValue | undefined)[], coun
   return Number.isFinite(result) ? result : null;
 }
 
+export function reduceDatasetMeasure(dataset: ReportDataset, fieldId: string, rows: ReportDataset["rows"], aggregation: Aggregation): number | null {
+  return calculatedMeasureValue(dataset, dataset.fields.find(field => field.id === fieldId), rows, aggregation, reduceReportValues);
+}
+
 export function aggregateWidget(widget: ReportWidget, dataset: ReportDataset | undefined, filters: ReportFilter[] = [], language: UiLanguage = "it"): WidgetData {
   const result: WidgetData = { points: [], scatter: [], value: null, rowCount: 0, excludedRows: 0, message: "" };
   if (widget.type === "text") return result;
@@ -165,7 +171,7 @@ export function aggregateWidget(widget: ReportWidget, dataset: ReportDataset | u
   const sourceValues = rows.map(row => row[widget.measure]);
   const usableValues = widget.aggregation === "distinct" ? sourceValues.filter(value => value !== null && value !== undefined && value !== "") : sourceValues.filter(isNumber);
   result.excludedRows = widget.aggregation === "count" ? 0 : rows.length - usableValues.length;
-  result.value = reduceReportValues(sourceValues, rows.length, widget.aggregation);
+  result.value = reduceDatasetMeasure(dataset, widget.measure, rows, widget.aggregation);
   if (widget.type === "kpi") {
     if (result.value === null) result.message = "Nessun valore numerico disponibile per questa misura.";
     return result;
@@ -179,11 +185,12 @@ export function aggregateWidget(widget: ReportWidget, dataset: ReportDataset | u
     const key = timeBucket?.key ?? (cell === null || cell === undefined || cell === "" ? "empty:" : `${typeof cell}:${String(cell)}`);
     let group = groups.get(key);
     if (!group) {
-      group = { label: timeBucket?.label ?? displayCell(cell), raw: cell, values: [], count: 0, date: timeBucket?.sortKey ?? temporalDimensionKey(cell) ?? Number.NaN, sourceIndex };
+      group = { label: timeBucket?.label ?? displayCell(cell), raw: cell, values: [], count: 0, rows: [], date: timeBucket?.sortKey ?? temporalDimensionKey(cell) ?? Number.NaN, sourceIndex };
       groups.set(key, group);
     }
     group.count += 1;
     group.values.push(row[widget.measure]);
+    group.rows.push(row);
   }
   let entries = [...groups.values()];
   const xSort = widget.xSort;
@@ -196,13 +203,16 @@ export function aggregateWidget(widget: ReportWidget, dataset: ReportDataset | u
     entries = entries.sort((left, right) => compareDimensionGroups(left, right, temporalAxis ? "date" : dimension.type, xSort, language));
   }
   result.points = entries.flatMap(group => {
-    const value = reduceReportValues(group.values, group.count, widget.aggregation);
+    const value = reduceDatasetMeasure(dataset, widget.measure, group.rows, widget.aggregation);
     return value === null ? [] : [{ label: group.label, value }];
   });
   if (valueSort !== "source") {
     result.points.sort((a, b) => valueSort === "asc" ? a.value - b.value : b.value - a.value);
   }
-  if (widget.limit !== null) result.points = result.points.slice(0, Math.max(1, Math.floor(widget.limit)));
+  if (widget.limit !== null) {
+    const limit = Math.max(1, Math.floor(widget.limit));
+    result.points = widget.categoryLimitMode === "last" ? result.points.slice(-limit) : result.points.slice(0, limit);
+  }
   if (!result.points.length) result.message = "Nessun valore numerico disponibile per questa misura.";
   if (widget.type === "doughnut" && result.points.some(point => point.value < 0)) {
     result.message = "La ciambella non supporta valori negativi. Usa un grafico a barre o modifica la misura.";

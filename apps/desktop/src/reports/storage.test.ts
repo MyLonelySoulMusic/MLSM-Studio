@@ -3,6 +3,7 @@ import { IDBFactory } from "fake-indexeddb";
 import { createDemoDashboard } from "./data";
 import { deleteDashboard, exportDashboard, importDashboard, listDashboards, saveDashboard, validateDashboard } from "./storage";
 import { DEFAULT_MAP_BACKGROUND } from "./types";
+import { createCalculatedField } from "./calculated-fields";
 
 vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => false, invoke: vi.fn() }));
 
@@ -84,6 +85,9 @@ describe("Reports portable JSON", () => {
     original.widgets[0]!.currency = "USD";
     original.widgets[0]!.decimals = 3;
     original.widgets[0]!.mapBackground = "#E8E8E8";
+    original.widgets[3]!.xAxisLabel = "Periodo personalizzato";
+    original.widgets[3]!.yAxisLabel = "Valore personalizzato";
+    original.datasets[0] = createCalculatedField(original.datasets[0]!, { id: "engagement-rate", name: "Engagement rate", formula: "SUM([Interazioni]) / SUM([Visualizzazioni])" });
     const serialized = exportDashboard(original);
     const imported = importDashboard(serialized);
     expect(imported.id).not.toBe(original.id);
@@ -100,7 +104,7 @@ describe("Reports portable JSON", () => {
     expect(() => importDashboard("{broken")).toThrow(/JSON valido/);
     expect(() => importDashboard("null")).toThrow(/oggetto/);
     const dashboard = createDemoDashboard();
-    expect(() => importDashboard(JSON.stringify({ ...dashboard, schemaVersion: 10 }))).toThrow(/versione non supportata/);
+    expect(() => importDashboard(JSON.stringify({ ...dashboard, schemaVersion: 15 }))).toThrow(/versione non supportata/);
     expect(() => importDashboard(JSON.stringify({ ...dashboard, executable: "alert(1)" }))).toThrow(/struttura/);
   });
 
@@ -126,7 +130,7 @@ describe("Reports portable JSON", () => {
     legacy.widgets.forEach((widget: Record<string, unknown>) => { delete widget.secondaryDimension; delete widget.timeGrain; delete widget.rowId; delete widget.currency; delete widget.decimals; delete widget.xSort; });
     legacy.filters = [{ id: "legacy-filter", datasetId: legacy.datasets[0].id, fieldId: "field-2", value: "Instagram" }];
     const migrated = importDashboard(JSON.stringify(legacy));
-    expect(migrated.schemaVersion).toBe(9);
+    expect(migrated.schemaVersion).toBe(14);
     expect(migrated.widgets.every(widget => widget.timeGrain === "exact" && widget.secondaryDimension === "")).toBe(true);
     expect(migrated.layoutRows).toHaveLength(1);
     expect(migrated.widgets.every(widget => widget.rowId === migrated.layoutRows[0]!.id && widget.currency === "EUR" && widget.decimals === 2 && widget.xSort === "asc")).toBe(true);
@@ -139,7 +143,7 @@ describe("Reports portable JSON", () => {
     delete legacy.layoutRows;
     legacy.widgets.forEach((widget: Record<string, unknown>) => { delete widget.rowId; delete widget.currency; delete widget.decimals; delete widget.xSort; });
     const migrated = importDashboard(JSON.stringify(legacy));
-    expect(migrated.schemaVersion).toBe(9);
+    expect(migrated.schemaVersion).toBe(14);
     expect(migrated.tabs).toEqual([{ id: "tab-main", name: "Pagina 1" }]);
     expect(migrated.layoutRows).toEqual([{ id: "row-main", tabId: "tab-main", columns: null }]);
     expect(migrated.widgets.every(widget => widget.rowId === "row-main" && widget.currency === "EUR" && widget.decimals === 2 && widget.xSort === "asc")).toBe(true);
@@ -150,7 +154,7 @@ describe("Reports portable JSON", () => {
     legacy.schemaVersion = 3;
     legacy.widgets.forEach((widget: Record<string, unknown>) => { delete widget.xSort; });
     const migrated = importDashboard(JSON.stringify(legacy));
-    expect(migrated.schemaVersion).toBe(9);
+    expect(migrated.schemaVersion).toBe(14);
     expect(migrated.widgets.every(widget => widget.xSort === "asc")).toBe(true);
   });
 
@@ -159,7 +163,7 @@ describe("Reports portable JSON", () => {
     legacy.schemaVersion = 4;
     legacy.filters = [{ id: "legacy-filter", datasetId: legacy.datasets[0].id, fieldId: "field-2", value: "Instagram", targetMode: "all", widgetIds: [] }];
     const migrated = importDashboard(JSON.stringify(legacy));
-    expect(migrated.schemaVersion).toBe(9);
+    expect(migrated.schemaVersion).toBe(14);
     expect(migrated.filters[0]).toMatchObject({ value: "Instagram", defaultValue: "Instagram", includeAll: true });
   });
 
@@ -173,7 +177,7 @@ describe("Reports portable JSON", () => {
 
     const migrated = importDashboard(JSON.stringify(legacy));
 
-    expect(migrated.schemaVersion).toBe(9);
+    expect(migrated.schemaVersion).toBe(14);
     expect(migrated.tabs).toEqual([{ id: "tab-main", name: "Pagina 1" }]);
     expect(migrated.layoutRows.every(row => row.tabId === "tab-main")).toBe(true);
     expect(migrated.widgets[0]!.limit).toBeNull();
@@ -187,7 +191,7 @@ describe("Reports portable JSON", () => {
 
     const migrated = importDashboard(JSON.stringify(legacy));
 
-    expect(migrated.schemaVersion).toBe(9);
+    expect(migrated.schemaVersion).toBe(14);
     expect(migrated.widgets.every(widget => widget.mapBackground === DEFAULT_MAP_BACKGROUND)).toBe(true);
   });
 
@@ -198,7 +202,7 @@ describe("Reports portable JSON", () => {
 
     const migrated = importDashboard(JSON.stringify(legacy));
 
-    expect(migrated.schemaVersion).toBe(9);
+    expect(migrated.schemaVersion).toBe(14);
     expect(migrated.widgets.every(widget => widget.animation === null)).toBe(true);
   });
 
@@ -212,8 +216,76 @@ describe("Reports portable JSON", () => {
 
     const migrated = importDashboard(JSON.stringify(legacy));
 
-    expect(migrated.schemaVersion).toBe(9);
+    expect(migrated.schemaVersion).toBe(14);
     expect(migrated.widgets[0]!.animation?.valueMode).toBe("period");
+  });
+
+  it("migrates Reports v9 category limits to the first-N mode", () => {
+    const legacy = JSON.parse(JSON.stringify(createDemoDashboard()));
+    legacy.schemaVersion = 9;
+    legacy.widgets.forEach((widget: Record<string, unknown>) => { delete widget.categoryLimitMode; });
+
+    const migrated = importDashboard(JSON.stringify(legacy));
+
+    expect(migrated.schemaVersion).toBe(14);
+    expect(migrated.widgets.every(widget => widget.categoryLimitMode === "first")).toBe(true);
+  });
+
+  it("migrates Reports v10 to the animation-aware v11 schema", () => {
+    const legacy = JSON.parse(JSON.stringify(createDemoDashboard()));
+    legacy.schemaVersion = 10;
+
+    const migrated = importDashboard(JSON.stringify(legacy));
+
+    expect(migrated.schemaVersion).toBe(14);
+    expect(migrated.widgets.every(widget => widget.animation === null)).toBe(true);
+  });
+
+  it("migrates Reports v12 with hidden KPI details and automatic axis ticks", () => {
+    const legacy = JSON.parse(JSON.stringify(createDemoDashboard()));
+    legacy.schemaVersion = 12;
+    legacy.widgets.forEach((widget: Record<string, unknown>) => {
+      delete widget.showKpiLabel; delete widget.showKpiMeta;
+      delete widget.showXTicks; delete widget.showYTicks; delete widget.xTickCount; delete widget.yTickCount;
+      delete widget.xAxisMin; delete widget.xAxisMax; delete widget.yAxisMin; delete widget.yAxisMax;
+    });
+
+    const migrated = importDashboard(JSON.stringify(legacy));
+
+    expect(migrated.schemaVersion).toBe(14);
+    expect(migrated.widgets.every(widget => !widget.showKpiLabel && !widget.showKpiMeta)).toBe(true);
+    expect(migrated.widgets.every(widget => widget.showXTicks && widget.showYTicks && widget.xTickCount === null && widget.yTickCount === null)).toBe(true);
+    expect(migrated.widgets.every(widget => widget.xAxisMin === null && widget.xAxisMax === null && widget.yAxisMin === null && widget.yAxisMax === null)).toBe(true);
+  });
+
+  it("validates KPI details and Cartesian axis settings", () => {
+    const dashboard = createDemoDashboard();
+    dashboard.widgets[0]!.showKpiLabel = true;
+    dashboard.widgets[0]!.showKpiMeta = true;
+    dashboard.widgets[3]!.xTickCount = 9;
+    dashboard.widgets[3]!.yTickCount = 5;
+    dashboard.widgets[3]!.yAxisMin = 10;
+    dashboard.widgets[3]!.yAxisMax = 100_000;
+    expect(validateDashboard(dashboard).widgets[3]).toMatchObject({ xTickCount: 9, yTickCount: 5, yAxisMin: 10, yAxisMax: 100_000 });
+
+    const invalidTicks = JSON.parse(JSON.stringify(dashboard));
+    invalidTicks.widgets[3].xTickCount = 1;
+    expect(() => validateDashboard(invalidTicks)).toThrow(/tacche X/);
+    const invalidRange = JSON.parse(JSON.stringify(dashboard));
+    invalidRange.widgets[3].yAxisMin = 100;
+    invalidRange.widgets[3].yAxisMax = 10;
+    expect(() => validateDashboard(invalidRange)).toThrow(/minimo dell’asse Y/);
+  });
+
+  it("migrates Reports v13 with automatic editable axis labels", () => {
+    const legacy = JSON.parse(JSON.stringify(createDemoDashboard()));
+    legacy.schemaVersion = 13;
+    legacy.widgets.forEach((widget: Record<string, unknown>) => { delete widget.xAxisLabel; delete widget.yAxisLabel; });
+
+    const migrated = importDashboard(JSON.stringify(legacy));
+
+    expect(migrated.schemaVersion).toBe(14);
+    expect(migrated.widgets.every(widget => widget.xAxisLabel === "" && widget.yAxisLabel === "")).toBe(true);
   });
 
   it("validates Time Series animation configuration and its date axis", () => {
@@ -230,6 +302,22 @@ describe("Reports portable JSON", () => {
     const invalidChart = JSON.parse(JSON.stringify(dashboard));
     invalidChart.widgets[0].animation.chartType = "pie";
     expect(() => validateDashboard(invalidChart)).toThrow(/grafico animazione/);
+  });
+
+  it("validates Bar Chart Race fields, aggregation and step duration", () => {
+    const dashboard = createDemoDashboard();
+    dashboard.widgets[0]!.animation = {
+      type: "barRace", dateDimension: "field-1", groupDimension: "field-2", measure: "field-3",
+      aggregation: "avg", timeGrain: "month", valueMode: "cumulative", orientation: "vertical", sort: "desc", stepDurationMs: 1750,
+    };
+    expect(validateDashboard(dashboard).widgets[0]!.animation).toEqual(dashboard.widgets[0]!.animation);
+
+    const invalidMeasure = JSON.parse(JSON.stringify(dashboard));
+    invalidMeasure.widgets[0].animation.measure = "field-2";
+    expect(() => validateDashboard(invalidMeasure)).toThrow(/misura numerica/);
+    const invalidDuration = JSON.parse(JSON.stringify(dashboard));
+    invalidDuration.widgets[0].animation.stepDurationMs = 50;
+    expect(() => validateDashboard(invalidDuration)).toThrow(/durata di ogni step/);
   });
 
   it("rejects unsafe colors, nonfinite numbers, object cells and inconsistent field types", () => {

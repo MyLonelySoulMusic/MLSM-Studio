@@ -8,7 +8,7 @@ import { filtersForWidget } from "./filter-targets";
 import { ReportIcon } from "./ReportIcon";
 import { AGGREGATION_LABELS_BY_LANGUAGE, type ReportDataset, type ReportFilter, type ReportTheme, type ReportWidget } from "./types";
 import { TIME_GRAIN_LABELS_BY_LANGUAGE } from "./time-buckets";
-import { playbackPointIndex, timeSeriesPlaybackTiming, timeSeriesPoints } from "./time-series-playback";
+import { playbackPointIndex, timeSeriesPlaybackTiming, timeSeriesPoints, timeSeriesRevealProgress } from "./time-series-playback";
 import { useUiPreferences } from "../services/ui-preferences";
 
 Chart.register(BarController, BarElement, CategoryScale, Filler, Legend, LinearScale, LineController, LineElement, PointElement, Tooltip);
@@ -44,7 +44,7 @@ export function TimeSeriesAnimationModal({ widget, dataset, filters, theme, onCl
   const [replayKey, setReplayKey] = useState(0);
   const [playbackIndex, setPlaybackIndex] = useState(-1);
   const [playbackPhase, setPlaybackPhase] = useState<"series" | "trend" | "complete">("series");
-  const animation = widget.animation;
+  const animation = widget.animation?.type === "timeSeries" ? widget.animation : null;
   const color = widget.color || theme.accent;
   const activeFilters = useMemo(() => filtersForWidget(filters, widget.id, widget.datasetId), [filters, widget.datasetId, widget.id]);
   const data = useMemo(() => {
@@ -112,10 +112,13 @@ export function TimeSeriesAnimationModal({ widget, dataset, filters, theme, onCl
     // remains testable without pretending to render pixels.
     if (typeof navigator !== "undefined" && /jsdom/i.test(navigator.userAgent)) return;
     const line = animation.chartType !== "bar";
-    const trendStep = values.length > 1 ? timing.trendDuration / (values.length - 1) : 0;
+    const trendStep = values.length ? timing.trendDuration / values.length : 0;
     const animationDelay = (datasetIndex: number, dataIndex: number) => datasetIndex === 0
       ? timing.startDelay + (dataIndex * timing.stepDelay)
-      : dataIndex * trendStep;
+      : timing.trendStart + (dataIndex * trendStep);
+    const animationDuration = (datasetIndex: number) => datasetIndex === 0
+      ? timing.pointDuration
+      : Math.max(1, trendStep);
     const primary: ChartDataset<"line" | "bar", number[]> = {
       type: line ? "line" : "bar",
       label: `${AGGREGATION_LABELS_BY_LANGUAGE[language][widget.aggregation]} · ${measureName}`,
@@ -152,7 +155,8 @@ export function TimeSeriesAnimationModal({ widget, dataset, filters, theme, onCl
         const elapsed = performance.now() - startedAt;
         const duration = args.index === 0 ? timing.seriesEnd - timing.startDelay : timing.trendDuration;
         const offset = args.index === 0 ? timing.startDelay : timing.trendStart;
-        const reveal = Math.max(0, Math.min(1, (elapsed - offset) / Math.max(1, duration)));
+        const reveal = timeSeriesRevealProgress(elapsed, offset, duration);
+        if (reveal === null) return false;
         const { left, right, top, bottom } = chart.chartArea;
         chart.ctx.save();
         chart.ctx.beginPath();
@@ -187,7 +191,10 @@ export function TimeSeriesAnimationModal({ widget, dataset, filters, theme, onCl
     };
     const chart = new Chart(canvas, {
       type: line ? "line" : "bar",
-      data: { labels: data.points.map(point => point.label), datasets: [primary] },
+      data: {
+        labels: data.points.map(point => point.label),
+        datasets: animation.showTrendLine && values.length > 1 ? [primary, trendDataset] : [primary],
+      },
       plugins: [revealPlugin],
       options: {
         responsive: true,
@@ -196,7 +203,7 @@ export function TimeSeriesAnimationModal({ widget, dataset, filters, theme, onCl
           x: {
             type: "number",
             easing: "easeOutCubic",
-            duration: timing.pointDuration,
+            duration: context => context.type === "data" ? animationDuration(context.datasetIndex) : timing.pointDuration,
             delay: context => context.type === "data" ? animationDelay(context.datasetIndex, context.dataIndex) : 0,
             from: context => context.type === "data"
               ? context.chart.scales.x?.getPixelForValue(Math.max(0, context.dataIndex - 1))
@@ -205,7 +212,7 @@ export function TimeSeriesAnimationModal({ widget, dataset, filters, theme, onCl
           y: {
             type: "number",
             easing: "easeOutQuart",
-            duration: timing.pointDuration,
+            duration: context => context.type === "data" ? animationDuration(context.datasetIndex) : timing.pointDuration,
             delay: context => context.type === "data" ? animationDelay(context.datasetIndex, context.dataIndex) : 0,
             from: context => {
               if (context.type !== "data") return 0;
@@ -217,7 +224,7 @@ export function TimeSeriesAnimationModal({ widget, dataset, filters, theme, onCl
           radius: {
             type: "number",
             easing: "easeOutBack",
-            duration: context => context.type === "data" && context.datasetIndex === 0 && context.dataIndex === maximumIndex ? 950 : 360,
+            duration: context => context.type === "data" && context.datasetIndex === 1 ? 0 : context.type === "data" && context.dataIndex === maximumIndex ? 950 : 360,
             delay: context => context.type === "data" ? animationDelay(context.datasetIndex, context.dataIndex) : 0,
             from: 0,
           },
@@ -241,10 +248,7 @@ export function TimeSeriesAnimationModal({ widget, dataset, filters, theme, onCl
         },
       },
     });
-    const trendTimer = animation.showTrendLine && values.length > 1
-      ? window.setTimeout(() => { chart.data.datasets.push(trendDataset); chart.update(); }, timing.trendStart)
-      : 0;
-    return () => { if (trendTimer) window.clearTimeout(trendTimer); chart.destroy(); };
+    return () => chart.destroy();
   }, [animation, color, data, dimensionName, language, maximumIndex, measureName, replayKey, theme.ink, theme.paper, timing, values, widget.aggregation, widget.currency, widget.decimals, widget.format, widget.id]);
 
   if (!animation) return null;

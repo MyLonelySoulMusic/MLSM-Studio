@@ -75,7 +75,7 @@ export function DashboardGrid({
               <button className="rpt-icon-button" title="Elimina widget" aria-label={`Elimina ${widget.title}`} onClick={event => { event.stopPropagation(); onDeleteWidget?.(widget); }}><ReportIcon name="trash" /></button>
             </div>}</header>
             <WidgetView widget={widget} dataset={dashboard.datasets.find(dataset => dataset.id === widget.datasetId)} theme={dashboard.theme} filters={dashboard.filters} />
-            {widget.animation && <button type="button" className="rpt-widget-play" aria-label={`Riproduci animazione ${widget.title}`} title="Riproduci Time Series" onClick={event => { event.stopPropagation(); onPlayAnimation?.(widget); }}><ReportIcon name="play" /><span>Time Series</span></button>}
+            {widget.animation && <button type="button" className="rpt-widget-play" aria-label={`Riproduci animazione ${widget.title}`} title={`Riproduci ${widget.animation.type === "barRace" ? "Corsa delle barre" : "Time Series"}`} onClick={event => { event.stopPropagation(); onPlayAnimation?.(widget); }}><ReportIcon name="play" /><span>{widget.animation.type === "barRace" ? "Bar Chart Race" : "Time Series"}</span></button>}
           </article>)}
           {!widgets.length && !readOnly && <button type="button" className="rpt-empty-row" onClick={() => onSelectRow?.(row.id)}><ReportIcon name="plus" />Seleziona questa riga, poi aggiungi i widget</button>}
         </div>

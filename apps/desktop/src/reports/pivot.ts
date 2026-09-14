@@ -1,4 +1,4 @@
-import { aggregationNeedsMeasure, aggregationNeedsNumericMeasure, displayCell, filterRows, reduceReportValues } from "./aggregation";
+import { aggregationNeedsMeasure, aggregationNeedsNumericMeasure, displayCell, filterRows, reduceDatasetMeasure } from "./aggregation";
 import { bucketTimeValue, type TimeGrain } from "./time-buckets";
 import type { Aggregation, CellValue, ReportDataset, ReportFilter } from "./types";
 import type { UiLanguage } from "../services/ui-preferences";
@@ -29,8 +29,7 @@ export interface PivotResult {
 }
 
 interface Accumulator {
-  count: number;
-  values: (CellValue | undefined)[];
+  rows: ReportDataset["rows"];
 }
 
 interface DimensionValue {
@@ -61,16 +60,15 @@ const EMPTY_RESULT = (message = ""): PivotResult => ({
 });
 
 function createAccumulator(): Accumulator {
-  return { count: 0, values: [] };
+  return { rows: [] };
 }
 
-function addValue(accumulator: Accumulator, value: CellValue | undefined): void {
-  accumulator.count += 1;
-  accumulator.values.push(value);
+function addValue(accumulator: Accumulator, row: ReportDataset["rows"][number]): void {
+  accumulator.rows.push(row);
 }
 
-function reduceAccumulator(accumulator: Accumulator, aggregation: Aggregation): number | null {
-  return reduceReportValues(accumulator.values, accumulator.count, aggregation);
+function reduceAccumulator(dataset: ReportDataset, measureFieldId: string, accumulator: Accumulator, aggregation: Aggregation): number | null {
+  return reduceDatasetMeasure(dataset, measureFieldId, accumulator.rows, aggregation);
 }
 
 function valueKey(value: CellValue | undefined): string {
@@ -228,15 +226,14 @@ export function buildPivotTable({
       columnGroup.timeOrder = Math.min(columnGroup.timeOrder, columnValue.timeOrder);
     }
 
-    const measureValue = row[measureFieldId];
     const cellByColumn = cells.get(rowValue.key) ?? new Map<string, Accumulator>();
     const cell = cellByColumn.get(columnValue.key) ?? createAccumulator();
-    addValue(cell, measureValue);
+    addValue(cell, row);
     cellByColumn.set(columnValue.key, cell);
     cells.set(rowValue.key, cellByColumn);
-    addValue(rowGroup.accumulator, measureValue);
-    addValue(columnGroup.accumulator, measureValue);
-    addValue(grandAccumulator, measureValue);
+    addValue(rowGroup.accumulator, row);
+    addValue(columnGroup.accumulator, row);
+    addValue(grandAccumulator, row);
   }
 
   if (!rowGroups.size || !columnGroups.size) {
@@ -254,11 +251,11 @@ export function buildPivotTable({
 
   const outputCells = orderedRows.map(rowGroup => orderedColumns.map(columnGroup => {
     const accumulator = cells.get(rowGroup.key)?.get(columnGroup.key);
-    return accumulator ? reduceAccumulator(accumulator, aggregation) : null;
+    return accumulator ? reduceAccumulator(dataset, measureFieldId, accumulator, aggregation) : null;
   }));
-  const rowTotals = orderedRows.map(group => reduceAccumulator(group.accumulator, aggregation));
-  const columnTotals = orderedColumns.map(group => reduceAccumulator(group.accumulator, aggregation));
-  const grandTotal = reduceAccumulator(grandAccumulator, aggregation);
+  const rowTotals = orderedRows.map(group => reduceAccumulator(dataset, measureFieldId, group.accumulator, aggregation));
+  const columnTotals = orderedColumns.map(group => reduceAccumulator(dataset, measureFieldId, group.accumulator, aggregation));
+  const grandTotal = reduceAccumulator(dataset, measureFieldId, grandAccumulator, aggregation);
   const hasValue = outputCells.some(row => row.some(value => value !== null));
   return {
     rowLabels: orderedRows.map(group => group.label),

@@ -4,6 +4,21 @@ import { createDashboardHtml } from "./html-export";
 import { createWidget } from "./types";
 
 describe("Reports standalone HTML export", () => {
+  it("exports KPI metadata only when enabled", () => {
+    const dashboard = createDemoDashboard();
+    dashboard.widgets = [dashboard.widgets[0]!];
+
+    const compact = createDashboardHtml(dashboard);
+    expect(compact).not.toContain("Somma · Visualizzazioni");
+    expect(compact).not.toContain("18 righe · Performance dei canali");
+
+    dashboard.widgets[0]!.showKpiLabel = true;
+    dashboard.widgets[0]!.showKpiMeta = true;
+    const detailed = createDashboardHtml(dashboard);
+    expect(detailed).toContain("Somma · Visualizzazioni");
+    expect(detailed).toContain("18 righe · Performance dei canali");
+  });
+
   it("exports an embeddable dashboard with tabs, real maps and escaped user content", () => {
     const dashboard = createDemoDashboard();
     dashboard.description = '</script><script>alert("x")</script>';
@@ -22,9 +37,15 @@ describe("Reports standalone HTML export", () => {
       type: "timeSeries", chartType: "line", dimension: "field-1", timeGrain: "month",
       valueMode: "cumulative", showTrendLine: true, highlightMaximum: true,
     };
+    dashboard.widgets[1]!.animation = {
+      type: "barRace", dateDimension: "field-1", groupDimension: "field-2", measure: "field-3",
+      aggregation: "sum", timeGrain: "month", valueMode: "period", orientation: "vertical", sort: "desc", stepDurationMs: 1800,
+    };
+    const columns = { ...createWidget("column", dashboard.datasets[0], dashboard.layoutRows[0]!.id), title: "Colonne ricavi", dimension: "field-2", measure: "field-5", xAxisLabel: "Canale custom", yAxisLabel: "Ricavo custom" };
     dashboard.tabs.push(tab);
     dashboard.layoutRows.push(row);
     dashboard.widgets.push(map);
+    dashboard.widgets.push(columns);
 
     const html = createDashboardHtml(dashboard);
 
@@ -44,5 +65,15 @@ describe("Reports standalone HTML export", () => {
     expect(html).toContain("openAnimation(payload)");
     expect(html).toContain("&quot;showTrendLine&quot;:true");
     expect(html).toContain("&quot;valueMode&quot;:&quot;cumulative&quot;");
+    expect(html).toContain("Colonne ricavi");
+    expect(html).toContain("Canale custom");
+    expect(html).toContain("Ricavo custom");
+    expect(html).toContain("Bar Chart Race");
+    expect(html).toContain("openBarRace(payload)");
+    expect(html).toContain("&quot;orientation&quot;:&quot;vertical&quot;");
+    expect(html).toContain("&quot;stepDurationMs&quot;:1800");
+    expect(html).toContain("&quot;decimals&quot;:0");
+    expect(html).toContain('class="race-viewport"');
+    expect(html).toContain("payload.decimals===0?Math.round(value):value");
   });
 });

@@ -3,12 +3,13 @@ import type { UiLanguage } from "../services/ui-preferences";
 
 export type CellValue = string | number | boolean | null;
 export type FieldType = "text" | "number" | "date" | "boolean";
-export interface ReportField { id: string; name: string; type: FieldType }
+export interface CalculatedFieldDefinition { formula: string; description: string }
+export interface ReportField { id: string; name: string; type: FieldType; calculated?: CalculatedFieldDefinition }
 export interface ReportDataset { id: string; name: string; sourceName: string; fields: ReportField[]; rows: Record<string, CellValue>[] }
-export type WidgetType = "kpi" | "bar" | "line" | "area" | "doughnut" | "scatter" | "map" | "table" | "pivot" | "text";
+export type WidgetType = "kpi" | "bar" | "column" | "line" | "area" | "doughnut" | "scatter" | "map" | "table" | "pivot" | "text";
 export type Aggregation = "sum" | "avg" | "count" | "distinct" | "median" | "min" | "max" | "range" | "variance" | "stddev";
 export type CurrencyCode = "EUR" | "USD" | "GBP" | "CHF" | "JPY" | "CAD" | "AUD";
-export type WidgetAnimationType = "timeSeries";
+export type WidgetAnimationType = "timeSeries" | "barRace";
 export type TimeSeriesChartType = "line" | "area" | "bar";
 export type TimeSeriesValueMode = "period" | "cumulative";
 export interface TimeSeriesAnimation {
@@ -20,7 +21,21 @@ export interface TimeSeriesAnimation {
   showTrendLine: boolean;
   highlightMaximum: boolean;
 }
-export type ReportWidgetAnimation = TimeSeriesAnimation;
+export type BarRaceOrientation = "horizontal" | "vertical";
+export type BarRaceSort = "asc" | "desc";
+export interface BarRaceAnimation {
+  type: "barRace";
+  dateDimension: string;
+  groupDimension: string;
+  measure: string;
+  aggregation: Aggregation;
+  timeGrain: TimeGrain;
+  valueMode: TimeSeriesValueMode;
+  orientation: BarRaceOrientation;
+  sort: BarRaceSort;
+  stepDurationMs: number;
+}
+export type ReportWidgetAnimation = TimeSeriesAnimation | BarRaceAnimation;
 export interface ReportTab { id: string; name: string }
 export interface ReportLayoutRow { id: string; tabId: string; columns: number | null }
 export interface ReportWidget {
@@ -28,21 +43,25 @@ export interface ReportWidget {
   dimension: string; secondaryDimension: string; measure: string; aggregation: Aggregation; timeGrain: TimeGrain;
   rowId: string; width: number; height: 240 | 320 | 420;
   color: string; mapBackground: string; text: string; format: "number" | "currency" | "percent"; currency: CurrencyCode; decimals: number;
-  sort: "source" | "asc" | "desc"; xSort: "source" | "asc" | "desc"; limit: number | null;
+  sort: "source" | "asc" | "desc"; xSort: "source" | "asc" | "desc"; limit: number | null; categoryLimitMode: "first" | "last";
+  showKpiLabel: boolean; showKpiMeta: boolean;
+  showXTicks: boolean; showYTicks: boolean; xTickCount: number | null; yTickCount: number | null;
+  xAxisMin: number | null; xAxisMax: number | null; yAxisMin: number | null; yAxisMax: number | null;
+  xAxisLabel: string; yAxisLabel: string;
   animation: ReportWidgetAnimation | null;
 }
 export interface ReportFilter { id: string; datasetId: string; fieldId: string; value: string | null; defaultValue: string | null; includeAll: boolean; targetMode: "all" | "selected"; widgetIds: string[] }
 export interface ReportTheme { accent: string; ink: string; paper: string }
 export interface ReportDashboard {
-  schemaVersion: 9; id: string; name: string; description: string;
+  schemaVersion: 14; id: string; name: string; description: string;
   createdAt: string; updatedAt: string;
   theme: ReportTheme; datasets: ReportDataset[]; tabs: ReportTab[]; layoutRows: ReportLayoutRow[]; widgets: ReportWidget[]; filters: ReportFilter[];
 }
 export const DEFAULT_REPORT_THEME: ReportTheme = { accent: "#FF4F9A", ink: "#211B1F", paper: "#FFFFFF" };
 export const DEFAULT_MAP_BACKGROUND = "#F2F0F1";
 export const WIDGET_LABELS_BY_LANGUAGE: Record<UiLanguage, Record<WidgetType, string>> = {
-  it: { kpi: "Indicatore KPI", bar: "Barre", line: "Linee", area: "Area", doughnut: "Ciambella", scatter: "Dispersione", map: "Mappa geografica", table: "Tabella", pivot: "Tabella pivot", text: "Testo e note" },
-  en: { kpi: "KPI indicator", bar: "Bars", line: "Lines", area: "Area", doughnut: "Doughnut", scatter: "Scatter", map: "Geographic map", table: "Table", pivot: "Pivot table", text: "Text and notes" },
+  it: { kpi: "Indicatore KPI", bar: "Barre orizzontali", column: "Barre verticali", line: "Linee", area: "Area", doughnut: "Ciambella", scatter: "Dispersione", map: "Mappa geografica", table: "Tabella", pivot: "Tabella pivot", text: "Testo e note" },
+  en: { kpi: "KPI indicator", bar: "Horizontal bars", column: "Vertical bars", line: "Lines", area: "Area", doughnut: "Doughnut", scatter: "Scatter", map: "Geographic map", table: "Table", pivot: "Pivot table", text: "Text and notes" },
 };
 export const WIDGET_LABELS = WIDGET_LABELS_BY_LANGUAGE.it;
 export const AGGREGATION_LABELS_BY_LANGUAGE: Record<UiLanguage, Record<Aggregation, string>> = {
@@ -60,7 +79,7 @@ export function defaultDashboardName(language: UiLanguage = "it"): string { retu
 export function createDashboard(name?: string, language: UiLanguage = "it"): ReportDashboard {
   const now = new Date().toISOString();
   const tabId = reportId();
-  return { schemaVersion: 9, id: reportId(), name: name ?? defaultDashboardName(language), description: "", createdAt: now, updatedAt: now,
+  return { schemaVersion: 14, id: reportId(), name: name ?? defaultDashboardName(language), description: "", createdAt: now, updatedAt: now,
     theme: { ...DEFAULT_REPORT_THEME }, datasets: [], tabs: [{ id: tabId, name: language === "en" ? "Page 1" : "Pagina 1" }], layoutRows: [{ id: reportId(), tabId, columns: null }], widgets: [], filters: [] };
 }
 export function createWidget(type: WidgetType, dataset?: ReportDataset, rowId = "", language: UiLanguage = "it"): ReportWidget {
@@ -70,5 +89,7 @@ export function createWidget(type: WidgetType, dataset?: ReportDataset, rowId = 
     measure: dataset?.fields.find(field => field.type === "number")?.id ?? "",
     aggregation: dataset?.fields.some(field => field.type === "number") ? "sum" : "count", timeGrain: "exact", rowId,
     width: type === "kpi" ? 4 : type === "table" || type === "pivot" ? 12 : 6, height: type === "kpi" ? 240 : type === "pivot" ? 420 : 320,
-    color: "", mapBackground: DEFAULT_MAP_BACKGROUND, text: language === "en" ? "Add context, conclusions and next steps to your report." : "Aggiungi contesto, conclusioni e prossimi passi al tuo report.", format: "number", currency: "EUR", decimals: 2, sort: "source", xSort: "asc", limit: null, animation: null };
+    color: "", mapBackground: DEFAULT_MAP_BACKGROUND, text: language === "en" ? "Add context, conclusions and next steps to your report." : "Aggiungi contesto, conclusioni e prossimi passi al tuo report.", format: "number", currency: "EUR", decimals: 2, sort: "source", xSort: "asc", limit: null, categoryLimitMode: "first",
+    showKpiLabel: false, showKpiMeta: false, showXTicks: true, showYTicks: true, xTickCount: null, yTickCount: null,
+    xAxisMin: null, xAxisMax: null, yAxisMin: null, yAxisMax: null, xAxisLabel: "", yAxisLabel: "", animation: null };
 }

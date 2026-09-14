@@ -1,6 +1,7 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { isReportDate, REPORT_LIMITS } from "./data";
 import { DEFAULT_MAP_BACKGROUND, reportId, type CellValue, type ReportDashboard, type ReportDataset, type ReportField, type ReportFilter, type ReportLayoutRow, type ReportTab, type ReportWidget } from "./types";
+import { materializeCalculatedFields } from "./calculated-fields";
 
 const DATABASE_NAME = "mlsm-studio-reports";
 const STORE_NAME = "dashboards";
@@ -8,10 +9,10 @@ type JsonObject = Record<string, unknown>;
 
 function invalid(message: string): never { throw new Error(`Dashboard non valida: ${message}`); }
 
-function object(value: unknown, keys: readonly string[], label: string): JsonObject {
+function object(value: unknown, keys: readonly string[], label: string, optionalKeys: readonly string[] = []): JsonObject {
   if (!value || typeof value !== "object" || Array.isArray(value)) invalid(`${label} deve essere un oggetto.`);
   const record = value as JsonObject;
-  if (Object.keys(record).some(key => !keys.includes(key)) || keys.some(key => !Object.hasOwn(record, key))) invalid(`la struttura di ${label} non corrisponde al formato Reports supportato.`);
+  if (Object.keys(record).some(key => !keys.includes(key)) || keys.some(key => !optionalKeys.includes(key) && !Object.hasOwn(record, key))) invalid(`la struttura di ${label} non corrisponde al formato Reports supportato.`);
   return record;
 }
 
@@ -42,6 +43,18 @@ function choice<T extends string | number>(value: unknown, choices: readonly T[]
   return value as T;
 }
 
+function nullableFiniteNumber(value: unknown, label: string): number | null {
+  if (value === null) return null;
+  if (typeof value !== "number" || !Number.isFinite(value)) invalid(`${label} deve essere un numero finito oppure automatico.`);
+  return value;
+}
+
+function nullableTickCount(value: unknown, label: string): number | null {
+  if (value === null) return null;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 2 || value > 50) invalid(`${label} deve essere un intero tra 2 e 50 oppure automatico.`);
+  return value;
+}
+
 function array(value: unknown, maximum: number, label: string): unknown[] {
   if (!Array.isArray(value) || value.length > maximum) invalid(`${label} deve essere una lista con al massimo ${maximum} elementi.`);
   return value;
@@ -59,8 +72,12 @@ function date(value: unknown, label: string): string {
 function dataset(value: unknown): ReportDataset {
   const data = object(value, ["id", "name", "sourceName", "fields", "rows"], "dataset");
   const fields: ReportField[] = array(data.fields, REPORT_LIMITS.fields, "campi").map(value => {
-    const field = object(value, ["id", "name", "type"], "campo");
-    return { id: id(field.id, "ID campo"), name: string(field.name, "nome campo"), type: choice(field.type, ["text", "number", "date", "boolean"] as const, "tipo campo") };
+    const field = object(value, ["id", "name", "type", "calculated"], "campo", ["calculated"]);
+    const calculated = field.calculated === undefined ? undefined : object(field.calculated, ["formula", "description"], "definizione campo calcolato");
+    return {
+      id: id(field.id, "ID campo"), name: string(field.name, "nome campo"), type: choice(field.type, ["text", "number", "date", "boolean"] as const, "tipo campo"),
+      ...(calculated ? { calculated: { formula: string(calculated.formula, "formula campo calcolato", 4000), description: string(calculated.description, "descrizione campo calcolato", 2000, true) } } : {}),
+    };
   });
   if (!fields.length) invalid("un dataset deve avere almeno un campo.");
   unique(fields.map(field => field.id), "campi");
@@ -82,7 +99,11 @@ function dataset(value: unknown): ReportDataset {
       return [field.id, cell as CellValue];
     }));
   });
-  return { id: id(data.id, "ID dataset"), name: string(data.name, "nome dataset"), sourceName: string(data.sourceName, "nome del file", 500), fields, rows };
+  try {
+    return materializeCalculatedFields({ id: id(data.id, "ID dataset"), name: string(data.name, "nome dataset"), sourceName: string(data.sourceName, "nome del file", 500), fields, rows });
+  } catch (error) {
+    invalid(error instanceof Error ? error.message : "un campo calcolato non è valido.");
+  }
 }
 
 export function validateDashboard(value: unknown): ReportDashboard {
@@ -163,8 +184,43 @@ export function validateDashboard(value: unknown): ReportDashboard {
       }) : legacy.widgets,
     };
   }
+  if (candidate && typeof candidate === "object" && !Array.isArray(candidate) && (candidate as JsonObject).schemaVersion === 9) {
+    const legacy = candidate as JsonObject;
+    candidate = {
+      ...legacy,
+      schemaVersion: 10,
+      widgets: Array.isArray(legacy.widgets) ? legacy.widgets.map(widget => widget && typeof widget === "object" && !Array.isArray(widget) ? { ...widget, categoryLimitMode: "first" } : widget) : legacy.widgets,
+    };
+  }
+  if (candidate && typeof candidate === "object" && !Array.isArray(candidate) && (candidate as JsonObject).schemaVersion === 10) {
+    candidate = { ...(candidate as JsonObject), schemaVersion: 11 };
+  }
+  if (candidate && typeof candidate === "object" && !Array.isArray(candidate) && (candidate as JsonObject).schemaVersion === 11) {
+    candidate = { ...(candidate as JsonObject), schemaVersion: 12 };
+  }
+  if (candidate && typeof candidate === "object" && !Array.isArray(candidate) && (candidate as JsonObject).schemaVersion === 12) {
+    const legacy = candidate as JsonObject;
+    candidate = {
+      ...legacy,
+      schemaVersion: 13,
+      widgets: Array.isArray(legacy.widgets) ? legacy.widgets.map(widget => widget && typeof widget === "object" && !Array.isArray(widget) ? {
+        ...widget,
+        showKpiLabel: false, showKpiMeta: false,
+        showXTicks: true, showYTicks: true, xTickCount: null, yTickCount: null,
+        xAxisMin: null, xAxisMax: null, yAxisMin: null, yAxisMax: null,
+      } : widget) : legacy.widgets,
+    };
+  }
+  if (candidate && typeof candidate === "object" && !Array.isArray(candidate) && (candidate as JsonObject).schemaVersion === 13) {
+    const legacy = candidate as JsonObject;
+    candidate = {
+      ...legacy,
+      schemaVersion: 14,
+      widgets: Array.isArray(legacy.widgets) ? legacy.widgets.map(widget => widget && typeof widget === "object" && !Array.isArray(widget) ? { ...widget, xAxisLabel: "", yAxisLabel: "" } : widget) : legacy.widgets,
+    };
+  }
   const data = object(candidate, ["schemaVersion", "id", "name", "description", "createdAt", "updatedAt", "theme", "datasets", "tabs", "layoutRows", "widgets", "filters"], "dashboard");
-  if (data.schemaVersion !== 9) invalid("versione non supportata. Questo programma legge i formati Reports dalla v1 alla v9.");
+  if (data.schemaVersion !== 14) invalid("versione non supportata. Questo programma legge i formati Reports dalla v1 alla v14.");
   const theme = object(data.theme, ["accent", "ink", "paper"], "tema");
   const datasets = array(data.datasets, REPORT_LIMITS.datasets, "dataset").map(dataset);
   unique(datasets.map(item => item.id), "dataset");
@@ -188,7 +244,7 @@ export function validateDashboard(value: unknown): ReportDashboard {
   if (tabs.some(tab => !layoutRows.some(row => row.tabId === tab.id))) invalid("ogni tab deve contenere almeno una riga layout.");
   const layoutRowIds = new Set(layoutRows.map(row => row.id));
   const widgets: ReportWidget[] = array(data.widgets, REPORT_LIMITS.widgets, "widget").map(value => {
-    const widget = object(value, ["id", "type", "title", "datasetId", "dimension", "secondaryDimension", "measure", "aggregation", "timeGrain", "rowId", "width", "height", "color", "mapBackground", "text", "format", "currency", "decimals", "sort", "xSort", "limit", "animation"], "widget");
+    const widget = object(value, ["id", "type", "title", "datasetId", "dimension", "secondaryDimension", "measure", "aggregation", "timeGrain", "rowId", "width", "height", "color", "mapBackground", "text", "format", "currency", "decimals", "sort", "xSort", "limit", "categoryLimitMode", "showKpiLabel", "showKpiMeta", "showXTicks", "showYTicks", "xTickCount", "yTickCount", "xAxisMin", "xAxisMax", "yAxisMin", "yAxisMax", "xAxisLabel", "yAxisLabel", "animation"], "widget");
     const datasetId = id(widget.datasetId, "dataset del widget", true);
     const source = datasetId ? datasetsById.get(datasetId) : undefined;
     if (datasetId && !source) invalid("un widget fa riferimento a un dataset inesistente.");
@@ -201,25 +257,57 @@ export function validateDashboard(value: unknown): ReportDashboard {
     if (typeof widget.width !== "number" || !Number.isInteger(widget.width) || widget.width < 1 || widget.width > 12) invalid("la larghezza del widget deve essere un intero tra 1 e 12.");
     if (typeof widget.decimals !== "number" || !Number.isInteger(widget.decimals) || widget.decimals < 0 || widget.decimals > 6) invalid("i decimali del widget devono essere un intero tra 0 e 6.");
     if (widget.limit !== null && (typeof widget.limit !== "number" || !Number.isInteger(widget.limit) || widget.limit < 1 || widget.limit > 1000)) invalid("il limite del widget deve essere un intero tra 1 e 1000 oppure tutte le categorie.");
+    if (typeof widget.showKpiLabel !== "boolean" || typeof widget.showKpiMeta !== "boolean" || typeof widget.showXTicks !== "boolean" || typeof widget.showYTicks !== "boolean") invalid("le opzioni di visualizzazione del widget devono essere booleane.");
+    const xTickCount = nullableTickCount(widget.xTickCount, "il numero di tacche X");
+    const yTickCount = nullableTickCount(widget.yTickCount, "il numero di tacche Y");
+    const xAxisMin = nullableFiniteNumber(widget.xAxisMin, "il minimo dell’asse X");
+    const xAxisMax = nullableFiniteNumber(widget.xAxisMax, "il massimo dell’asse X");
+    const yAxisMin = nullableFiniteNumber(widget.yAxisMin, "il minimo dell’asse Y");
+    const yAxisMax = nullableFiniteNumber(widget.yAxisMax, "il massimo dell’asse Y");
+    if (xAxisMin !== null && xAxisMax !== null && xAxisMin >= xAxisMax) invalid("il minimo dell’asse X deve essere inferiore al massimo.");
+    if (yAxisMin !== null && yAxisMax !== null && yAxisMin >= yAxisMax) invalid("il minimo dell’asse Y deve essere inferiore al massimo.");
     let animation: ReportWidget["animation"] = null;
     if (widget.animation !== null) {
-      const value = object(widget.animation, ["type", "chartType", "dimension", "timeGrain", "valueMode", "showTrendLine", "highlightMaximum"], "animazione widget");
-      const animationDimension = id(value.dimension, "asse X dell’animazione");
-      const animationField = source?.fields.find(field => field.id === animationDimension);
-      if (!animationField || animationField.type !== "date") invalid("l’animazione Time Series richiede un campo data valido per l’asse X.");
-      if (typeof value.showTrendLine !== "boolean" || typeof value.highlightMaximum !== "boolean") invalid("le opzioni dell’animazione devono essere booleane.");
-      animation = {
-        type: choice(value.type, ["timeSeries"] as const, "tipo animazione"),
-        chartType: choice(value.chartType, ["line", "area", "bar"] as const, "grafico animazione"),
-        dimension: animationDimension,
-        timeGrain: choice(value.timeGrain, ["exact", "day", "week", "month", "quarter", "year"] as const, "raggruppamento animazione"),
-        valueMode: choice(value.valueMode, ["period", "cumulative"] as const, "modalità valori animazione"),
-        showTrendLine: value.showTrendLine,
-        highlightMaximum: value.highlightMaximum,
-      };
+      const animationCandidate = widget.animation as JsonObject;
+      if (animationCandidate.type === "timeSeries") {
+        const value = object(widget.animation, ["type", "chartType", "dimension", "timeGrain", "valueMode", "showTrendLine", "highlightMaximum"], "animazione Time Series");
+        const animationDimension = id(value.dimension, "asse X dell’animazione");
+        const animationField = source?.fields.find(field => field.id === animationDimension);
+        if (!animationField || animationField.type !== "date") invalid("l’animazione Time Series richiede un campo data valido per l’asse X.");
+        if (typeof value.showTrendLine !== "boolean" || typeof value.highlightMaximum !== "boolean") invalid("le opzioni dell’animazione devono essere booleane.");
+        animation = {
+          type: "timeSeries",
+          chartType: choice(value.chartType, ["line", "area", "bar"] as const, "grafico animazione"),
+          dimension: animationDimension,
+          timeGrain: choice(value.timeGrain, ["exact", "day", "week", "month", "quarter", "year"] as const, "raggruppamento animazione"),
+          valueMode: choice(value.valueMode, ["period", "cumulative"] as const, "modalità valori animazione"),
+          showTrendLine: value.showTrendLine,
+          highlightMaximum: value.highlightMaximum,
+        };
+      } else if (animationCandidate.type === "barRace") {
+        const value = object(widget.animation, ["type", "dateDimension", "groupDimension", "measure", "aggregation", "timeGrain", "valueMode", "orientation", "sort", "stepDurationMs"], "animazione Bar Chart Race");
+        const dateDimension = id(value.dateDimension, "campo data della Bar Chart Race");
+        const groupDimension = id(value.groupDimension, "campo gruppo della Bar Chart Race");
+        const measure = id(value.measure, "misura della Bar Chart Race", true);
+        const aggregation = choice(value.aggregation, ["sum", "avg", "count", "distinct", "median", "min", "max", "range", "variance", "stddev"] as const, "aggregazione Bar Chart Race");
+        if (source?.fields.find(field => field.id === dateDimension)?.type !== "date") invalid("la Bar Chart Race richiede un campo data valido.");
+        if (!source?.fields.some(field => field.id === groupDimension)) invalid("la Bar Chart Race richiede un campo di raggruppamento valido.");
+        const measureField = source?.fields.find(field => field.id === measure);
+        if (aggregation !== "count" && !measureField) invalid("la Bar Chart Race richiede una misura valida.");
+        if (!["count", "distinct"].includes(aggregation) && measureField?.type !== "number") invalid("questa aggregazione della Bar Chart Race richiede una misura numerica.");
+        if (typeof value.stepDurationMs !== "number" || !Number.isInteger(value.stepDurationMs) || value.stepDurationMs < 200 || value.stepDurationMs > 20_000) invalid("la durata di ogni step della Bar Chart Race deve essere tra 200 e 20.000 millisecondi.");
+        animation = {
+          type: "barRace", dateDimension, groupDimension, measure, aggregation,
+          timeGrain: choice(value.timeGrain, ["exact", "day", "week", "month", "quarter", "year"] as const, "raggruppamento temporale Bar Chart Race"),
+          valueMode: choice(value.valueMode, ["period", "cumulative"] as const, "modalità valori Bar Chart Race"),
+          orientation: choice(value.orientation, ["horizontal", "vertical"] as const, "orientamento Bar Chart Race"),
+          sort: choice(value.sort, ["asc", "desc"] as const, "ordinamento Bar Chart Race"),
+          stepDurationMs: value.stepDurationMs,
+        };
+      } else invalid("tipo animazione non supportato.");
     }
     return {
-      id: id(widget.id, "ID widget"), type: choice(widget.type, ["kpi", "bar", "line", "area", "doughnut", "scatter", "map", "table", "pivot", "text"] as const, "tipo widget"),
+      id: id(widget.id, "ID widget"), type: choice(widget.type, ["kpi", "bar", "column", "line", "area", "doughnut", "scatter", "map", "table", "pivot", "text"] as const, "tipo widget"),
       title: string(widget.title, "titolo widget", 300, true), datasetId, dimension, secondaryDimension, measure, rowId,
       aggregation: choice(widget.aggregation, ["sum", "avg", "count", "distinct", "median", "min", "max", "range", "variance", "stddev"] as const, "aggregazione"),
       timeGrain: choice(widget.timeGrain, ["exact", "day", "week", "month", "quarter", "year"] as const, "raggruppamento temporale"),
@@ -227,7 +315,12 @@ export function validateDashboard(value: unknown): ReportDashboard {
       color: color(widget.color, "colore widget", true), mapBackground: color(widget.mapBackground, "colore sfondo mappa"), text: string(widget.text, "testo widget", 20_000, true),
       format: choice(widget.format, ["number", "currency", "percent"] as const, "formato numero"),
       currency: choice(widget.currency, ["EUR", "USD", "GBP", "CHF", "JPY", "CAD", "AUD"] as const, "valuta"), decimals: widget.decimals,
-      sort: choice(widget.sort, ["source", "asc", "desc"] as const, "ordinamento valori"), xSort: choice(widget.xSort, ["source", "asc", "desc"] as const, "ordinamento asse X"), limit: widget.limit as number | null, animation,
+      sort: choice(widget.sort, ["source", "asc", "desc"] as const, "ordinamento valori"), xSort: choice(widget.xSort, ["source", "asc", "desc"] as const, "ordinamento asse X"), limit: widget.limit as number | null,
+      categoryLimitMode: choice(widget.categoryLimitMode, ["first", "last"] as const, "selezione prime o ultime categorie"),
+      showKpiLabel: widget.showKpiLabel, showKpiMeta: widget.showKpiMeta,
+      showXTicks: widget.showXTicks, showYTicks: widget.showYTicks, xTickCount, yTickCount,
+      xAxisMin, xAxisMax, yAxisMin, yAxisMax,
+      xAxisLabel: string(widget.xAxisLabel, "etichetta asse X", 160, true), yAxisLabel: string(widget.yAxisLabel, "etichetta asse Y", 160, true), animation,
     };
   });
   unique(widgets.map(item => item.id), "widget");
@@ -253,7 +346,7 @@ export function validateDashboard(value: unknown): ReportDashboard {
   });
   unique(filters.map(item => item.id), "filtri");
   return {
-    schemaVersion: 9, id: id(data.id, "ID dashboard"), name: string(data.name, "nome dashboard"), description: string(data.description, "descrizione", 5000, true),
+    schemaVersion: 14, id: id(data.id, "ID dashboard"), name: string(data.name, "nome dashboard"), description: string(data.description, "descrizione", 5000, true),
     createdAt: date(data.createdAt, "data di creazione"), updatedAt: date(data.updatedAt, "data di modifica"),
     theme: { accent: color(theme.accent, "colore principale"), ink: color(theme.ink, "colore testo"), paper: color(theme.paper, "colore sfondo") },
     datasets, tabs, layoutRows, widgets, filters,

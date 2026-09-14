@@ -5,7 +5,7 @@ const paths = {
   folder: "M3 6h7l2 3h9v12H3z", eye: "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12 M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6",
   edit: "m15 3 6 6-12 12H3v-6z M12 6l6 6", copy: "M8 8h13v13H8z M16 8V3H3v13h5",
   trash: "M4 6h16 M9 6V3h6v3 M6 6l1 15h10l1-15 M10 10v7 M14 10v7", close: "m6 6 12 12 M18 6 6 18",
-  bar: "M4 20V10h4v10 M10 20V4h4v16 M16 20v-9h4v9", line: "M3 3v18h18 M6 15l4-5 4 3 6-8",
+  bar: "M4 5h10v4H4 M4 11h16v4H4 M4 17h13v4H4", column: "M4 20V10h4v10 M10 20V4h4v16 M16 20v-9h4v9", line: "M3 3v18h18 M6 15l4-5 4 3 6-8",
   area: "M3 21V3 M3 21h18 M6 18v-5l4-5 4 4 6-7v13z", doughnut: "M12 3a9 9 0 1 0 9 9h-6a3 3 0 1 1-3-3z M15 3v6h6a9 9 0 0 0-6-6",
   scatter: "M3 3v18h18 M7 13h1 M12 8h1 M14 14h1 M18 5h1 M18 10h1", table: "M3 4h18v16H3z M3 9h18 M3 14h18 M9 4v16 M15 4v16",
   map: "M4 6l5-3 6 3 5-3v15l-5 3-6-3-5 3z M9 3v15 M15 6v15",
@@ -19,6 +19,9 @@ const paths = {
   tab: "M3 6h7l2 3h9v10H3z", swap: "M7 7h12m0 0-4-4m4 4-4 4 M17 17H5m0 0 4-4m-4 4 4 4",
   code: "m8 8-4 4 4 4 M16 8l4 4-4 4 M14 4l-4 16",
   play: "M8 5v14l11-7z",
+  calculator: "M5 3h14v18H5z M8 7h8v3H8z M8 14h1 M12 14h1 M16 14h1 M8 18h1 M12 18h1 M16 18h1",
+  settings: "M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6 M19 13.5l2 1-2 3-2-.5-2 1.5-.2 2.5h-3.6L11 18.5 9 17l-2 .5-2-3 2-1V11L5 9.5l2-3 2 .5 2-1.5.2-2.5h3.6l.2 2.5L17 7l2-.5 2 3-2 1.5z",
+  sparkle: "m12 3 1.4 4.1L17.5 8l-4.1 1.4L12 13.5l-1.4-4.1L6.5 8l4.1-.9z M18 14l.8 2.2L21 17l-2.2.8L18 20l-.8-2.2L15 17l2.2-.8z",
 } as const;
 export function ReportIcon({ name }: { name: keyof typeof paths }) {
   return <svg className="rpt-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name]} /></svg>;

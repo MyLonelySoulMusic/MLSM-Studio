@@ -33,6 +33,18 @@ describe("Reports widget views", () => {
     expect(screen.getByText("0", { selector: "strong" })).toBeInTheDocument();
   });
 
+  it("keeps KPI details hidden by default and shows only the explicitly enabled information", () => {
+    const widget = createWidget("kpi", dataset);
+    const { rerender } = render(<WidgetView widget={widget} dataset={dataset} theme={DEFAULT_REPORT_THEME} filters={[]} />);
+
+    expect(screen.queryByText("Somma · Valore")).not.toBeInTheDocument();
+    expect(screen.queryByText("3 righe · Campagna")).not.toBeInTheDocument();
+
+    rerender(<WidgetView widget={{ ...widget, showKpiLabel: true, showKpiMeta: true }} dataset={dataset} theme={DEFAULT_REPORT_THEME} filters={[]} />);
+    expect(screen.getByText("Somma · Valore")).toBeInTheDocument();
+    expect(screen.getByText("3 righe · Campagna")).toBeInTheDocument();
+  });
+
   it("renders imported notes as plain text without interpreting markup", () => {
     const widget = { ...createWidget("text"), text: '<img src="x" onerror="alert(1)">Report' };
     render(<WidgetView widget={widget} dataset={undefined} theme={DEFAULT_REPORT_THEME} filters={[]} />);

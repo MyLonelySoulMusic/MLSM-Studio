@@ -84,7 +84,8 @@ describe("report aggregation", () => {
 
     expect(all.limit).toBeNull();
     expect(aggregateWidget(all, manyCategories).points).toHaveLength(18);
-    expect(aggregateWidget({ ...all, limit: 12 }, manyCategories).points).toHaveLength(12);
+    expect(aggregateWidget({ ...all, limit: 3, categoryLimitMode: "first" }, manyCategories).points.map(point => point.label)).toEqual(["Categoria 1", "Categoria 2", "Categoria 3"]);
+    expect(aggregateWidget({ ...all, limit: 3, categoryLimitMode: "last" }, manyCategories).points.map(point => point.label)).toEqual(["Categoria 16", "Categoria 17", "Categoria 18"]);
   });
 
   it("orders an X axis chronologically or numerically without changing value sorting", () => {

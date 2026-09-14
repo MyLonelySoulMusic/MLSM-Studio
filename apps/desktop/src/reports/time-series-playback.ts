@@ -18,6 +18,11 @@ function clamp(value: number, minimum: number, maximum: number): number {
   return Math.max(minimum, Math.min(maximum, value));
 }
 
+export function timeSeriesRevealProgress(elapsed: number, start: number, duration: number): number | null {
+  if (elapsed < start) return null;
+  return clamp((elapsed - start) / Math.max(1, duration), 0, 1);
+}
+
 export function timeSeriesPlaybackTiming(pointCount: number, withTrend: boolean): TimeSeriesPlaybackTiming {
   const count = Math.max(1, Math.floor(pointCount));
   const startDelay = 260;

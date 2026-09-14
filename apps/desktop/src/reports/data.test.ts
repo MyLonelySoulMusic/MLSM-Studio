@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as XLSX from "xlsx";
-import { createDemoDashboard, importReportFile, parseTextDataset, REPORT_LIMITS } from "./data";
+import { createDemoDashboard, importReportFile, parseTextDataset, reconcileReplacementDataset, REPORT_LIMITS, selectReplacementDataset } from "./data";
+import { createCalculatedField } from "./calculated-fields";
 
 describe("Reports file import", () => {
   it("reads semicolon CSV, Italian decimals, quoted multiline values, dates and codes losslessly", () => {
@@ -73,6 +74,43 @@ describe("Reports file import", () => {
     XLSX.utils.book_append_sheet(workbook, sheet, "Troppo grande");
     const bytes = XLSX.write(workbook, { type: "array", bookType: "xlsx" }) as ArrayBuffer;
     await expect(importReportFile(new File([bytes], "grande.xlsx"))).rejects.toThrow(/supera i limiti/);
+  });
+
+  it("replaces a dataset while preserving linked field IDs across reordered or missing columns", () => {
+    const previous = parseTextDataset("Canale,Data,Ricavi,Interazioni\nSocial,2026-01-01,10,3", "precedente.csv");
+    const incoming = parseTextDataset("Ricavi,Canale,Regione\n25,Social,Europa", "aggiornato.csv");
+
+    const result = reconcileReplacementDataset(previous, incoming, ["field-1", "field-2", "field-3"]);
+
+    expect(result).toMatchObject({ matchedFields: 2, addedFields: 1, preservedMissingFields: 1 });
+    expect(result.dataset.id).toBe(previous.id);
+    expect(result.dataset.sourceName).toBe("aggiornato.csv");
+    expect(result.dataset.fields).toEqual([
+      { id: "field-3", name: "Ricavi", type: "number" },
+      { id: "field-1", name: "Canale", type: "text" },
+      { id: "field-5", name: "Regione", type: "text" },
+      { id: "field-2", name: "Data", type: "date" },
+    ]);
+    expect(result.dataset.rows[0]).toEqual({ "field-3": 25, "field-1": "Social", "field-5": "Europa", "field-2": null });
+  });
+
+  it("keeps and recalculates calculated fields when their source file is replaced", () => {
+    const physical = parseTextDataset("Revenue,Units\n100,10", "old.csv");
+    const previous = createCalculatedField(physical, { id: "unit-price", name: "Unit price", formula: "[Revenue] / [Units]" });
+    const incoming = parseTextDataset("Units,Revenue\n20,500", "new.csv");
+    const result = reconcileReplacementDataset(previous, incoming, previous.fields.map(field => field.id));
+
+    expect(result.dataset.fields.at(-1)).toMatchObject({ id: "unit-price", calculated: { formula: "[Revenue] / [Units]" } });
+    expect(result.dataset.rows[0]?.["unit-price"]).toBe(25);
+  });
+
+  it("selects the matching Excel sheet when a file contains multiple datasets", () => {
+    const previous = parseTextDataset("Canale,Ricavi\nSocial,10", "precedente.csv");
+    previous.name = "Vendite";
+    const other = { ...parseTextDataset("Nome\nAnna", "report.xlsx"), name: "Contatti" };
+    const matching = { ...parseTextDataset("Canale,Ricavi\nSocial,20", "report.xlsx"), name: "vendite" };
+
+    expect(selectReplacementDataset(previous, [other, matching])).toBe(matching);
   });
 
   it("creates a ready-to-edit demo using the MLSM palette and real embedded example data", () => {
