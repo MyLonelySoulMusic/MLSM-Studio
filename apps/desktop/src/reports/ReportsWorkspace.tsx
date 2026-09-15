@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from "react";
-import { AGGREGATION_LABELS_BY_LANGUAGE, CURRENCY_LABELS_BY_LANGUAGE, DEFAULT_MAP_BACKGROUND, DEFAULT_REPORT_THEME, WIDGET_LABELS, WIDGET_LABELS_BY_LANGUAGE, createDashboard, createWidget, defaultDashboardName, reportId, type Aggregation, type BarRaceAnimation, type ReportDashboard, type ReportDataset, type ReportField, type ReportFilter, type ReportWidget, type TimeSeriesAnimation, type TimeSeriesChartType, type TimeSeriesValueMode, type WidgetAnimationType, type WidgetType } from "./types";
-import { createDemoDashboard, importReportFile, reconcileReplacementDataset, REPORT_LIMITS, selectReplacementDataset } from "./data";
+import { AGGREGATION_LABELS_BY_LANGUAGE, CURRENCY_LABELS_BY_LANGUAGE, DEFAULT_MAP_BACKGROUND, DEFAULT_REPORT_THEME, WIDGET_LABELS, WIDGET_LABELS_BY_LANGUAGE, createDashboard, createWidget, defaultDashboardName, reportId, type Aggregation, type BarRaceAnimation, type ReportDashboard, type ReportDataset, type ReportDatasetSource, type ReportField, type ReportFilter, type ReportWidget, type TimeSeriesAnimation, type TimeSeriesChartType, type TimeSeriesValueMode, type WidgetAnimationType, type WidgetType } from "./types";
+import { appendDatasetSource, createDemoDashboard, importReportFile, reconcileReplacementDataset, removeDatasetSource, replaceDatasetSource, REPORT_LIMITS, selectReplacementDataset } from "./data";
 import { deleteDashboard, importDashboard, listDashboards, saveDashboard } from "./storage";
 import { dashboardEmbedCode, downloadDashboard, downloadDashboardHtml } from "./files";
 import { ReportIcon } from "./ReportIcon";
@@ -89,6 +89,26 @@ function DashboardTabBar({ dashboard, activeTabId, editable, onSelect, onAdd }: 
   return <nav className="rpt-dashboard-tabs" aria-label="Tab dashboard">{dashboard.tabs.map(tab => <button key={tab.id} type="button" className={tab.id === activeTabId ? "is-active" : ""} aria-pressed={tab.id === activeTabId} onClick={() => onSelect(tab.id)}><ReportIcon name="tab" />{tab.name}</button>)}{editable && <button type="button" className="rpt-add-tab" onClick={onAdd}><ReportIcon name="plus" />Nuovo tab</button>}</nav>;
 }
 
+function DatasetSourceCard({ dataset, active, language, locale, onSelect, onAppend, onReplaceAll, onReplaceFile, onRemoveFile, onRemoveDataset }: {
+  dataset: ReportDataset; active: boolean; language: UiLanguage; locale: string;
+  onSelect: () => void; onAppend: () => void; onReplaceAll: () => void;
+  onReplaceFile: (source: ReportDatasetSource) => void; onRemoveFile: (source: ReportDatasetSource) => void; onRemoveDataset: () => void;
+}) {
+  return <article className={`rpt-source${active ? " is-active" : ""}`}>
+    <div className="rpt-source-main">
+      <button className="rpt-source-select" title={dataset.sourceName} onClick={onSelect}><ReportIcon name="file" /><span>{dataset.name}<small>{dataset.rows.length.toLocaleString(locale)} {language === "en" ? "rows" : "righe"} · {dataset.fields.length} {language === "en" ? "fields" : "campi"} · {dataset.sources.length} {language === "en" ? (dataset.sources.length === 1 ? "file" : "files") : dataset.sources.length === 1 ? "file" : "file"}</small></span></button>
+      <button type="button" className="rpt-source-action rpt-source-append" aria-label={language === "en" ? `Append file to ${dataset.name}` : `Aggiungi file a ${dataset.name}`} title={language === "en" ? "Append rows from a file with the same columns" : "Accoda le righe di un file con le stesse colonne"} onClick={onAppend}><ReportIcon name="plus" /><span>Append</span></button>
+      <button type="button" className="rpt-source-action rpt-source-replace" aria-label={language === "en" ? `Replace entire source ${dataset.name}` : `Sostituisci intera origine ${dataset.name}`} title={language === "en" ? "Replace the complete combined dataset" : "Sostituisci l’intero dataset combinato"} onClick={onReplaceAll}><ReportIcon name="reset" /><span>{dataset.sources.length > 1 ? (language === "en" ? "Replace all" : "Sost. tutto") : (language === "en" ? "Replace" : "Sostituisci")}</span></button>
+      <button className="rpt-icon-button" aria-label={language === "en" ? `Remove source ${dataset.name}` : `Rimuovi origine ${dataset.name}`} onClick={onRemoveDataset}><ReportIcon name="close" /></button>
+    </div>
+    {active && <div className="rpt-dataset-files"><div className="rpt-dataset-files-heading"><span>{language === "en" ? "FILES IN THIS DATASET" : "FILE NEL DATASET"}</span><small>{language === "en" ? "Rows are combined in this order" : "Le righe sono unite in questo ordine"}</small></div>{dataset.sources.map(source => <div className="rpt-dataset-file" key={source.id}>
+      <ReportIcon name="file" /><span title={source.fileName}><strong>{source.fileName}</strong><small>{source.rowCount.toLocaleString(locale)} {language === "en" ? "rows" : "righe"}{source.sheetName && source.sheetName !== dataset.name ? ` · ${source.sheetName}` : ""}</small></span>
+      <button type="button" className="rpt-icon-button" aria-label={language === "en" ? `Replace file ${source.fileName}` : `Sostituisci file ${source.fileName}`} title={language === "en" ? "Replace only this file" : "Sostituisci solo questo file"} onClick={() => onReplaceFile(source)}><ReportIcon name="reset" /></button>
+      <button type="button" className="rpt-icon-button" disabled={dataset.sources.length <= 1} aria-label={language === "en" ? `Remove file ${source.fileName}` : `Rimuovi file ${source.fileName}`} title={dataset.sources.length <= 1 ? (language === "en" ? "Remove the entire data source to delete its last file" : "Per eliminare l’ultimo file rimuovi l’intera origine") : (language === "en" ? "Remove this file and its rows" : "Rimuovi questo file e le sue righe")} onClick={() => onRemoveFile(source)}><ReportIcon name="trash" /></button>
+    </div>)}</div>}
+  </article>;
+}
+
 export function ReportsWorkspace({ onHome, viewDashboardId = null, onOpenViewer }: { onHome: () => void; viewDashboardId?: string | null; onOpenViewer?: (dashboardId: string) => void }) {
   const { language } = useUiPreferences();
   const locale = language === "en" ? "en-GB" : "it-IT";
@@ -126,6 +146,10 @@ export function ReportsWorkspace({ onHome, viewDashboardId = null, onOpenViewer 
   const fileInput = useRef<HTMLInputElement>(null);
   const replaceFileInput = useRef<HTMLInputElement>(null);
   const replaceDatasetId = useRef<string | null>(null);
+  const appendFileInput = useRef<HTMLInputElement>(null);
+  const appendDatasetId = useRef<string | null>(null);
+  const replaceDatasetSourceInput = useRef<HTMLInputElement>(null);
+  const replaceDatasetSourceTarget = useRef<{ datasetId: string; sourceId: string } | null>(null);
   const jsonInput = useRef<HTMLInputElement>(null);
   const nameInput = useRef<HTMLInputElement>(null);
   const dashboardRef = useRef(dashboard); dashboardRef.current = dashboard;
@@ -237,6 +261,60 @@ export function ReportsWorkspace({ onHome, viewDashboardId = null, onOpenViewer 
       setError(messageOf(reason));
       setStatus(language === "en" ? "Source replacement not completed" : "Sostituzione non completata");
     } finally { setBusy(false); }
+  }
+  function commitDatasetRows(current: ReportDashboard, datasetId: string, nextDataset: ReportDataset): void {
+    const nextFilters = current.filters.map(filter => {
+      if (filter.datasetId !== datasetId) return filter;
+      const values = nextDataset.rows.map(row => String(row[filter.fieldId] ?? ""));
+      const defaultValue = resolveFilterDefault(values, filter);
+      return { ...filter, defaultValue, value: defaultValue };
+    });
+    change(dashboard => ({ ...dashboard, datasets: dashboard.datasets.map(dataset => dataset.id === datasetId ? nextDataset : dataset), filters: nextFilters }));
+    setActiveFilterValues(values => ({ ...values, ...Object.fromEntries(nextFilters.filter(filter => filter.datasetId === datasetId).map(filter => [filter.id, filter.defaultValue])) }));
+    setActiveDatasetId(datasetId); setDataPage(0); setFilterField("");
+  }
+  async function appendDatasetFile(datasetId: string, file: File) {
+    const current = dashboardRef.current;
+    const previous = current.datasets.find(dataset => dataset.id === datasetId);
+    if (!previous) return;
+    setBusy(true); setError(""); setStatus(language === "en" ? "Reading file to append…" : "Lettura del file da aggiungere…");
+    try {
+      const incoming = selectReplacementDataset(previous, await importReportFile(file));
+      const result = appendDatasetSource(previous, incoming);
+      commitDatasetRows(current, datasetId, result.dataset);
+      setStatus(language === "en" ? `${result.source.fileName} appended · ${result.source.rowCount.toLocaleString(locale)} ${result.source.rowCount === 1 ? "row" : "rows"} · ${result.dataset.sources.length} ${result.dataset.sources.length === 1 ? "file" : "files"} combined.` : `${result.source.fileName} aggiunto · ${result.source.rowCount.toLocaleString(locale)} ${result.source.rowCount === 1 ? "riga" : "righe"} · ${result.dataset.sources.length} file combinati.`);
+    } catch (reason) { setError(messageOf(reason)); setStatus(language === "en" ? "Append not completed" : "Append non completato"); }
+    finally { setBusy(false); }
+  }
+  async function replaceSingleDatasetFile(datasetId: string, sourceId: string, file: File) {
+    const current = dashboardRef.current;
+    const previous = current.datasets.find(dataset => dataset.id === datasetId);
+    if (!previous) return;
+    setBusy(true); setError(""); setStatus(language === "en" ? "Reading replacement file…" : "Lettura del file sostitutivo…");
+    try {
+      const incoming = selectReplacementDataset(previous, await importReportFile(file));
+      const result = replaceDatasetSource(previous, sourceId, incoming);
+      commitDatasetRows(current, datasetId, result.dataset);
+      setStatus(language === "en" ? `${result.source.fileName} replaced · combined dataset regenerated.` : `${result.source.fileName} sostituito · dataset combinato rigenerato.`);
+    } catch (reason) { setError(messageOf(reason)); setStatus(language === "en" ? "File replacement not completed" : "Sostituzione file non completata"); }
+    finally { setBusy(false); }
+  }
+  function confirmRemoveDatasetFile(dataset: ReportDataset, source: ReportDatasetSource): void {
+    setConfirmation({
+      title: language === "en" ? `Remove “${source.fileName}”?` : `Rimuovere “${source.fileName}”?`,
+      message: language === "en" ? `${source.rowCount.toLocaleString(locale)} ${source.rowCount === 1 ? "row" : "rows"} will be removed and the combined dataset will be regenerated. Widgets and fields remain connected.` : `${source.rowCount === 1 ? "Sarà rimossa" : "Saranno rimosse"} ${source.rowCount.toLocaleString(locale)} ${source.rowCount === 1 ? "riga" : "righe"} e il dataset combinato verrà rigenerato. Widget e campi resteranno collegati.`,
+      label: language === "en" ? "Remove file" : "Rimuovi file",
+      run: () => {
+        try {
+          const current = dashboardRef.current;
+          const previous = current.datasets.find(item => item.id === dataset.id);
+          if (!previous) return;
+          const next = removeDatasetSource(previous, source.id);
+          commitDatasetRows(current, dataset.id, next);
+          setStatus(language === "en" ? `${source.fileName} removed · ${next.sources.length} files remain.` : `${source.fileName} rimosso · restano ${next.sources.length} file.`);
+        } catch (reason) { setError(messageOf(reason)); }
+      },
+    });
   }
   async function readJson(file: File) {
     setBusy(true); setError("");
@@ -373,6 +451,8 @@ export function ReportsWorkspace({ onHome, viewDashboardId = null, onOpenViewer 
   return <main className={`rpt-workspace${preview ? " rpt-preview" : ""}`} style={themeStyle} aria-label="MLSM Reports">
     <input ref={fileInput} className="rpt-sr-only" type="file" tabIndex={-1} aria-label="Carica dati CSV, testo o Excel" multiple accept=".csv,.tsv,.txt,.xlsx,.xls" onChange={event => { const files = Array.from(event.target.files ?? []); event.target.value = ""; void addFiles(files); }} />
     <input ref={replaceFileInput} className="rpt-sr-only" type="file" tabIndex={-1} aria-label={language === "en" ? "Choose replacement data file" : "Scegli file dati sostitutivo"} accept=".csv,.tsv,.txt,.xlsx,.xls" onChange={event => { const file = event.target.files?.[0]; const datasetId = replaceDatasetId.current; event.target.value = ""; replaceDatasetId.current = null; if (file && datasetId) void replaceDatasetFile(datasetId, file); }} />
+    <input ref={appendFileInput} className="rpt-sr-only" type="file" tabIndex={-1} aria-label={language === "en" ? "Choose file to append to dataset" : "Scegli file da aggiungere al dataset"} accept=".csv,.tsv,.txt,.xlsx,.xls" onChange={event => { const file = event.target.files?.[0]; const datasetId = appendDatasetId.current; event.target.value = ""; appendDatasetId.current = null; if (file && datasetId) void appendDatasetFile(datasetId, file); }} />
+    <input ref={replaceDatasetSourceInput} className="rpt-sr-only" type="file" tabIndex={-1} aria-label={language === "en" ? "Choose replacement for dataset file" : "Scegli sostituto del file nel dataset"} accept=".csv,.tsv,.txt,.xlsx,.xls" onChange={event => { const file = event.target.files?.[0]; const target = replaceDatasetSourceTarget.current; event.target.value = ""; replaceDatasetSourceTarget.current = null; if (file && target) void replaceSingleDatasetFile(target.datasetId, target.sourceId, file); }} />
     <input ref={jsonInput} className="rpt-sr-only" type="file" tabIndex={-1} aria-label="Importa dashboard JSON" accept=".json,application/json" onChange={event => { const file = event.target.files?.[0]; event.target.value = ""; if (file) protect(() => { void readJson(file); }); }} />
     <fieldset className="rpt-app" disabled={busy}>
       <header className="rpt-topbar">
@@ -398,7 +478,7 @@ export function ReportsWorkspace({ onHome, viewDashboardId = null, onOpenViewer 
         {!preview && <aside className="rpt-data-panel" aria-label="Origini e campi">
           <div className="rpt-panel-heading"><span>DATI</span><span className="rpt-small-badge">{dashboard.datasets.length} origini</span></div>
           <button className="rpt-add-source" onClick={() => fileInput.current?.click()}><ReportIcon name="plus" /><span>Aggiungi dati<small>CSV, TXT, TSV, Excel</small></span><ReportIcon name="upload" /></button>
-          {dashboard.datasets.length > 0 && <div className="rpt-source-list">{dashboard.datasets.map(dataset => <div key={dataset.id} className={`rpt-source${dataset.id === activeDataset?.id ? " is-active" : ""}`}><button title={dataset.sourceName} onClick={() => { setActiveDatasetId(dataset.id); setDataPage(0); setFilterField(""); }}><ReportIcon name="file" /><span>{dataset.name}<small>{dataset.rows.length.toLocaleString(locale)} righe · {dataset.fields.length} campi</small></span></button><button type="button" className="rpt-replace-source" aria-label={language === "en" ? `Replace source ${dataset.name}` : `Sostituisci origine ${dataset.name}`} title={language === "en" ? "Replace file without rebuilding the dashboard" : "Sostituisci il file senza ricreare la dashboard"} onClick={() => { replaceDatasetId.current = dataset.id; replaceFileInput.current?.click(); }}><ReportIcon name="reset" /><span>{language === "en" ? "Replace" : "Sostituisci"}</span></button><button className="rpt-icon-button" aria-label={`Rimuovi origine ${dataset.name}`} onClick={() => removeDataset(dataset)}><ReportIcon name="close" /></button></div>)}</div>}
+          {dashboard.datasets.length > 0 && <div className="rpt-source-list">{dashboard.datasets.map(dataset => <DatasetSourceCard key={dataset.id} dataset={dataset} active={dataset.id === activeDataset?.id} language={language} locale={locale} onSelect={() => { setActiveDatasetId(dataset.id); setDataPage(0); setFilterField(""); }} onAppend={() => { appendDatasetId.current = dataset.id; appendFileInput.current?.click(); }} onReplaceAll={() => { replaceDatasetId.current = dataset.id; replaceFileInput.current?.click(); }} onReplaceFile={source => { replaceDatasetSourceTarget.current = { datasetId: dataset.id, sourceId: source.id }; replaceDatasetSourceInput.current?.click(); }} onRemoveFile={source => confirmRemoveDatasetFile(dataset, source)} onRemoveDataset={() => removeDataset(dataset)} />)}</div>}
           <div className="rpt-panel-heading"><span>CAMPI</span><span className="rpt-small-badge">{activeDataset?.fields.length ?? 0}</span></div>
           <button type="button" className="rpt-add-calculated" disabled={!activeDataset} onClick={() => setCalculatedFieldOpen(true)}><ReportIcon name="calculator" /><span>{language === "en" ? "Create calculated field" : "Crea campo calcolato"}<small>MLSM Formula · {language === "en" ? "manual or AI-assisted" : "manuale o assistito da AI"}</small></span><ReportIcon name="plus" /></button>
           <label className="rpt-search"><ReportIcon name="search" /><input placeholder="Cerca un campo…" aria-label="Cerca campi" value={fieldSearch} onChange={event => setFieldSearch(event.target.value)} /></label>
@@ -414,7 +494,7 @@ export function ReportsWorkspace({ onHome, viewDashboardId = null, onOpenViewer 
             {dashboard.filters.length ? <div className="rpt-filter-editor-list">{dashboard.filters.map(filter => <FilterEditor key={filter.id} dashboard={dashboard} filter={filter} onPatch={patch => { change(current => ({ ...current, filters: current.filters.map(item => item.id === filter.id ? { ...item, ...patch } : item) })); if (Object.hasOwn(patch, "defaultValue")) setActiveFilterValues(current => ({ ...current, [filter.id]: patch.defaultValue ?? null })); }} onDelete={() => { change(current => ({ ...current, filters: current.filters.filter(item => item.id !== filter.id) })); setActiveFilterValues(current => { const next = { ...current }; delete next[filter.id]; return next; }); }} />)}</div> : <p className="rpt-filter-menu-empty">Non ci sono filtri. Creane uno scegliendo un campo dell’origine attiva.</p>}
           </section>}
           <div className="rpt-canvas-scroll">
-            {view === "data" && activeDataset ? <div className="rpt-data-preview"><div><span className="rpt-eyebrow">ORIGINE DATI</span><h2>{activeDataset.name}</h2><p>{activeDataset.sourceName} · {activeDataset.rows.length.toLocaleString(locale)} {language === "en" ? "rows" : "righe"}</p></div><div className="rpt-table-wrap"><table className="rpt-data-table"><thead><tr>{activeDataset.fields.map(field => <th key={field.id} className={field.calculated ? "is-calculated" : ""} title={field.calculated?.formula}><small>{field.calculated ? "ƒx" : fieldSymbols[field.type]}</small> {field.name}{field.calculated && <em>MLSM Formula</em>}</th>)}</tr></thead><tbody>{activeDataset.rows.slice(dataPage * 50, (dataPage + 1) * 50).map((row, index) => <tr key={index}>{activeDataset.fields.map(field => <td key={field.id} className={field.calculated ? "is-calculated" : ""}>{row[field.id] === null ? "—" : String(row[field.id] ?? "")}</td>)}</tr>)}</tbody></table></div><div className="rpt-table-footer"><span>{language === "en" ? "Page" : "Pagina"} {dataPage + 1} {language === "en" ? "of" : "di"} {Math.max(1, Math.ceil(activeDataset.rows.length / 50))}</span><button className="rpt-button" disabled={!dataPage} onClick={() => setDataPage(page => page - 1)}>{language === "en" ? "Previous" : "Precedente"}</button><button className="rpt-button" disabled={(dataPage + 1) * 50 >= activeDataset.rows.length} onClick={() => setDataPage(page => page + 1)}>{language === "en" ? "Next" : "Successiva"}</button></div></div> : <>
+            {view === "data" && activeDataset ? <div className="rpt-data-preview"><div><span className="rpt-eyebrow">ORIGINE DATI</span><h2>{activeDataset.name}</h2><p>{activeDataset.sources.length.toLocaleString(locale)} {language === "en" ? (activeDataset.sources.length === 1 ? "file" : "files") : "file"} · {activeDataset.rows.length.toLocaleString(locale)} {language === "en" ? "rows" : "righe"}</p></div><div className="rpt-table-wrap"><table className="rpt-data-table"><thead><tr>{activeDataset.fields.map(field => <th key={field.id} className={field.calculated ? "is-calculated" : ""} title={field.calculated?.formula}><small>{field.calculated ? "ƒx" : fieldSymbols[field.type]}</small> {field.name}{field.calculated && <em>MLSM Formula</em>}</th>)}</tr></thead><tbody>{activeDataset.rows.slice(dataPage * 50, (dataPage + 1) * 50).map((row, index) => <tr key={index}>{activeDataset.fields.map(field => <td key={field.id} className={field.calculated ? "is-calculated" : ""}>{row[field.id] === null ? "—" : String(row[field.id] ?? "")}</td>)}</tr>)}</tbody></table></div><div className="rpt-table-footer"><span>{language === "en" ? "Page" : "Pagina"} {dataPage + 1} {language === "en" ? "of" : "di"} {Math.max(1, Math.ceil(activeDataset.rows.length / 50))}</span><button className="rpt-button" disabled={!dataPage} onClick={() => setDataPage(page => page - 1)}>{language === "en" ? "Previous" : "Precedente"}</button><button className="rpt-button" disabled={(dataPage + 1) * 50 >= activeDataset.rows.length} onClick={() => setDataPage(page => page + 1)}>{language === "en" ? "Next" : "Successiva"}</button></div></div> : <>
               <DashboardTabBar dashboard={dashboard} activeTabId={activeTab?.id ?? ""} editable={!preview} onSelect={selectTab} onAdd={addTab} />
               {activeFilters.length > 0 && <div className="rpt-filter-bar"><ReportIcon name="filter" />{activeFilters.map(filter => <FilterControl key={filter.id} dashboard={dashboard} filter={filter} onChange={value => setActiveFilterValues(current => ({ ...current, [filter.id]: value }))} />)}</div>}
               {!activeTabWidgets.length ? <div className="rpt-empty" onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); if (event.dataTransfer.files.length) void addFiles(Array.from(event.dataTransfer.files)); }}>

@@ -1,5 +1,5 @@
 import Papa from "papaparse";
-import { createDashboard, createWidget, reportId, type CellValue, type FieldType, type ReportDashboard, type ReportDataset, type ReportField } from "./types";
+import { createDashboard, createWidget, reportId, type CellValue, type FieldType, type ReportDashboard, type ReportDataset, type ReportDatasetSource, type ReportField } from "./types";
 import type { UiLanguage } from "../services/ui-preferences";
 import { materializeCalculatedFields } from "./calculated-fields";
 
@@ -84,7 +84,8 @@ function tableDataset(table: unknown[][], sourceName: string, name = sourceName.
     return { id: `field-${index + 1}`, name, type: forceText ? "text" as const : inferType(values.map(row => row[index])) };
   });
   const rows = values.map(row => Object.fromEntries(fields.map((field, index) => [field.id, convertCell(row[index], field.type)])));
-  return { id: reportId(), name: name || "Dati importati", sourceName, fields, rows };
+  const datasetName = name || "Dati importati";
+  return { id: reportId(), name: datasetName, sourceName, fields, rows, sources: [{ id: reportId(), fileName: sourceName, sheetName: datasetName, importedAt: new Date().toISOString(), rowCount: rows.length }] };
 }
 
 export function parseTextDataset(text: string, sourceName: string): ReportDataset {
@@ -224,6 +225,99 @@ export function selectReplacementDataset(previous: ReportDataset, candidates: Re
   if (!candidates.length) fail("Il file sostitutivo non contiene origini dati valide.");
   if (candidates.length === 1) return candidates[0]!;
   return candidates.find(candidate => normalizedFieldName(candidate.name) === normalizedFieldName(previous.name)) ?? candidates[0]!;
+}
+
+function sourceFileKey(value: string): string {
+  return value.normalize("NFKC").trim().toLocaleLowerCase();
+}
+
+function combinedSourceName(sources: ReportDatasetSource[]): string {
+  if (sources.length === 1) return sources[0]!.fileName;
+  const names = sources.map(source => source.fileName).join(" + ");
+  return names.length <= 500 ? names : `${sources.length} file combinati`;
+}
+
+function ensureCombinedDatasetLimits(rowCount: number, fieldCount: number): void {
+  if (rowCount > REPORT_LIMITS.rows) fail(`Il dataset combinato supererebbe il limite di ${REPORT_LIMITS.rows.toLocaleString("it-IT")} righe.`);
+  if (rowCount * fieldCount > REPORT_LIMITS.cells) fail(`Il dataset combinato supererebbe il limite di ${REPORT_LIMITS.cells.toLocaleString("it-IT")} celle.`);
+}
+
+function compatibleCell(value: CellValue, targetType: FieldType, fieldName: string): CellValue {
+  if (value === null) return null;
+  if (targetType === "text") return String(value);
+  if (targetType === "number") {
+    const converted = asNumber(value);
+    if (converted === null) fail(`La colonna “${fieldName}” contiene un valore non numerico.`);
+    return converted;
+  }
+  if (targetType === "boolean") {
+    if (typeof value === "boolean") return value;
+    if (typeof value === "string" && /^(true|false)$/i.test(value.trim())) return value.trim().toLowerCase() === "true";
+    fail(`La colonna “${fieldName}” contiene un valore non booleano.`);
+  }
+  const dateValue = String(value).trim();
+  if (!isReportDate(dateValue)) fail(`La colonna “${fieldName}” contiene una data non valida.`);
+  return dateValue;
+}
+
+function mapRowsToExactSchema(previous: ReportDataset, incoming: ReportDataset): Record<string, CellValue>[] {
+  const targetFields = previous.fields.filter(field => !field.calculated);
+  const incomingFields = incoming.fields.filter(field => !field.calculated);
+  const incomingByName = new Map(incomingFields.map(field => [normalizedFieldName(field.name), field]));
+  const targetNames = new Set(targetFields.map(field => normalizedFieldName(field.name)));
+  const missing = targetFields.filter(field => !incomingByName.has(normalizedFieldName(field.name))).map(field => field.name);
+  const extra = incomingFields.filter(field => !targetNames.has(normalizedFieldName(field.name))).map(field => field.name);
+  if (targetFields.length !== incomingFields.length || missing.length || extra.length) {
+    const details = [missing.length ? `mancanti: ${missing.join(", ")}` : "", extra.length ? `in più: ${extra.join(", ")}` : ""].filter(Boolean).join(" · ");
+    fail(`Il file deve avere esattamente le stesse colonne del dataset${details ? ` (${details})` : ""}.`);
+  }
+  return incoming.rows.map(row => Object.fromEntries(previous.fields.map(field => {
+    if (field.calculated) return [field.id, null];
+    const incomingField = incomingByName.get(normalizedFieldName(field.name))!;
+    return [field.id, compatibleCell(row[incomingField.id] ?? null, field.type, field.name)];
+  })));
+}
+
+function incomingSource(incoming: ReportDataset, id = incoming.sources[0]?.id ?? reportId()): ReportDatasetSource {
+  const source = incoming.sources[0];
+  return { id, fileName: source?.fileName ?? incoming.sourceName, sheetName: source?.sheetName ?? incoming.name, importedAt: new Date().toISOString(), rowCount: incoming.rows.length };
+}
+
+export interface DatasetSourceMutationResult { dataset: ReportDataset; source: ReportDatasetSource }
+
+export function appendDatasetSource(previous: ReportDataset, incoming: ReportDataset): DatasetSourceMutationResult {
+  const source = incomingSource(incoming);
+  if (previous.sources.some(item => sourceFileKey(item.fileName) === sourceFileKey(source.fileName))) fail(`Il file “${source.fileName}” è già presente nel dataset. Sostituiscilo invece di aggiungerlo di nuovo.`);
+  const appendedRows = mapRowsToExactSchema(previous, incoming);
+  ensureCombinedDatasetLimits(previous.rows.length + appendedRows.length, previous.fields.length);
+  const sources = [...previous.sources, source];
+  const dataset = materializeCalculatedFields({ ...previous, sourceName: combinedSourceName(sources), rows: [...previous.rows, ...appendedRows], sources });
+  return { dataset, source };
+}
+
+export function replaceDatasetSource(previous: ReportDataset, sourceId: string, incoming: ReportDataset): DatasetSourceMutationResult {
+  const sourceIndex = previous.sources.findIndex(source => source.id === sourceId);
+  if (sourceIndex < 0) fail("Il file da sostituire non è più presente nel dataset.");
+  const replacement = incomingSource(incoming, sourceId);
+  if (previous.sources.some((source, index) => index !== sourceIndex && sourceFileKey(source.fileName) === sourceFileKey(replacement.fileName))) fail(`Il file “${replacement.fileName}” è già presente nel dataset.`);
+  const replacementRows = mapRowsToExactSchema(previous, incoming);
+  const rowOffset = previous.sources.slice(0, sourceIndex).reduce((sum, source) => sum + source.rowCount, 0);
+  const oldRowCount = previous.sources[sourceIndex]!.rowCount;
+  const rows = [...previous.rows.slice(0, rowOffset), ...replacementRows, ...previous.rows.slice(rowOffset + oldRowCount)];
+  ensureCombinedDatasetLimits(rows.length, previous.fields.length);
+  const sources = previous.sources.map((source, index) => index === sourceIndex ? replacement : source);
+  return { dataset: materializeCalculatedFields({ ...previous, sourceName: combinedSourceName(sources), rows, sources }), source: replacement };
+}
+
+export function removeDatasetSource(previous: ReportDataset, sourceId: string): ReportDataset {
+  if (previous.sources.length <= 1) fail("Un dataset deve contenere almeno un file. Per rimuovere l’ultimo file elimina l’intera origine dati.");
+  const sourceIndex = previous.sources.findIndex(source => source.id === sourceId);
+  if (sourceIndex < 0) fail("Il file da rimuovere non è più presente nel dataset.");
+  const rowOffset = previous.sources.slice(0, sourceIndex).reduce((sum, source) => sum + source.rowCount, 0);
+  const rowCount = previous.sources[sourceIndex]!.rowCount;
+  const sources = previous.sources.filter(source => source.id !== sourceId);
+  const rows = [...previous.rows.slice(0, rowOffset), ...previous.rows.slice(rowOffset + rowCount)];
+  return materializeCalculatedFields({ ...previous, sourceName: combinedSourceName(sources), rows, sources });
 }
 
 export function createDemoDashboard(language: UiLanguage = "it"): ReportDashboard {

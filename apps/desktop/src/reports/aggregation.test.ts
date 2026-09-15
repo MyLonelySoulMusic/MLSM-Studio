@@ -4,6 +4,7 @@ import { createWidget, type ReportDataset, type ReportFilter, type ReportWidget 
 
 const dataset: ReportDataset = {
   id: "sales", name: "Vendite", sourceName: "sales.csv",
+  sources: [{ id: "source-sales", fileName: "sales.csv", sheetName: "Vendite", importedAt: "2026-01-01T00:00:00.000Z", rowCount: 5 }],
   fields: [{ id: "region", name: "Regione", type: "text" }, { id: "sales", name: "Ricavi", type: "number" }, { id: "cost", name: "Costi", type: "number" }, { id: "date", name: "Data", type: "date" }],
   rows: [
     { region: "Nord", sales: 20, cost: 7, date: "2026-03-01" },
@@ -77,6 +78,7 @@ describe("report aggregation", () => {
   it("includes every category by default and limits only when explicitly configured", () => {
     const manyCategories: ReportDataset = {
       id: "many", name: "Categorie", sourceName: "categorie.csv",
+      sources: [{ id: "source-categories", fileName: "categorie.csv", sheetName: "Categorie", importedAt: "2026-01-01T00:00:00.000Z", rowCount: 18 }],
       fields: [{ id: "category", name: "Categoria", type: "text" }, { id: "value", name: "Valore", type: "number" }],
       rows: Array.from({ length: 18 }, (_, index) => ({ category: `Categoria ${index + 1}`, value: index + 1 })),
     };
@@ -98,6 +100,7 @@ describe("report aggregation", () => {
 
     const numericDataset: ReportDataset = {
       id: "numeric-axis", name: "Numeri", sourceName: "numeric.csv",
+      sources: [{ id: "source-numeric", fileName: "numeric.csv", sheetName: "Numeri", importedAt: "2026-01-01T00:00:00.000Z", rowCount: 4 }],
       fields: [{ id: "bucket", name: "Fascia", type: "number" }, { id: "amount", name: "Importo", type: "number" }],
       rows: [{ bucket: 10, amount: 1 }, { bucket: 2, amount: 1 }, { bucket: 1, amount: 1 }, { bucket: 20, amount: 1 }],
     };
@@ -124,6 +127,7 @@ describe("report aggregation", () => {
   it("recognizes YYYY-MM text periods and orders them chronologically despite legacy value sorting", () => {
     const monthly: ReportDataset = {
       id: "monthly", name: "Mensile", sourceName: "monthly.csv",
+      sources: [{ id: "source-monthly", fileName: "monthly.csv", sheetName: "Mensile", importedAt: "2026-01-01T00:00:00.000Z", rowCount: 6 }],
       fields: [{ id: "month", name: "Sale Month", type: "text" }, { id: "revenue", name: "Revenue", type: "number" }],
       rows: [
         { month: "2026-04", revenue: 1 },

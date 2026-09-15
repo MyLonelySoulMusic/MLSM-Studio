@@ -7,6 +7,7 @@ afterEach(cleanup);
 
 const dataset: ReportDataset = {
   id: "source", name: "Campagna", sourceName: "campagna.csv",
+  sources: [{ id: "source-campaign", fileName: "campagna.csv", sheetName: "Campagna", importedAt: "2026-01-01T00:00:00.000Z", rowCount: 3 }],
   fields: [{ id: "city", name: "Città", type: "text" }, { id: "value", name: "Valore", type: "number" }],
   rows: [{ city: "Milano", value: 10 }, { city: "Roma", value: 20 }, { city: "Torino", value: 30 }],
 };
@@ -69,6 +70,7 @@ describe("Reports widget views", () => {
   it("renders a pivot table with month buckets and totals", () => {
     const pivotDataset: ReportDataset = {
       id: "pivot-source", name: "Vendite", sourceName: "vendite.csv",
+      sources: [{ id: "source-pivot", fileName: "vendite.csv", sheetName: "Vendite", importedAt: "2026-01-01T00:00:00.000Z", rowCount: 3 }],
       fields: [
         { id: "date", name: "Data", type: "date" },
         { id: "channel", name: "Canale", type: "text" },

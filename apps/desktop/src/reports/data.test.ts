@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as XLSX from "xlsx";
-import { createDemoDashboard, importReportFile, parseTextDataset, reconcileReplacementDataset, REPORT_LIMITS, selectReplacementDataset } from "./data";
+import { appendDatasetSource, createDemoDashboard, importReportFile, parseTextDataset, reconcileReplacementDataset, removeDatasetSource, replaceDatasetSource, REPORT_LIMITS, selectReplacementDataset } from "./data";
 import { createCalculatedField } from "./calculated-fields";
 
 describe("Reports file import", () => {
@@ -102,6 +102,68 @@ describe("Reports file import", () => {
 
     expect(result.dataset.fields.at(-1)).toMatchObject({ id: "unit-price", calculated: { formula: "[Revenue] / [Units]" } });
     expect(result.dataset.rows[0]?.["unit-price"]).toBe(25);
+  });
+
+  it("appends files with the same columns while preserving stable field IDs and source order", () => {
+    const previous = parseTextDataset("Date,Region,Revenue\n2026-01-01,EU,10", "january.csv");
+    const incoming = parseTextDataset("Revenue,Region,Date\n20,US,2026-02-01\n30,EU,2026-02-02", "february.csv");
+
+    const result = appendDatasetSource(previous, incoming);
+
+    expect(result.dataset.id).toBe(previous.id);
+    expect(result.dataset.fields).toEqual(previous.fields);
+    expect(result.dataset.sources.map(source => [source.fileName, source.rowCount])).toEqual([
+      ["january.csv", 1], ["february.csv", 2],
+    ]);
+    expect(result.dataset.rows).toEqual([
+      { "field-1": "2026-01-01", "field-2": "EU", "field-3": 10 },
+      { "field-1": "2026-02-01", "field-2": "US", "field-3": 20 },
+      { "field-1": "2026-02-02", "field-2": "EU", "field-3": 30 },
+    ]);
+  });
+
+  it("rejects duplicate filenames and files whose physical columns do not match", () => {
+    const previous = parseTextDataset("Date,Region,Revenue\n2026-01-01,EU,10", "sales.csv");
+    const duplicate = parseTextDataset("Date,Region,Revenue\n2026-02-01,US,20", " SALES.CSV ");
+    const incompatible = parseTextDataset("Date,Region,Units\n2026-02-01,US,2", "units.csv");
+
+    expect(() => appendDatasetSource(previous, duplicate)).toThrow(/già presente/);
+    expect(() => appendDatasetSource(previous, incompatible)).toThrow(/stesse colonne.*mancanti: Revenue.*in più: Units/);
+  });
+
+  it("replaces and removes a single file without touching rows from the other files", () => {
+    const january = parseTextDataset("Date,Region,Revenue\n2026-01-01,EU,10", "january.csv");
+    const february = parseTextDataset("Date,Region,Revenue\n2026-02-01,US,20\n2026-02-02,EU,30", "february.csv");
+    const combined = appendDatasetSource(january, february).dataset;
+    const februarySourceId = combined.sources[1]!.id;
+    const replacement = parseTextDataset("Region,Revenue,Date\nAPAC,40,2026-03-01", "march.csv");
+
+    const replaced = replaceDatasetSource(combined, februarySourceId, replacement).dataset;
+    expect(replaced.sources.map(source => [source.id, source.fileName, source.rowCount])).toEqual([
+      [combined.sources[0]!.id, "january.csv", 1], [februarySourceId, "march.csv", 1],
+    ]);
+    expect(replaced.rows).toEqual([
+      { "field-1": "2026-01-01", "field-2": "EU", "field-3": 10 },
+      { "field-1": "2026-03-01", "field-2": "APAC", "field-3": 40 },
+    ]);
+
+    const removed = removeDatasetSource(replaced, replaced.sources[0]!.id);
+    expect(removed.sources.map(source => source.fileName)).toEqual(["march.csv"]);
+    expect(removed.rows).toEqual([{ "field-1": "2026-03-01", "field-2": "APAC", "field-3": 40 }]);
+    expect(() => removeDatasetSource(removed, removed.sources[0]!.id)).toThrow(/ultimo file/);
+  });
+
+  it("recalculates row and aggregate calculated fields after source mutations", () => {
+    const base = parseTextDataset("Revenue,Units\n100,10", "base.csv");
+    const withRowFormula = createCalculatedField(base, { id: "unit-price", name: "Unit price", formula: "[Revenue] / [Units]" });
+    const incoming = parseTextDataset("Units,Revenue\n20,500", "more.csv");
+
+    const appended = appendDatasetSource(withRowFormula, incoming).dataset;
+    expect(appended.rows.map(row => row["unit-price"])).toEqual([10, 25]);
+
+    const replacement = parseTextDataset("Revenue,Units\n900,30", "replacement.csv");
+    const replaced = replaceDatasetSource(appended, appended.sources[1]!.id, replacement).dataset;
+    expect(replaced.rows.map(row => row["unit-price"])).toEqual([10, 30]);
   });
 
   it("selects the matching Excel sheet when a file contains multiple datasets", () => {

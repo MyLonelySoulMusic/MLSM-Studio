@@ -1,6 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { isReportDate, REPORT_LIMITS } from "./data";
-import { DEFAULT_MAP_BACKGROUND, reportId, type CellValue, type ReportDashboard, type ReportDataset, type ReportField, type ReportFilter, type ReportLayoutRow, type ReportTab, type ReportWidget } from "./types";
+import { DEFAULT_MAP_BACKGROUND, reportId, type CellValue, type ReportDashboard, type ReportDataset, type ReportDatasetSource, type ReportField, type ReportFilter, type ReportLayoutRow, type ReportTab, type ReportWidget } from "./types";
 import { materializeCalculatedFields } from "./calculated-fields";
 
 const DATABASE_NAME = "mlsm-studio-reports";
@@ -70,7 +70,7 @@ function date(value: unknown, label: string): string {
 }
 
 function dataset(value: unknown): ReportDataset {
-  const data = object(value, ["id", "name", "sourceName", "fields", "rows"], "dataset");
+  const data = object(value, ["id", "name", "sourceName", "fields", "rows", "sources"], "dataset");
   const fields: ReportField[] = array(data.fields, REPORT_LIMITS.fields, "campi").map(value => {
     const field = object(value, ["id", "name", "type", "calculated"], "campo", ["calculated"]);
     const calculated = field.calculated === undefined ? undefined : object(field.calculated, ["formula", "description"], "definizione campo calcolato");
@@ -99,8 +99,17 @@ function dataset(value: unknown): ReportDataset {
       return [field.id, cell as CellValue];
     }));
   });
+  const sources: ReportDatasetSource[] = array(data.sources, REPORT_LIMITS.rows, "file del dataset").map(value => {
+    const source = object(value, ["id", "fileName", "sheetName", "importedAt", "rowCount"], "file del dataset");
+    if (typeof source.rowCount !== "number" || !Number.isInteger(source.rowCount) || source.rowCount < 0 || source.rowCount > REPORT_LIMITS.rows) invalid("il numero di righe di un file del dataset non è valido.");
+    return { id: id(source.id, "ID file del dataset"), fileName: string(source.fileName, "nome file del dataset", 500), sheetName: string(source.sheetName, "foglio del dataset", 300), importedAt: date(source.importedAt, "data importazione file"), rowCount: source.rowCount };
+  });
+  if (!sources.length) invalid("un dataset deve contenere almeno un file sorgente.");
+  unique(sources.map(source => source.id), "file del dataset");
+  if (new Set(sources.map(source => source.fileName.normalize("NFKC").trim().toLocaleLowerCase())).size !== sources.length) invalid("i file di un dataset devono avere nomi univoci.");
+  if (sources.reduce((sum, source) => sum + source.rowCount, 0) !== rows.length) invalid("la somma delle righe dei file non coincide con le righe del dataset.");
   try {
-    return materializeCalculatedFields({ id: id(data.id, "ID dataset"), name: string(data.name, "nome dataset"), sourceName: string(data.sourceName, "nome del file", 500), fields, rows });
+    return materializeCalculatedFields({ id: id(data.id, "ID dataset"), name: string(data.name, "nome dataset"), sourceName: string(data.sourceName, "nome del file", 500), fields, rows, sources });
   } catch (error) {
     invalid(error instanceof Error ? error.message : "un campo calcolato non è valido.");
   }
@@ -219,8 +228,19 @@ export function validateDashboard(value: unknown): ReportDashboard {
       widgets: Array.isArray(legacy.widgets) ? legacy.widgets.map(widget => widget && typeof widget === "object" && !Array.isArray(widget) ? { ...widget, xAxisLabel: "", yAxisLabel: "" } : widget) : legacy.widgets,
     };
   }
+  if (candidate && typeof candidate === "object" && !Array.isArray(candidate) && (candidate as JsonObject).schemaVersion === 14) {
+    const legacy = candidate as JsonObject;
+    candidate = {
+      ...legacy,
+      schemaVersion: 15,
+      datasets: Array.isArray(legacy.datasets) ? legacy.datasets.map((dataset, index) => dataset && typeof dataset === "object" && !Array.isArray(dataset) ? {
+        ...dataset,
+        sources: [{ id: `source-${index + 1}`, fileName: String((dataset as JsonObject).sourceName ?? "file-importato"), sheetName: String((dataset as JsonObject).name ?? "Dati importati"), importedAt: legacy.createdAt, rowCount: Array.isArray((dataset as JsonObject).rows) ? ((dataset as JsonObject).rows as unknown[]).length : 0 }],
+      } : dataset) : legacy.datasets,
+    };
+  }
   const data = object(candidate, ["schemaVersion", "id", "name", "description", "createdAt", "updatedAt", "theme", "datasets", "tabs", "layoutRows", "widgets", "filters"], "dashboard");
-  if (data.schemaVersion !== 14) invalid("versione non supportata. Questo programma legge i formati Reports dalla v1 alla v14.");
+  if (data.schemaVersion !== 15) invalid("versione non supportata. Questo programma legge i formati Reports dalla v1 alla v15.");
   const theme = object(data.theme, ["accent", "ink", "paper"], "tema");
   const datasets = array(data.datasets, REPORT_LIMITS.datasets, "dataset").map(dataset);
   unique(datasets.map(item => item.id), "dataset");
@@ -346,7 +366,7 @@ export function validateDashboard(value: unknown): ReportDashboard {
   });
   unique(filters.map(item => item.id), "filtri");
   return {
-    schemaVersion: 14, id: id(data.id, "ID dashboard"), name: string(data.name, "nome dashboard"), description: string(data.description, "descrizione", 5000, true),
+    schemaVersion: 15, id: id(data.id, "ID dashboard"), name: string(data.name, "nome dashboard"), description: string(data.description, "descrizione", 5000, true),
     createdAt: date(data.createdAt, "data di creazione"), updatedAt: date(data.updatedAt, "data di modifica"),
     theme: { accent: color(theme.accent, "colore principale"), ink: color(theme.ink, "colore testo"), paper: color(theme.paper, "colore sfondo") },
     datasets, tabs, layoutRows, widgets, filters,

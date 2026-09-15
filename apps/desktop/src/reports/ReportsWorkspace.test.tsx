@@ -67,7 +67,7 @@ describe("ReportsWorkspace", () => {
 
     expect(screen.getByRole("heading", { name: "MLSM · Audience & crescita" })).toBeInTheDocument();
     expect(screen.getByText("Performance dei canali")).toBeInTheDocument();
-    expect(screen.getByText("18 righe · 5 campi")).toBeInTheDocument();
+    expect(screen.getByText("18 righe · 5 campi · 1 file")).toBeInTheDocument();
     expect(screen.getAllByText(/5 widget/).length).toBeGreaterThan(0);
     expect(screen.getAllByTestId("report-widget-preview")).toHaveLength(5);
     expect(screen.getByText("Modifiche da salvare")).toBeInTheDocument();
@@ -126,7 +126,7 @@ describe("ReportsWorkspace", () => {
     await renderReports();
     fireEvent.click(screen.getByRole("button", { name: /Esplora un esempio/ }));
 
-    fireEvent.click(screen.getByRole("button", { name: "Sostituisci origine Performance dei canali" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sostituisci intera origine Performance dei canali" }));
     const replacement = new File([
       "Ricavi,Canale,Mese,Visualizzazioni,Regione\n2200,Instagram,2026-07-01,88000,Europa\n1750,YouTube,2026-07-01,64000,Europa",
     ], "aggiornato.csv", { type: "text/csv" });
@@ -134,7 +134,7 @@ describe("ReportsWorkspace", () => {
 
     await waitFor(() => expect(screen.getByText(/Origine sostituita/)).toBeInTheDocument());
     expect(screen.getByText("aggiornato")).toBeInTheDocument();
-    expect(screen.getByText("2 righe · 6 campi")).toBeInTheDocument();
+    expect(screen.getByText("2 righe · 6 campi · 1 file")).toBeInTheDocument();
     expect(screen.getAllByTestId("report-widget-preview")).toHaveLength(5);
 
     fireEvent.click(screen.getByRole("button", { name: "Salva dashboard" }));
@@ -147,6 +147,46 @@ describe("ReportsWorkspace", () => {
     expect(dataset.fields.find((field: { name: string }) => field.name === "Interazioni")?.id).toBe("field-4");
     expect(dataset.rows.every((row: Record<string, unknown>) => row["field-4"] === null)).toBe(true);
     expect(savedDashboard.widgets.every((widget: { datasetId: string }) => widget.datasetId === dataset.id)).toBe(true);
+  });
+
+  it("appende, sostituisce e rimuove singoli file rigenerando il dataset combinato", async () => {
+    await renderReports();
+    fireEvent.click(screen.getByRole("button", { name: /Esplora un esempio/ }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Aggiungi file a Performance dei canali" }));
+    const july = new File([
+      "Mese,Canale,Visualizzazioni,Interazioni,Ricavi\n2026-07-01,Instagram,88000,7600,3400\n2026-07-01,YouTube,64000,5400,2700",
+    ], "luglio.csv", { type: "text/csv" });
+    fireEvent.change(screen.getByLabelText("Scegli file da aggiungere al dataset"), { target: { files: [july] } });
+
+    await waitFor(() => expect(screen.getByText(/luglio\.csv aggiunto/)).toBeInTheDocument());
+    expect(screen.getByText("20 righe · 5 campi · 2 file")).toBeInTheDocument();
+    expect(screen.getByText("MLSM-demo.csv")).toBeInTheDocument();
+    expect(screen.getByText("luglio.csv")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Sostituisci file luglio.csv" }));
+    const august = new File([
+      "Ricavi,Interazioni,Visualizzazioni,Canale,Mese\n4100,8200,93000,Instagram,2026-08-01",
+    ], "agosto.csv", { type: "text/csv" });
+    fireEvent.change(screen.getByLabelText("Scegli sostituto del file nel dataset"), { target: { files: [august] } });
+
+    await waitFor(() => expect(screen.getByText(/agosto\.csv sostituito/)).toBeInTheDocument());
+    expect(screen.getByText("19 righe · 5 campi · 2 file")).toBeInTheDocument();
+    expect(screen.queryByText("luglio.csv")).not.toBeInTheDocument();
+    expect(screen.getByText("agosto.csv")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Rimuovi file agosto.csv" }));
+    const confirmation = screen.getByRole("alertdialog");
+    expect(confirmation).toHaveTextContent("Sarà rimossa 1 riga");
+    fireEvent.click(within(confirmation).getByRole("button", { name: "Rimuovi file" }));
+
+    expect(screen.getByText("18 righe · 5 campi · 1 file")).toBeInTheDocument();
+    expect(screen.queryByText("agosto.csv")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Salva dashboard" }));
+    await waitFor(() => expect(reportMocks.saveDashboard).toHaveBeenCalledOnce());
+    expect(reportMocks.saveDashboard.mock.calls[0]![0].datasets[0].sources).toEqual([
+      expect.objectContaining({ fileName: "MLSM-demo.csv", rowCount: 18 }),
+    ]);
   });
 
   it("aggiunge un widget alla dashboard e lo seleziona nell'inspector", async () => {

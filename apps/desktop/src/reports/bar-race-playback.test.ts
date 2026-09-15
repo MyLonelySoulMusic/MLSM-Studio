@@ -4,6 +4,7 @@ import type { BarRaceAnimation, ReportDataset } from "./types";
 
 const dataset: ReportDataset = {
   id: "sales", name: "Vendite", sourceName: "sales.csv",
+  sources: [{ id: "source-sales", fileName: "sales.csv", sheetName: "Vendite", importedAt: "2026-01-01T00:00:00.000Z", rowCount: 5 }],
   fields: [
     { id: "date", name: "Data", type: "date" },
     { id: "group", name: "Gruppo", type: "text" },

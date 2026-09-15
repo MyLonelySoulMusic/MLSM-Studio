@@ -16,6 +16,7 @@ import { saveReportsAiSettings, suggestCalculatedField } from "./reports-ai";
 
 const dataset: ReportDataset = {
   id: "sales", name: "Sales", sourceName: "sales.csv",
+  sources: [{ id: "source-sales", fileName: "sales.csv", sheetName: "Sales", importedAt: "2026-01-01T00:00:00.000Z", rowCount: 1 }],
   fields: [{ id: "revenue", name: "Revenue", type: "number" }, { id: "customer", name: "Customer", type: "text" }],
   rows: [{ revenue: 100, customer: "A" }],
 };

@@ -5,6 +5,7 @@ import { createWidget, type ReportDataset } from "./types";
 
 const dataset: ReportDataset = {
   id: "sales", name: "Sales", sourceName: "sales.csv",
+  sources: [{ id: "source-sales", fileName: "sales.csv", sheetName: "Sales", importedAt: "2026-01-01T00:00:00.000Z", rowCount: 3 }],
   fields: [
     { id: "region", name: "Region", type: "text" },
     { id: "revenue", name: "Revenue", type: "number" },

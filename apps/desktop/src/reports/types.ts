@@ -5,7 +5,8 @@ export type CellValue = string | number | boolean | null;
 export type FieldType = "text" | "number" | "date" | "boolean";
 export interface CalculatedFieldDefinition { formula: string; description: string }
 export interface ReportField { id: string; name: string; type: FieldType; calculated?: CalculatedFieldDefinition }
-export interface ReportDataset { id: string; name: string; sourceName: string; fields: ReportField[]; rows: Record<string, CellValue>[] }
+export interface ReportDatasetSource { id: string; fileName: string; sheetName: string; importedAt: string; rowCount: number }
+export interface ReportDataset { id: string; name: string; sourceName: string; fields: ReportField[]; rows: Record<string, CellValue>[]; sources: ReportDatasetSource[] }
 export type WidgetType = "kpi" | "bar" | "column" | "line" | "area" | "doughnut" | "scatter" | "map" | "table" | "pivot" | "text";
 export type Aggregation = "sum" | "avg" | "count" | "distinct" | "median" | "min" | "max" | "range" | "variance" | "stddev";
 export type CurrencyCode = "EUR" | "USD" | "GBP" | "CHF" | "JPY" | "CAD" | "AUD";
@@ -53,7 +54,7 @@ export interface ReportWidget {
 export interface ReportFilter { id: string; datasetId: string; fieldId: string; value: string | null; defaultValue: string | null; includeAll: boolean; targetMode: "all" | "selected"; widgetIds: string[] }
 export interface ReportTheme { accent: string; ink: string; paper: string }
 export interface ReportDashboard {
-  schemaVersion: 14; id: string; name: string; description: string;
+  schemaVersion: 15; id: string; name: string; description: string;
   createdAt: string; updatedAt: string;
   theme: ReportTheme; datasets: ReportDataset[]; tabs: ReportTab[]; layoutRows: ReportLayoutRow[]; widgets: ReportWidget[]; filters: ReportFilter[];
 }
@@ -79,7 +80,7 @@ export function defaultDashboardName(language: UiLanguage = "it"): string { retu
 export function createDashboard(name?: string, language: UiLanguage = "it"): ReportDashboard {
   const now = new Date().toISOString();
   const tabId = reportId();
-  return { schemaVersion: 14, id: reportId(), name: name ?? defaultDashboardName(language), description: "", createdAt: now, updatedAt: now,
+  return { schemaVersion: 15, id: reportId(), name: name ?? defaultDashboardName(language), description: "", createdAt: now, updatedAt: now,
     theme: { ...DEFAULT_REPORT_THEME }, datasets: [], tabs: [{ id: tabId, name: language === "en" ? "Page 1" : "Pagina 1" }], layoutRows: [{ id: reportId(), tabId, columns: null }], widgets: [], filters: [] };
 }
 export function createWidget(type: WidgetType, dataset?: ReportDataset, rowId = "", language: UiLanguage = "it"): ReportWidget {
