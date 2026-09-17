@@ -1104,6 +1104,100 @@ def run_checked(
         raise RuntimeError(f"ffmpeg ha restituito un errore: {detail or 'nessun dettaglio disponibile'}")
 
 
+def _ffmpeg_timestamp_seconds(value: str) -> float | None:
+    """Parse the HH:MM:SS.microseconds timestamp emitted by ``ffmpeg -progress``."""
+    try:
+        hours, minutes, seconds = value.strip().split(":", 2)
+        parsed = int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) and parsed >= 0 else None
+
+
+def run_checked_with_progress(
+    command: list[str], duration_seconds: float,
+    *, cancelled: Callable[[], bool],
+    on_progress: Callable[[float, float, float | None], None],
+    timeout: int = INTERPOLATION_TIMEOUT_SECONDS,
+) -> None:
+    """Run FFmpeg while consuming machine-readable progress on every platform.
+
+    A reader thread is used instead of ``select`` because Windows cannot select
+    subprocess pipes. Stderr is merged into the same bounded diagnostic stream,
+    so FFmpeg can never deadlock on a full pipe during a long 4K/8K encode.
+    """
+    if cancelled():
+        raise InterruptedError("Job annullato prima dell'avvio di ffmpeg")
+    progress_command = [*command[:-1], "-progress", "pipe:1", "-nostats", command[-1]]
+    process = subprocess.Popen(
+        progress_command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, encoding="utf-8", errors="replace", bufsize=1,
+    )
+    _register_service_process(process)
+    messages: queue.Queue[str | None] = queue.Queue()
+    output_tail: list[str] = []
+
+    def read_output() -> None:
+        try:
+            if process.stdout is not None:
+                for line in process.stdout:
+                    messages.put(line)
+        finally:
+            messages.put(None)
+
+    reader = threading.Thread(target=read_output, name="mlsm-ffmpeg-progress", daemon=True)
+    reader.start()
+    started = time.monotonic()
+    reader_finished = False
+    last_fraction = -1.0
+    try:
+        while process.poll() is None or not reader_finished:
+            try:
+                line = messages.get(timeout=.25)
+            except queue.Empty:
+                line = ""
+            if line is None:
+                reader_finished = True
+            elif line:
+                stripped = line.strip()
+                output_tail.append(stripped)
+                del output_tail[:-120]
+                seconds = None
+                if stripped.startswith("out_time_us="):
+                    try:
+                        seconds = int(stripped.partition("=")[2]) / 1_000_000
+                    except ValueError:
+                        seconds = None
+                elif stripped.startswith("out_time="):
+                    seconds = _ffmpeg_timestamp_seconds(stripped.partition("=")[2])
+                if seconds is not None and duration_seconds > 0:
+                    fraction = max(0.0, min(1.0, seconds / duration_seconds))
+                    if fraction >= 1 or fraction - last_fraction >= .0025:
+                        elapsed = time.monotonic() - started
+                        remaining = elapsed / fraction * (1 - fraction) if fraction > 0 else None
+                        on_progress(fraction, elapsed, remaining)
+                        last_fraction = fraction
+            if cancelled():
+                _stop_service_process(process, 3)
+                raise InterruptedError("Job annullato durante l'esecuzione di ffmpeg")
+            if time.monotonic() - started >= timeout:
+                _stop_service_process(process, 3)
+                raise RuntimeError("ffmpeg non ha terminato entro il tempo massimo")
+        reader.join(timeout=1)
+        if process.returncode != 0:
+            detail = "\n".join(output_tail).strip()[-900:]
+            raise RuntimeError(f"ffmpeg ha restituito un errore: {detail or 'nessun dettaglio disponibile'}")
+        elapsed = time.monotonic() - started
+        on_progress(1.0, elapsed, 0.0)
+    finally:
+        if process.poll() is None:
+            _stop_service_process(process)
+        reader.join(timeout=1)
+        if process.stdout is not None:
+            process.stdout.close()
+        _unregister_service_process(process)
+
+
 def canvas_enhance(frame: np.ndarray, width: int, height: int) -> np.ndarray:
     resized = cv2.resize(frame, (width, height), interpolation=cv2.INTER_LANCZOS4)
     blurred = cv2.GaussianBlur(resized, (0, 0), 1.05)
@@ -1113,7 +1207,7 @@ def canvas_enhance(frame: np.ndarray, width: int, height: int) -> np.ndarray:
 UPSCALER_ADJUSTMENT_DEFAULTS: dict[str, float] = {
     "exposure": 0.0, "contrast": 0.0, "highlights": 0.0, "shadows": 0.0,
     "whites": 0.0, "blacks": 0.0, "saturation": 0.0, "vibrance": 0.0,
-    "temperature": 0.0, "tint": 0.0, "sharpness": 12.0, "denoise": 0.0,
+    "temperature": 0.0, "tint": 0.0, "sharpness": 0.0, "denoise": 0.0,
 }
 
 
@@ -1496,6 +1590,18 @@ def video_adjustment_filter(
     return ",".join(filters)
 
 
+def video_adjustments_are_neutral(adjustments: dict[str, float]) -> bool:
+    """True when the remote AI output can be muxed without decoding frames."""
+    return all(abs(float(adjustments.get(key, 0.0))) <= 1e-9 for key in UPSCALER_ADJUSTMENT_DEFAULTS)
+
+
+def effective_video_adjustments(job: dict[str, object]) -> dict[str, float]:
+    """Apply video corrections only after the user explicitly enables them."""
+    if not bool(job.get("applyVideoAdjustments", False)):
+        return dict(UPSCALER_ADJUSTMENT_DEFAULTS)
+    return parse_upscaler_adjustments(json.dumps(job.get("adjustments", {})))
+
+
 def canvas_video_filter(width: int, height: int, adjustments: dict[str, float]) -> str:
     """Streaming equivalent of Canvas enhancement and adjustments."""
     return video_adjustment_filter(width, height, adjustments, canvas_enhancement=True)
@@ -1532,7 +1638,7 @@ def process_canvas_video_job(
     total, fps, expected_duration = probe_video_timeline(source)
     width = int(job["width"])
     height = int(job["height"])
-    adjustments = parse_upscaler_adjustments(json.dumps(job.get("adjustments", {})))
+    adjustments = effective_video_adjustments(job)
     quality = str(job.get("quality", "maximum"))
     crf = "14" if quality == "maximum" else "17"
     update_video_job(
@@ -1615,7 +1721,7 @@ def process_remote_segment_video_job(
             raise RuntimeError(f"Checkpoint segmento remoto non valido: {path.name}")
     width = int(job["width"])
     height = int(job["height"])
-    adjustments = parse_upscaler_adjustments(json.dumps(job.get("adjustments", {})))
+    adjustments = effective_video_adjustments(job)
     quality = str(job.get("quality", "maximum"))
     crf = "14" if quality == "maximum" else "17"
     manifest = Path(str(job["tempDirectory"])) / "upscaled-segments.ffconcat"
@@ -1623,23 +1729,59 @@ def process_remote_segment_video_job(
         "ffconcat version 1.0\n" + "\n".join(f"file '{path.as_posix()}'" for path, _ in chunks) + "\n",
         encoding="utf-8",
     )
-    update_video_job(
-        job_id, phase="encoding", phaseLabel="Unione rapida dei segmenti e ripristino audio",
-        progress=.95, currentFrame=total, completedFrames=total, totalFrames=total,
-        completedSegments=len(chunks), totalSegments=len(chunks),
+    geometries = [probe_video_geometry(path) for path, _ in chunks]
+    can_stream_copy = video_adjustments_are_neutral(adjustments) and all(
+        int(geometry["width"]) == width and int(geometry["height"]) == height
+        and np.isclose(float(geometry["sample_aspect_ratio_value"]), 1.0, atol=1e-6)
+        and int(geometry["rotation"]) % 360 == 0
+        for geometry in geometries
     )
-    try:
-        run_checked([
-            *upscaler_ffmpeg_prefix(binary), *upscaler_ffmpeg_codec_threads(),
-            "-safe", "0", "-f", "concat", "-i", str(manifest),
-            *upscaler_ffmpeg_codec_threads(), "-i", str(source),
-            "-map", "0:v:0", "-map", "1:a?", "-map_metadata", "-1",
-            "-vf", video_adjustment_filter(width, height, adjustments),
+    final_stage_label = (
+        "Unione segmenti e ripristino audio"
+        if can_stream_copy else
+        "Applicazione regolazioni e codifica finale"
+        if bool(job.get("applyVideoAdjustments", False)) else
+        "Ridimensionamento e codifica finale"
+    )
+    update_video_job(
+        job_id, phase="encoding", phaseLabel=final_stage_label,
+        progress=.91, currentFrame=total, completedFrames=total, totalFrames=total,
+        completedSegments=len(chunks), totalSegments=len(chunks),
+        estimatedRemainingSeconds=None,
+    )
+
+    def final_progress(fraction: float, _elapsed: float, remaining: float | None) -> None:
+        update_video_job(
+            job_id,
+            phaseLabel=f"{final_stage_label} · {round(fraction * 100)}%",
+            progress=.91 + .08 * fraction,
+            estimatedRemainingSeconds=remaining,
+        )
+
+    common_input = [
+        *upscaler_ffmpeg_prefix(binary), *upscaler_ffmpeg_codec_threads(),
+        "-safe", "0", "-f", "concat", "-i", str(manifest),
+        *upscaler_ffmpeg_codec_threads(), "-i", str(source),
+        "-map", "0:v:0", "-map", "1:a?", "-map_metadata", "-1",
+    ]
+    if can_stream_copy:
+        command = [
+            *common_input, "-c:v", "copy", "-c:a", "copy",
+            "-t", f"{expected_duration:.9f}", "-movflags", "+faststart", str(result_path),
+        ]
+    else:
+        command = [
+            *common_input, "-vf", video_adjustment_filter(width, height, adjustments),
             "-metadata:s:v:0", "rotate=0", "-c:v", "libx264", "-preset", "fast",
             "-crf", crf, "-pix_fmt", "yuv420p", "-fps_mode", "passthrough",
             "-c:a", "aac", "-b:a", "320k", "-t", f"{expected_duration:.9f}",
             "-movflags", "+faststart", *upscaler_ffmpeg_codec_threads(), str(result_path),
-        ], cancelled=lambda: video_job_cancelled(job_id))
+        ]
+    try:
+        run_checked_with_progress(
+            command, expected_duration,
+            cancelled=lambda: video_job_cancelled(job_id), on_progress=final_progress,
+        )
     except InterruptedError:
         update_video_job(
             job_id, phase="cancelled", phaseLabel="Job remoto annullato · segmenti conservati",
@@ -2043,7 +2185,7 @@ def process_video_upscale_job(job_id: str) -> None:
         # retry applichi due volte le stesse correzioni.
         shutil.rmtree(rendered, ignore_errors=True)
         rendered.mkdir(parents=True, exist_ok=True)
-        adjustments_value = parse_upscaler_adjustments(json.dumps(job.get("adjustments", {})))
+        adjustments_value = effective_video_adjustments(job)
         enhanced_frames = sorted(enhanced.glob("frame-*.png"))
         if len(enhanced_frames) != total:
             raise RuntimeError(f"Controllo anti-drop fallito prima delle regolazioni: {len(enhanced_frames)}/{total} frame")
@@ -2289,6 +2431,7 @@ async def create_video_upscale_job(
     tile: int = Form(256), width: int = Form(...), height: int = Form(...),
     tta: bool = Form(False), quality: str = Form("maximum"), client_id: str = Form(""), preserve_aspect_ratio: bool = Form(True),
     remote_config: str = Form(""), adjustments: str = Form("{}"),
+    apply_video_adjustments: bool = Form(False),
     checkpoint_policy: str = Form("restart"),
 ):
     try:
@@ -2438,6 +2581,7 @@ async def create_video_upscale_job(
             "height": effective_height,
             "preserveAspectRatio": preserve_aspect_ratio,
             "quality": quality,
+            "applyVideoAdjustments": apply_video_adjustments,
             "adjustments": parsed_adjustments,
             "adjustmentsKey": adjustments_key,
             "backend": backend,
@@ -2509,6 +2653,7 @@ async def create_video_upscale_job(
         "requestedWidth": width, "requestedHeight": height,
         "width": effective_width, "height": effective_height, "preserveAspectRatio": preserve_aspect_ratio,
         "sourceGeometry": source_geometry, "tta": tta, "quality": quality,
+        "applyVideoAdjustments": apply_video_adjustments,
         "adjustments": parsed_adjustments, "adjustmentsKey": adjustments_key,
         "clientId": client_id,
         "cancelRequested": False, "cancelled": False,

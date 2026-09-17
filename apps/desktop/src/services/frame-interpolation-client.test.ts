@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const ensurePythonUpscalerService = vi.hoisted(() => vi.fn());
+vi.mock("./upscaler-python-client", () => ({ ensurePythonUpscalerService }));
+
 import { createFrameInterpolationFormData, frameInterpolationJob, normalizeFrameInterpolationMethod, probeFrameInterpolationSource, waitForFrameInterpolationHealth } from "./frame-interpolation-client";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => { vi.restoreAllMocks(); ensurePythonUpscalerService.mockReset(); });
 
 describe("Frame Booster interpolation request", () => {
   it("sends only the multiplier so the server derives FPS from ffprobe", () => {
@@ -57,6 +61,7 @@ describe("Frame Booster interpolation request", () => {
   });
 
   it("retries health while the automatically started backend is still booting", async () => {
+    ensurePythonUpscalerService.mockResolvedValue(true);
     const capabilities = { ffmpeg: true, jobs: true };
     const fetch = vi.spyOn(globalThis, "fetch")
       .mockRejectedValueOnce(new TypeError("connection refused"))
@@ -64,6 +69,16 @@ describe("Frame Booster interpolation request", () => {
 
     await expect(waitForFrameInterpolationHealth({ timeoutMs: 2_000 })).resolves.toMatchObject({ ffmpeg: true });
     expect(fetch).toHaveBeenCalledTimes(2);
+    expect(ensurePythonUpscalerService).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops polling when the shared Python backend cannot be started", async () => {
+    ensurePythonUpscalerService.mockResolvedValue(false);
+    const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("connection refused"));
+
+    await expect(waitForFrameInterpolationHealth({ timeoutMs: 2_000 })).resolves.toBeNull();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(ensurePythonUpscalerService).toHaveBeenCalledTimes(1);
   });
 
   it("probes source FPS immediately through the local backend", async () => {

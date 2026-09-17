@@ -125,11 +125,20 @@ async function requestNativeUpscalerStart(): Promise<boolean> {
   } catch { return false; }
 }
 
+/**
+ * Requests the shared Upscaler / Frame Booster backend only after an area
+ * transition has finished stopping the previous Python process tree.
+ */
+export async function ensurePythonUpscalerService(): Promise<boolean> {
+  await waitForAreaPythonServicesShutdown();
+  return requestNativeUpscalerStart();
+}
+
 async function probeOrStartPythonUpscaler(): Promise<PythonUpscalerHealth | null> {
   await waitForAreaPythonServicesShutdown();
   const current = await probePythonUpscalerHealth();
   if (current) return current;
-  if (!await requestNativeUpscalerStart()) return null;
+  if (!await ensurePythonUpscalerService()) return null;
   // Importing Torch/OpenCV can take a few seconds. Keep this wait inside the
   // shared health promise so repeated clicks cannot spawn duplicate services.
   for (let attempt = 0; attempt < 40; attempt += 1) {
@@ -249,6 +258,7 @@ export function buildUpscalerVideoForm(source: Blob, sourceName: string, setting
   form.set("preserve_aspect_ratio", String(settings.lockAspectRatio));
   form.set("quality", quality);
   form.set("client_id", clientId);
+  form.set("apply_video_adjustments", String(settings.applyVideoAdjustments));
   form.set("adjustments", JSON.stringify(settings.adjustments));
   if (usesRemoteUpscaler(settings)) {
     form.set("remote_config", JSON.stringify({

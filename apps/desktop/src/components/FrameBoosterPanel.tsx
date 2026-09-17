@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactElement } from "react";
 import { useProjectStore } from "../store/project-store";
 import { registerFrameBoosterSourceFile, releaseFrameBoosterSourceFile } from "../services/frame-booster-source-file";
 import { probeFrameInterpolationSource, waitForFrameInterpolationHealth, type FrameInterpolationCapabilities, type FrameInterpolationMethod } from "../services/frame-interpolation-client";
+import { shutdownAreaPythonServices } from "../services/python-service-lifecycle";
 
 const methodGuidance: Record<FrameInterpolationMethod, { title: string; description: string; ideal: string; avoid: string }> = {
   motion: {
@@ -94,6 +95,10 @@ export function FrameBoosterPanel(): ReactElement {
       importCleanup.current = null;
       probeController.current?.abort();
       probeController.current = null;
+      // Frame Booster owns the local Python runtime while this mode is open.
+      // Releasing it here makes mode changes stop the .venv process; a later
+      // mount waits for this shutdown and starts a fresh owned process.
+      void shutdownAreaPythonServices();
     };
   }, []);
 

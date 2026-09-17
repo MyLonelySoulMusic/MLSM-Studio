@@ -923,6 +923,62 @@ class RemoteVideoJobPersistenceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             upscaler_server.parse_upscaler_adjustments('{"exposure":"bright"}')
 
+    def test_video_adjustments_require_explicit_opt_in(self) -> None:
+        legacy = {"adjustments": {"sharpness": 40}}
+        self.assertTrue(upscaler_server.video_adjustments_are_neutral(
+            upscaler_server.effective_video_adjustments(legacy)
+        ))
+        enabled = {"applyVideoAdjustments": True, "adjustments": {"sharpness": 40}}
+        self.assertFalse(upscaler_server.video_adjustments_are_neutral(
+            upscaler_server.effective_video_adjustments(enabled)
+        ))
+
+    def test_ffmpeg_progress_timestamp_is_parsed(self) -> None:
+        self.assertAlmostEqual(upscaler_server._ffmpeg_timestamp_seconds("00:01:02.500000"), 62.5)
+        self.assertIsNone(upscaler_server._ffmpeg_timestamp_seconds("not-a-time"))
+
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg/ffprobe non disponibili")
+    def test_matching_remote_segments_are_stream_copied_with_original_audio(self) -> None:
+        ffmpeg = str(shutil.which("ffmpeg"))
+        with tempfile.TemporaryDirectory(prefix="mlsm-fast-segment-join-") as temporary:
+            workspace = Path(temporary)
+            source = workspace / "source.mp4"
+            result = workspace / "upscaled-video.mp4"
+            subprocess.run([
+                ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "lavfi", "-i", "testsrc2=size=64x36:rate=30:duration=1",
+                "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100:duration=1",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", str(source),
+            ], check=True, capture_output=True)
+            job_id = "fast-join"
+            job = {
+                "id": job_id, "tempDirectory": str(workspace), "width": 64, "height": 36,
+                "quality": "maximum", "remote": True, "remoteChunkFrames": 30,
+                "applyVideoAdjustments": False, "adjustments": {"sharpness": 80},
+                "cancelRequested": False,
+            }
+            with upscaler_server.video_job_lock:
+                upscaler_server.video_jobs[job_id] = dict(job)
+            try:
+                with mock.patch.object(
+                    upscaler_server, "run_checked_with_progress",
+                    wraps=upscaler_server.run_checked_with_progress,
+                ) as run:
+                    upscaler_server.process_remote_segment_video_job(
+                        job_id, job, source, [(source, 30)], result, ffmpeg,
+                        total=30, fps=30, expected_duration=1, started=time.monotonic(),
+                    )
+                command = run.call_args.args[0]
+                self.assertEqual(command[command.index("-c:v") + 1], "copy")
+                self.assertNotIn("-vf", command)
+                status = upscaler_server.video_upscale_job_status(job_id)
+                self.assertEqual(status["phase"], "ready")
+                self.assertGreater(status["audioPacketCount"], 0)
+                self.assertEqual(status["encodedFrameCount"], 30)
+            finally:
+                with upscaler_server.video_job_lock:
+                    upscaler_server.video_jobs.pop(job_id, None)
+
     def test_canvas_processing_mode_canonicalises_model_and_false_remote_strings(self) -> None:
         self.assertEqual(
             upscaler_server.video_processing_mode({"model": " canvas ", "remote": False}),

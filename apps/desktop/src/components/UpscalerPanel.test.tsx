@@ -137,6 +137,22 @@ describe("UpscalerPanel source picker", () => {
     await waitFor(() => expect(contrast.value).toBe("0"));
   });
 
+  it("non applica regolazioni ai video finché l'utente non abilita la ricodifica lenta", () => {
+    useProjectStore.getState().updateUpscaler({ sourceKind: "video", sourceUrl: "blob:video", sourceName: "video.mp4" });
+    render(<UpscalerPanel />);
+
+    const toggle = screen.getByLabelText("Applica regolazioni video Upscaler");
+    const sharpness = screen.getByLabelText("Nitidezza Upscaler");
+    expect(toggle).not.toBeChecked();
+    expect(sharpness).toBeDisabled();
+    expect(screen.getByText(/uniti senza ricodificare il video/i)).toBeVisible();
+
+    fireEvent.click(toggle);
+    expect(useProjectStore.getState().project.animation.upscaler.applyVideoAdjustments).toBe(true);
+    expect(sharpness).toBeEnabled();
+    expect(screen.getByText("Operazione lenta")).toBeVisible();
+  });
+
   it("mantiene la scala del modello remoto quando viene caricata una nuova sorgente", async () => {
     mockVideoMetadata({ width: 641, height: 359 });
     Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:remote-x4") });

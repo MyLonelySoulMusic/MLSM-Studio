@@ -58,7 +58,14 @@ describe("routing Upscaler PyTorch", () => {
     expect(form.get("preserve_aspect_ratio")).toBe("true");
     expect(form.get("width")).toBe(String(settings.finalWidth));
     expect(form.get("height")).toBe(String(settings.finalHeight));
+    expect(form.get("apply_video_adjustments")).toBe("false");
     expect(JSON.parse(String(form.get("adjustments")))).toEqual(settings.adjustments);
+  });
+
+  it("invia l'attivazione esplicita delle regolazioni video lente", () => {
+    const settings = { ...createProject().animation.upscaler, applyVideoAdjustments: true };
+    const form = buildUpscalerVideoForm(new Blob(["video"], { type: "video/mp4" }), "source.mp4", settings, "maximum", "client");
+    expect(form.get("apply_video_adjustments")).toBe("true");
   });
 
   it("invia al backend il frammento sorgente selezionato", () => {

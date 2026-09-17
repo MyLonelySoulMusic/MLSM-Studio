@@ -8,10 +8,12 @@ const { waitForFrameInterpolationHealth, probeFrameInterpolationSource } = vi.ho
   waitForFrameInterpolationHealth: vi.fn(),
   probeFrameInterpolationSource: vi.fn(),
 }));
+const shutdownAreaPythonServices = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("../services/frame-interpolation-client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../services/frame-interpolation-client")>();
   return { ...actual, waitForFrameInterpolationHealth, probeFrameInterpolationSource };
 });
+vi.mock("../services/python-service-lifecycle", () => ({ shutdownAreaPythonServices }));
 
 import { FrameBoosterPanel } from "./FrameBoosterPanel";
 
@@ -25,6 +27,7 @@ describe("FrameBoosterPanel", () => {
     clearFrameBoosterSourceFile();
     waitForFrameInterpolationHealth.mockResolvedValue(null);
     probeFrameInterpolationSource.mockResolvedValue({ frameCount: 75, fps: 29.97, durationSeconds: 2.5, width: 1920, height: 1080, hasAudio: true });
+    shutdownAreaPythonServices.mockResolvedValue(undefined);
     Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:new-video") });
     Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
   });
@@ -34,6 +37,7 @@ describe("FrameBoosterPanel", () => {
     clearFrameBoosterSourceFile();
     waitForFrameInterpolationHealth.mockReset();
     probeFrameInterpolationSource.mockReset();
+    shutdownAreaPythonServices.mockReset();
     vi.restoreAllMocks();
     Reflect.deleteProperty(URL, "createObjectURL");
     Reflect.deleteProperty(URL, "revokeObjectURL");
@@ -140,5 +144,13 @@ describe("FrameBoosterPanel", () => {
     expect(screen.getByText("FFmpeg pronto")).toBeVisible();
     expect(screen.queryByText("Avvio…")).not.toBeInTheDocument();
     expect(waitForFrameInterpolationHealth).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops the owned Python runtime when leaving Frame Booster", () => {
+    const view = render(<FrameBoosterPanel />);
+
+    view.unmount();
+
+    expect(shutdownAreaPythonServices).toHaveBeenCalledTimes(1);
   });
 });

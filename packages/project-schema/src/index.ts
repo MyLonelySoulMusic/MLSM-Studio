@@ -353,7 +353,8 @@ const defaultUpscaler = {
   },
   scale: 4, finalWidth: 3840, finalHeight: 2160, lockAspectRatio: true,
   comparisonMode: "split" as const, comparisonPosition: .5, originalBlend: 0,
-  adjustments: { exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, saturation: 0, vibrance: 0, temperature: 0, tint: 0, sharpness: 12, denoise: 0 }
+  applyVideoAdjustments: false,
+  adjustments: { exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, saturation: 0, vibrance: 0, temperature: 0, tint: 0, sharpness: 0, denoise: 0 }
 };
 const upscalerSchema = z.object({
   sourceUrl: z.string().nullable().default(defaultUpscaler.sourceUrl),
@@ -383,6 +384,7 @@ const upscalerSchema = z.object({
   comparisonMode: z.enum(["enhanced", "original", "split", "blend"]).default(defaultUpscaler.comparisonMode),
   comparisonPosition: z.number().min(0).max(1).default(defaultUpscaler.comparisonPosition),
   originalBlend: z.number().min(0).max(1).default(defaultUpscaler.originalBlend),
+  applyVideoAdjustments: z.boolean().default(defaultUpscaler.applyVideoAdjustments),
   adjustments: z.object({
     exposure: z.number().min(-2).max(2), contrast: z.number().min(-100).max(100), highlights: z.number().min(-100).max(100), shadows: z.number().min(-100).max(100),
     whites: z.number().min(-100).max(100), blacks: z.number().min(-100).max(100), saturation: z.number().min(-100).max(100), vibrance: z.number().min(-100).max(100),
