@@ -33,3 +33,53 @@ body { -webkit-font-smoothing: antialiased; }
 .project-row { border-radius: 9px; margin-block: 4px; }
 :is(button, a, input, select, textarea):focus-visible { outline: 2px solid var(--lime); outline-offset: 3px; }
 @media (prefers-reduced-motion: reduce) { .module-tab, .option-card, .primary, .secondary, .file-button, .icon-btn, .download { transition: none; } }
+
+/* Sequential studio workflow */
+.module-rail { grid-template-columns: repeat(6, minmax(0, 1fr)); position: sticky; top: 10px; }
+.module-tab { grid-template-columns: auto minmax(0, 1fr); min-height: 62px; position: relative; }
+.module-tab span { display: grid; gap: 3px; }
+.module-tab small { color: var(--muted); font-size: 9px; font-weight: 600; letter-spacing: .02em; }
+.module-tab.complete:after { content: "✓"; position: absolute; top: 8px; right: 8px; color: var(--lime); font-size: 10px; }
+.module-tab.skipped:after { content: "—"; color: var(--muted); }
+.module-tab:disabled { cursor: not-allowed; opacity: .42; }
+.module-stage { scroll-margin-top: 118px; }
+.module-stage.flip-out, .module-stage.flip-in { animation: none; }
+.stage-heading { display: flex; justify-content: space-between; align-items: center; gap: 24px; margin: 24px 2px 18px; padding-bottom: 16px; border-bottom: 1px solid var(--line); scroll-margin-top: 118px; }
+.stage-heading h3 { margin: 4px 0 5px; font-size: clamp(24px, 3vw, 34px); letter-spacing: -.045em; }
+.stage-heading p:not(.eyebrow) { color: var(--muted); margin: 0; line-height: 1.55; max-width: 720px; }
+.step-switch { display: flex; align-items: center; gap: 9px; flex: 0 0 auto; color: var(--muted); font-size: 11px; cursor: pointer; }
+.step-switch input { position: absolute; opacity: 0; pointer-events: none; }
+.step-switch span { width: 40px; height: 22px; border-radius: 22px; background: color-mix(in srgb, var(--muted) 35%, var(--panel)); position: relative; transition: .2s; }
+.step-switch span:after { content: ""; position: absolute; width: 16px; height: 16px; left: 3px; top: 3px; border-radius: 50%; background: var(--muted); transition: .2s; }
+.step-switch input:checked + span { background: var(--lime); }
+.step-switch input:checked + span:after { transform: translateX(18px); background: #181016; }
+.step-switch input:focus-visible + span { outline: 2px solid var(--lime); outline-offset: 3px; }
+.workflow-actions { display: flex; justify-content: space-between; align-items: center; gap: 14px; margin: 22px 0 8px; padding-top: 18px; border-top: 1px solid var(--line); }
+.workflow-actions > div { display: flex; justify-content: flex-end; gap: 10px; }
+.workflow-actions button { min-width: 148px; }
+.workflow-next[aria-disabled="true"] { opacity: .55; cursor: not-allowed; }
+.optional-action { display: flex; justify-content: space-between; align-items: center; gap: 18px; margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); }
+.optional-action span { color: var(--muted); font-size: 11px; line-height: 1.5; margin: 0; }
+.optional-panel { border-style: dashed; }
+.export-summary { color: var(--muted); font-size: 11px; line-height: 1.55; margin: 0 0 16px; }
+.timeline-tools { display: grid; justify-items: end; gap: 10px; }
+.mapping-switch { display: flex; padding: 3px; border-radius: 9px; background: color-mix(in srgb, var(--text) 6%, var(--panel)); }
+.mapping-switch button { padding: 7px 10px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font-size: 10px; }
+.mapping-switch button.active { background: var(--lime); color: #181016; }
+.mapping-caption { color: var(--text); font-size: 11px; font-weight: 650; margin: 9px 3px 0; }
+.busy-progress { display: grid; justify-items: center; gap: 7px; width: min(340px, 76vw); margin-top: 7px; }
+.busy-progress progress { width: 100%; accent-color: var(--lime); }
+
+@media (max-width: 1050px) {
+  .module-rail { grid-template-columns: repeat(3, 1fr); position: static; }
+}
+@media (max-width: 700px) {
+  .module-rail { grid-template-columns: repeat(2, 1fr); }
+  .stage-heading, .optional-action { align-items: flex-start; flex-direction: column; }
+  .workflow-actions { align-items: stretch; flex-direction: column-reverse; }
+  .workflow-actions > div { display: grid; }
+  .workflow-actions > button, .workflow-actions > div button { width: 100%; }
+  .timeline-tools { justify-items: start; width: 100%; }
+  .mapping-switch { width: 100%; }
+  .mapping-switch button { flex: 1; }
+}

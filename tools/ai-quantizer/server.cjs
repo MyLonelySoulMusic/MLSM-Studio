@@ -99,6 +99,7 @@ function invalidateFromWarpMap(project) {
     track.outputDerivedFrom = null;
     track.outputDuration = null;
     track.alignment = null;
+    track.quantizedBase = null;
     track.restored = null;
     track.restoredAt = null;
     track.restoredDerivedFrom = null;
@@ -112,7 +113,46 @@ function invalidateFromWarpMap(project) {
   clearAiStages(project, ['quantized', 'restored', 'mastered']);
 }
 
+function normalizedAlignment(input = {}) {
+  const shift = Number(input.shiftSeconds);
+  const fade = Number(input.fadeSeconds);
+  const enabled = Boolean(input.enabled);
+  return {
+    enabled,
+    mode: ['auto', 'forward', 'backward'].includes(input.mode) ? input.mode : 'auto',
+    resolvedDirection: enabled && shift > .0005 ? 'forward' : enabled && shift < -.0005 ? 'backward' : 'none',
+    shiftSeconds: enabled && Number.isFinite(shift) ? Math.max(-10, Math.min(10, shift)) : 0,
+    fadeSeconds: Number.isFinite(fade) ? Math.max(0, Math.min(10, fade)) : 0,
+    referenceSource: Number(input.referenceSource) || 0,
+    referenceTarget: Number(input.referenceTarget) || 0,
+    gridTarget: Number(input.gridTarget) || 0
+  };
+}
+
+function alignmentRenderPlan(sourceFrames, alignment) {
+  const shiftFrames = alignment?.enabled
+    ? Math.round(Number(alignment.shiftSeconds) * PROCESS_SAMPLE_RATE)
+    : 0;
+  const outputFrames = Math.max(1, sourceFrames + shiftFrames);
+  const filters = [];
+  if (Math.abs(shiftFrames) > Math.round(PROCESS_SAMPLE_RATE * .0005)) {
+    const shift = shiftFrames / PROCESS_SAMPLE_RATE;
+    const fade = Math.max(0, Math.min(10, Number(alignment.fadeSeconds) || 0));
+    if (shift < 0) {
+      filters.push(`atrim=start_sample=${-shiftFrames}`, 'asetpts=N/SR/TB');
+      if (fade > 0) filters.push(`afade=t=in:st=0:d=${fade.toFixed(6)}:curve=qsin`);
+    } else {
+      filters.push(`adelay=${(shift * 1000).toFixed(6)}:all=1`);
+      if (fade > 0)
+        filters.push(`afade=t=in:st=${shift.toFixed(6)}:d=${fade.toFixed(6)}:curve=qsin`);
+    }
+  }
+  filters.push('apad', `atrim=end_sample=${outputFrames}`, 'asetpts=N/SR/TB');
+  return { filters, outputFrames, shiftFrames };
+}
+
 function resetForNewMaster(project) {
+  project.workflow = {};
   project.analysis = null;
   project.warpMap = null;
   project.alignment = null;
@@ -364,30 +404,12 @@ async function processTrack(id, track, project) {
       '-D', targetDuration.toFixed(6), converted, warped]);
   }
   const alignment = project.modules?.align !== false && project.alignment?.enabled ? project.alignment : null;
-  const shiftFrames = alignment
-    ? Math.round(Number(alignment.shiftSeconds) * PROCESS_SAMPLE_RATE)
-    : 0;
   const effectiveTargetFrames = project.modules?.quantize === false
     ? timeline.sourceFrames
     : timeline.targetFrames;
-  const outputFrames = Math.max(1, effectiveTargetFrames + shiftFrames);
-  const filters = [];
-  if (alignment && Math.abs(alignment.shiftSeconds) > .0005) {
-    const shift = shiftFrames / PROCESS_SAMPLE_RATE;
-    const fade = Math.max(0, Math.min(10, Number(alignment.fadeSeconds) || 0));
-    if (shift < 0) {
-      filters.push(`atrim=start_sample=${-shiftFrames}`, 'asetpts=N/SR/TB');
-      if (fade > 0) filters.push(`afade=t=in:st=0:d=${fade.toFixed(6)}:curve=qsin`);
-    } else {
-      filters.push(`adelay=${(shift * 1000).toFixed(6)}:all=1`);
-      if (fade > 0)
-        filters.push(`afade=t=in:st=${shift.toFixed(6)}:d=${fade.toFixed(6)}:curve=qsin`);
-    }
-  }
-  filters.push('apad', `atrim=end_sample=${outputFrames}`, 'asetpts=N/SR/TB');
+  const { filters, outputFrames } = alignmentRenderPlan(effectiveTargetFrames, alignment);
   await run('ffmpeg', ['-y', '-v', 'error', '-i', warped, '-af', filters.join(','),
     '-ar', String(PROCESS_SAMPLE_RATE), '-c:a', 'pcm_f32le', output]);
-  await fsp.rm(warped, { force: true });
   const outputInfo = await probe(output);
   track.output = outputRel;
   track.processedAt = new Date().toISOString();
@@ -396,10 +418,68 @@ async function processTrack(id, track, project) {
   track.timelineSourceDuration = sourceDuration;
   track.timelineTargetDuration = outputFrames / PROCESS_SAMPLE_RATE;
   track.warpMapSavedAt = project.warpMap.savedAt;
+  track.quantizedBase = path.relative(dir, warped);
   track.alignment = alignment ? {
     shiftSeconds: alignment.shiftSeconds, fadeSeconds: alignment.fadeSeconds,
     direction: alignment.resolvedDirection
   } : null;
+}
+
+async function applyAlignmentToTrack(id, track, alignment) {
+  if (!track.output) throw new Error(`Quantizza prima “${track.name}”`);
+  const dir = projectDir(id);
+  const output = path.join(dir, track.output);
+  let source = track.quantizedBase ? path.join(dir, track.quantizedBase) : null;
+  if (source) {
+    try { await fsp.access(source); } catch { source = null; }
+  }
+  let effectiveAlignment = alignment;
+  if (!source && Math.abs(Number(track.alignment?.shiftSeconds) || 0) <= .0005) {
+    const baseRel = path.join('work', `${track.id}-quantized-base.wav`);
+    source = path.join(dir, baseRel);
+    await fsp.mkdir(path.dirname(source), { recursive: true });
+    await fsp.copyFile(output, source);
+    track.quantizedBase = baseRel;
+  } else if (!source) {
+    // Legacy projects did not retain the pre-alignment WAV. Apply only the delta;
+    // this still avoids running Rubber Band or quantizing the track again.
+    source = output;
+    effectiveAlignment = {
+      ...alignment,
+      enabled: true,
+      shiftSeconds: alignment.shiftSeconds - (Number(track.alignment?.shiftSeconds) || 0)
+    };
+  }
+  const sourceInfo = await probe(source);
+  const sourceFrames = Math.max(1, Math.round(sourceInfo.duration * PROCESS_SAMPLE_RATE));
+  const { filters, outputFrames } = alignmentRenderPlan(sourceFrames, effectiveAlignment);
+  const temporary = path.join(dir, 'work', `${track.id}-alignment-${crypto.randomUUID()}.wav`);
+  try {
+    await run('ffmpeg', ['-y', '-v', 'error', '-i', source, '-af', filters.join(','),
+      '-ar', String(PROCESS_SAMPLE_RATE), '-c:a', 'pcm_f32le', temporary]);
+    // copyFile replaces the destination on both Windows and macOS; rename does
+    // not reliably replace an existing WAV on Windows.
+    await fsp.copyFile(temporary, output);
+  } finally {
+    await fsp.rm(temporary, { force: true });
+  }
+  const outputInfo = await probe(output);
+  track.processedAt = new Date().toISOString();
+  track.outputDuration = outputInfo.duration;
+  track.timelineTargetDuration = outputFrames / PROCESS_SAMPLE_RATE;
+  track.alignment = alignment.enabled ? {
+    shiftSeconds: alignment.shiftSeconds,
+    fadeSeconds: alignment.fadeSeconds,
+    direction: alignment.resolvedDirection
+  } : null;
+}
+
+function trackHasAlignment(track, alignment) {
+  if (!alignment.enabled) return !track.alignment;
+  return Boolean(track.alignment)
+    && Math.abs(Number(track.alignment.shiftSeconds) - alignment.shiftSeconds) < .000001
+    && Math.abs(Number(track.alignment.fadeSeconds) - alignment.fadeSeconds) < .000001
+    && track.alignment.direction === alignment.resolvedDirection;
 }
 
 async function serveFile(req, res, file, extraHeaders = {}) {
@@ -514,7 +594,8 @@ async function api(req, res, url) {
     const project = {
       id, name: String(input.name || 'Nuovo progetto').slice(0, 100),
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-      settings: { targetBpm: 120 }, warpMap: null, tracks: []
+      settings: { targetBpm: 120 }, warpMap: null, tracks: [],
+      modules: { quantize: true, align: true, restoration: true, mastering: true, ai: false }
     };
     await fsp.mkdir(projectDir(id), { recursive: true });
     await writeManifest(project);
@@ -526,6 +607,32 @@ async function api(req, res, url) {
   if (parts.length === 3 && req.method === 'DELETE') {
     await fsp.rm(projectDir(id), { recursive: true, force: true });
     return json(res, 200, { ok: true });
+  }
+  if (parts[3] === 'modules' && req.method === 'PUT') {
+    const input = await bodyJson(req);
+    const project = await readManifest(id);
+    const names = ['quantize', 'align', 'restoration', 'mastering', 'ai'];
+    if (!input || typeof input !== 'object' || Array.isArray(input)
+      || Object.entries(input).some(([key, value]) => !names.includes(key) || typeof value !== 'boolean'))
+      throw new Error('Impostazioni dei passaggi non valide');
+    const previous = project.modules || {};
+    project.modules = Object.fromEntries(names.map(name => [name, input[name] ?? previous[name] ?? true]));
+    const timingChanged = (previous.quantize !== false) !== project.modules.quantize;
+    if (timingChanged) {
+      invalidateFromWarpMap(project);
+    } else if ((previous.restoration !== false) !== project.modules.restoration) {
+      const master = project.tracks.find(track => track.role === 'master');
+      if (master?.restored) {
+        master.mastered = null;
+        master.masteredAt = null;
+        master.masteredDerivedFrom = null;
+        delete project.mastering;
+        project.loudness = null;
+        clearAiStages(project, ['mastered']);
+      }
+    }
+    await writeManifest(project);
+    return json(res, 200, project);
   }
   if (parts[3] === 'tracks' && parts.length === 4 && req.method === 'POST') {
     const project = await readManifest(id);
@@ -587,19 +694,7 @@ async function api(req, res, url) {
         : points.at(-1).source,
       savedAt: new Date().toISOString()
     };
-    const alignment = input.alignment || {};
-    const shift = Number(alignment.shiftSeconds);
-    const fade = Number(alignment.fadeSeconds);
-    project.alignment = {
-      enabled: Boolean(alignment.enabled),
-      mode: ['auto', 'forward', 'backward'].includes(alignment.mode) ? alignment.mode : 'auto',
-      resolvedDirection: shift > .0005 ? 'forward' : shift < -.0005 ? 'backward' : 'none',
-      shiftSeconds: Number.isFinite(shift) ? Math.max(-10, Math.min(10, shift)) : 0,
-      fadeSeconds: Number.isFinite(fade) ? Math.max(0, Math.min(10, fade)) : 0,
-      referenceSource: Number(alignment.referenceSource) || 0,
-      referenceTarget: Number(alignment.referenceTarget) || 0,
-      gridTarget: Number(alignment.gridTarget) || 0
-    };
+    project.alignment = normalizedAlignment(input.alignment);
     const modules = input.modules || {};
     project.modules = {
       quantize: modules.quantize !== false,
@@ -608,7 +703,28 @@ async function api(req, res, url) {
       mastering: modules.mastering !== false,
       ai: modules.ai !== false
     };
+    project.workflow = { ...project.workflow, alignmentReviewed: input.alignmentReviewed === true };
     invalidateFromWarpMap(project);
+    await writeManifest(project);
+    return json(res, 200, project);
+  }
+  if (parts[3] === 'alignment' && req.method === 'PUT') {
+    const input = await bodyJson(req);
+    const project = await readManifest(id);
+    if (!project.tracks?.length || project.tracks.some(track => !track.output))
+      throw new Error('Completa prima la quantizzazione di tutte le tracce');
+    const enabled = input.modules?.align !== false;
+    const alignment = normalizedAlignment({
+      ...input.alignment,
+      enabled: enabled && input.alignment?.enabled
+    });
+    const changedTracks = project.tracks.filter(track => !trackHasAlignment(track, alignment));
+    for (const track of changedTracks) await applyAlignmentToTrack(id, track, alignment);
+    project.alignment = alignment;
+    project.modules = { ...project.modules, align: enabled };
+    project.workflow = { ...project.workflow, alignmentReviewed: true };
+    const master = project.tracks.find(track => track.role === 'master');
+    if (master && changedTracks.length) invalidateAfterQuantize(project, master);
     await writeManifest(project);
     return json(res, 200, project);
   }

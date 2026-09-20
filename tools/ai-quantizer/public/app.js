@@ -1,8 +1,10 @@
-/* global document, window, fetch, clearTimeout, setTimeout, confirm, prompt, AudioContext, devicePixelRatio, requestAnimationFrame */
+/* global document, window, fetch, clearTimeout, setTimeout, confirm, prompt, AudioContext, devicePixelRatio, requestAnimationFrame, Blob */
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 const tr = value => window.AIQ_I18N?.translate(value) || value;
-const state = { projects: [], project: null, master: null, buffer: null, peaks: [], beats: [], downbeats: [], map: [], variant: 'source' };
+const state = { projects: [], project: null, master: null, buffer: null, peaks: [], beats: [], downbeats: [], map: [], variant: 'source', mapVariant: 'source', quantizeDirty: false, alignmentDirty: false, alignmentConfirmed: false };
+let exporting = false;
+let busyFocus = null;
 
 async function request(url, options = {}) {
   const res = await fetch(url, options);
@@ -17,8 +19,93 @@ function toast(message, error = false) {
 }
 
 function busy(on, title = 'Elaborazione audio', text = 'Questa operazione può richiedere qualche minuto.') {
+  if (on && $('#busy').classList.contains('hidden')) busyFocus = document.activeElement;
   $('#busyTitle').textContent = title; $('#busyText').textContent = text;
   $('#busy').classList.toggle('hidden', !on);
+  $('main').inert = on;
+  $('.sidebar').inert = on;
+  if (on) $('#busy').focus();
+  else { busyFocus?.focus(); busyFocus = null; }
+  if (!exporting) $('#zipProgressArea')?.classList.add('hidden');
+}
+
+async function saveModuleSettings() {
+  if (!state.project) return false;
+  const previous = state.project.modules || {};
+  busy(true, 'Salvataggio dei passaggi', 'Salvataggio delle impostazioni…');
+  try {
+    state.project = await request(`/music/ai-quantizer/api/projects/${state.project.id}/modules`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(moduleFlags())
+    });
+    state.master = state.project.tracks.find(track => track.role === 'master') || null;
+    renderTracks(); renderLoudness(); renderAiDetection();
+    return true;
+  } catch (error) {
+    for (const name of ['quantize', 'align', 'restoration', 'mastering', 'ai'])
+      $(`#module${name[0].toUpperCase()}${name.slice(1)}`).checked = previous[name] ?? true;
+    syncModules();
+    toast(error.message, true);
+    return false;
+  } finally { busy(false); }
+}
+
+async function downloadArchive() {
+  if (exporting) return;
+  if (!state.project?.tracks.length || state.project.tracks.some(track => !track.output))
+    return toast('Completa prima la quantizzazione di tutte le tracce', true);
+  exporting = true;
+  const button = $('#downloadAll');
+  button.disabled = true;
+  button.setAttribute('aria-busy', 'true');
+  busy(true, 'Preparazione ZIP', 'Raccolgo master e stem e preparo l’archivio. Attendi: il download partirà automaticamente.');
+  const progress = $('#zipProgress');
+  progress.removeAttribute('value');
+  $('#zipProgressArea').classList.remove('hidden');
+  $('#zipProgressText').textContent = 'Creazione archivio…';
+  try {
+    const response = await fetch(`/music/ai-quantizer/api/projects/${state.project.id}/download-all`);
+    if (!response.ok) {
+      const data = response.headers.get('content-type')?.includes('json') ? await response.json() : null;
+      throw new Error(data?.error || tr('Impossibile preparare lo ZIP. Riprova.'));
+    }
+    $('#busyTitle').textContent = 'Download ZIP';
+    $('#busyText').textContent = 'Archivio pronto. Trasferimento del file in corso…';
+    const total = Number(response.headers.get('content-length'));
+    let blob;
+    if (response.body?.getReader) {
+      const reader = response.body.getReader(), chunks = [];
+      let received = 0;
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value); received += value.byteLength;
+          if (total > 0) { progress.max = total; progress.value = received; }
+          $('#zipProgressText').textContent = total > 0
+            ? `${Math.min(100, Math.round(received / total * 100))}% · ${(received / 1048576).toFixed(1)} / ${(total / 1048576).toFixed(1)} MB`
+            : `${(received / 1048576).toFixed(1)} MB`;
+        }
+      } finally { reader.releaseLock(); }
+      if (total > 0 && received !== total) throw new Error(tr('Download incompleto. Riprova.'));
+      blob = new Blob(chunks, { type: 'application/zip' });
+    } else blob = await response.blob();
+    if (!blob.size) throw new Error(tr('L’archivio ZIP è vuoto. Riprova.'));
+    const disposition = response.headers.get('content-disposition') || '';
+    let filename = `${state.project.name}-export.zip`;
+    try {
+      const encoded = /filename\*=UTF-8''([^;]+)/i.exec(disposition);
+      const plain = /filename="([^"]+)"/i.exec(disposition);
+      filename = encoded ? decodeURIComponent(encoded[1]) : plain?.[1] || filename;
+    } catch { /* Keep the project name if a header is malformed. */ }
+    const url = window.URL.createObjectURL(blob), link = document.createElement('a');
+    link.href = url; link.download = filename.replace(/[/\\]/g, '_');
+    document.body.append(link); link.click(); link.remove();
+    setTimeout(() => window.URL.revokeObjectURL(url), 60_000);
+    toast('ZIP pronto. Download avviato.');
+  } catch (error) { toast(error.message, true); }
+  finally {
+    exporting = false; button.removeAttribute('aria-busy'); busy(false); renderTracks();
+  }
 }
 
 async function loadProjects() {
@@ -57,6 +144,12 @@ async function createProject() {
 async function openProject(id) {
   state.project = await request(`/music/ai-quantizer/api/projects/${id}`);
   state.master = state.project.tracks.find(t => t.role === 'master') || null;
+  state.variant = 'source';
+  state.mapVariant = state.master?.output ? 'output' : 'source';
+  state.quantizeDirty = false; state.alignmentDirty = false;
+  state.restorationDirty = false; state.masteringDirty = false;
+  state.alignmentConfirmed = state.project.modules?.align === false
+    || (state.project.workflow?.alignmentReviewed ?? Boolean(state.master?.alignment || state.master?.restored || state.master?.mastered));
   state.buffer = null; state.peaks = []; state.beats = []; state.downbeats = [];
   if (state.project.analysis) {
     state.beats = state.project.analysis.beats || [];
@@ -86,10 +179,11 @@ async function openProject(id) {
   $('#moduleMastering').checked = modules.mastering ?? true;
   $('#moduleAi').checked = modules.ai ?? true;
   syncModules();
-  $('#editor').classList.toggle('hidden', !state.master);
+  $('#editor').classList.remove('hidden');
   renderTracks(); await loadProjects();
   renderLoudness();
   renderAiDetection();
+  showModule('import');
   if (state.master) await loadMasterAudio();
 }
 
@@ -229,32 +323,54 @@ function draw() {
   if (rect.width < 2) return;
   canvas.width = Math.floor(rect.width * ratio); canvas.height = Math.floor(270 * ratio);
   const ctx = canvas.getContext('2d'); ctx.scale(ratio, ratio);
-  const w = rect.width, h = 270, mid = h / 2, duration = state.buffer?.duration || 1;
+  const output = state.mapVariant === 'output' && Boolean(state.master?.output);
+  const points = output ? state.project.warpMap?.points || [] : state.map;
+  const quantized = !output || state.project.modules?.quantize !== false;
+  const shift = output && state.project.modules?.align !== false && state.project.alignment?.enabled
+    ? state.project.alignment.shiftSeconds : 0;
+  const sourceDuration = state.buffer?.duration || state.master?.duration || 1;
+  const duration = output ? Math.max(.001, state.master.outputDuration || (quantized ? points.at(-1)?.target || sourceDuration : sourceDuration) + shift) : sourceDuration;
+  const w = rect.width, h = 270, mid = h / 2;
+  $$('.mapping-switch button').forEach(button => {
+    const active = button.dataset.mapVariant === (output ? 'output' : 'source');
+    button.setAttribute('aria-pressed', String(active)); button.classList.toggle('active', active);
+  });
+  if ($('#mappingCaption')) $('#mappingCaption').textContent = output
+    ? 'Mappa applicata al risultato: beat e waveform rimappati sulla timeline finale. Premi Play per ascoltare.'
+    : 'Mappa originale: i colori indicano le correzioni di tempo. Click per modificare i beat.';
   ctx.fillStyle = '#0b0e14'; ctx.fillRect(0, 0, w, h);
   ctx.strokeStyle = '#252d38'; ctx.lineWidth = 1;
   for (let i = 1; i < 8; i++) { const x = w * i / 8; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
   ctx.beginPath(); ctx.strokeStyle = '#526070'; ctx.lineWidth = 1;
-  state.peaks.forEach((p, i) => { const x = i / state.peaks.length * w, amp = p * h * .42; ctx.moveTo(x, mid - amp); ctx.lineTo(x, mid + amp); });
+  state.peaks.forEach((p, i) => {
+    const time = i / state.peaks.length * sourceDuration;
+    const mapped = output ? (quantized ? sourceToTarget(time, points) : time) + shift : time;
+    if (mapped < 0) return;
+    const x = mapped / duration * w, amp = p * h * .42;
+    ctx.moveTo(x, mid - amp); ctx.lineTo(x, mid + amp);
+  });
   ctx.stroke();
-  state.map.slice(1, -1).forEach((p, i) => {
-    const x = p.source / duration * w, prev = state.map[i], local = Math.abs((p.target - prev.target) / Math.max(.001, p.source - prev.source) - 1);
-    ctx.strokeStyle = local > .08 ? '#ff627d' : local > .04 ? '#ffd166' : '#55dfea'; ctx.lineWidth = local > .08 ? 2 : 1;
+  points.slice(1, -1).forEach((p, i) => {
+    const time = output ? (quantized ? p.target : p.source) + shift : p.source;
+    if (time < 0) return;
+    const x = time / duration * w, prev = points[i], local = Math.abs((p.target - prev.target) / Math.max(.001, p.source - prev.source) - 1);
+    ctx.strokeStyle = output ? '#FF4F9A' : local > .08 ? '#ff627d' : local > .04 ? '#ffd166' : '#f2a8c8'; ctx.lineWidth = !output && local > .08 ? 2 : 1;
     ctx.beginPath(); ctx.moveTo(x, 15); ctx.lineTo(x, h - 15); ctx.stroke();
-    const tx = p.target / Math.max(duration, state.map.at(-1)?.target || duration) * w;
-    ctx.fillStyle = '#c9ff45'; ctx.fillRect(tx - 1, h - 15, 2, 9);
+    const tx = output ? x : p.target / Math.max(duration, points.at(-1)?.target || duration) * w;
+    ctx.fillStyle = '#ffffff'; ctx.fillRect(tx - 1, h - 15, 2, 9);
   });
 }
 
-function sourceToTarget(time) {
-  if (!state.map.length) return time;
-  for (let i = 1; i < state.map.length; i++) {
-    const a = state.map[i - 1], b = state.map[i];
+function sourceToTarget(time, points = state.map) {
+  if (!points.length) return time;
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1], b = points[i];
     if (time <= b.source) {
       const ratio = (time - a.source) / Math.max(.000001, b.source - a.source);
       return a.target + ratio * (b.target - a.target);
     }
   }
-  const last = state.map.at(-1);
+  const last = points.at(-1);
   return last.target + time - last.source;
 }
 
@@ -263,7 +379,7 @@ function alignmentPlan() {
   const bpm = Math.round(Number($('#targetBpm').value) || 120);
   const barDuration = 240 / bpm;
   const referenceSource = state.downbeats[0] ?? state.beats[0] ?? 0;
-  const referenceTarget = sourceToTarget(referenceSource);
+  const referenceTarget = $('#moduleQuantize').checked ? sourceToTarget(referenceSource) : referenceSource;
   const lower = Math.floor(referenceTarget / barDuration) * barDuration;
   const upper = Math.ceil(referenceTarget / barDuration) * barDuration;
   const mode = $('#alignMode').value;
@@ -298,7 +414,8 @@ function drawAlignment() {
   const mid = 120;
   ctx.beginPath(); ctx.strokeStyle = '#596576'; ctx.lineWidth = 1;
   state.peaks.forEach((peak, i) => {
-    const warpedTime = sourceToTarget(i / state.peaks.length * state.buffer.duration) + plan.shiftSeconds;
+    const time = i / state.peaks.length * state.buffer.duration;
+    const warpedTime = ($('#moduleQuantize').checked ? sourceToTarget(time) : time) + plan.shiftSeconds;
     if (warpedTime < 0) return;
     const x = warpedTime / visibleDuration * w, amp = peak * 70;
     ctx.moveTo(x, mid - amp); ctx.lineTo(x, mid + amp);
@@ -321,7 +438,13 @@ function drawAlignment() {
     : 'Abilita l’opzione per ordinare il risultato quantizzato sulla griglia DAW.';
 }
 
-async function saveAndProcess() {
+async function saveAndProcess(alignmentReviewed = false) {
+  // DOM click events are not a confirmation of the alignment step.
+  alignmentReviewed = alignmentReviewed === true;
+  if (!$('#moduleQuantize').checked && state.master) {
+    const duration = state.buffer?.duration || state.master.duration;
+    state.map = [{ source: 0, target: 0 }, { source: duration, target: duration }];
+  }
   if (state.map.length < 2) return toast('Analizza prima il brano', true);
   busy(true, 'Quantizzazione di master e stem', 'Applico a tutte le tracce una sola timeline, conservando il pitch.');
   try {
@@ -329,7 +452,7 @@ async function saveAndProcess() {
         confidence: state.project.analysis?.confidence, engine: state.project.analysis?.engine, settings: {
         targetBpm: Math.round(Number($('#targetBpm').value))
       }, sourceDuration: state.buffer?.duration || state.master.duration,
-      alignment: alignmentPlan(), modules: moduleFlags(), confirmUnsafe });
+      alignment: alignmentPlan(), modules: moduleFlags(), alignmentReviewed: alignmentReviewed || state.alignmentConfirmed, confirmUnsafe });
     const saveWarpMap = confirmUnsafe => request(`/music/ai-quantizer/api/projects/${state.project.id}/warp-map`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(warpPayload(confirmUnsafe))
@@ -352,11 +475,35 @@ async function saveAndProcess() {
       body: JSON.stringify({ all: true })
     });
     state.master = state.project.tracks.find(t => t.role === 'master');
+    state.quantizeDirty = false; state.alignmentDirty = false;
+    state.restorationDirty = false; state.masteringDirty = false;
+    state.alignmentConfirmed = Boolean(state.project.workflow?.alignmentReviewed || !$('#moduleAlign').checked);
     state.project.loudness = null;
     state.master.mastered = null;
-    state.variant = 'output'; setVariant('output'); renderTracks();
+    state.mapVariant = 'output';
+    setVariant('output'); renderTracks(); renderLoudness(); renderAiDetection(); draw();
     toast('Master e stem quantizzati sulla stessa timeline');
+    return true;
   } catch (e) { toast(e.message, true); } finally { busy(false); }
+}
+
+async function applyAlignment() {
+  if (!allTracksProcessed()) return toast('Quantizza prima tutte le tracce', true);
+  busy(true, 'Applicazione allineamento', 'Sposto i WAV già quantizzati sulla griglia DAW. La quantizzazione non viene ripetuta.');
+  try {
+    state.project = await request(`/music/ai-quantizer/api/projects/${state.project.id}/alignment`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ alignment: alignmentPlan(), modules: moduleFlags() })
+    });
+    state.master = state.project.tracks.find(track => track.role === 'master');
+    state.alignmentDirty = false; state.alignmentConfirmed = true;
+    state.restorationDirty = false; state.masteringDirty = false;
+    state.mapVariant = 'output';
+    setVariant('output'); renderTracks(); renderLoudness(); renderAiDetection(); draw(); drawAlignment();
+    toast($('#moduleAlign').checked ? 'Allineamento applicato senza ripetere la quantizzazione' : 'Allineamento rimosso');
+    return true;
+  } catch (error) { toast(error.message, true); return false; }
+  finally { busy(false); }
 }
 
 function spotifyStatus(metrics) {
@@ -397,7 +544,7 @@ async function renderMaster() {
         ceilingDbtp: Number($('#limiterCeiling').value), releaseMs: Number($('#limiterRelease').value)
       })
     });
-    state.master = state.project.tracks.find(t => t.role === 'master'); renderLoudness(); renderTracks(); toast('Master finale completato');
+    state.master = state.project.tracks.find(t => t.role === 'master'); state.masteringDirty = false; renderLoudness(); renderTracks(); toast('Master finale completato');
   } catch (e) { toast(e.message, true); } finally { busy(false); }
 }
 
@@ -436,7 +583,8 @@ async function renderRestoration() {
       })
     });
     state.master = state.project.tracks.find(t => t.role === 'master');
-    setRestoreVariant('restored'); renderTracks(); renderAiDetection(); toast('Restauro completato');
+    state.restorationDirty = false; state.masteringDirty = false;
+    setRestoreVariant('restored'); renderTracks(); renderLoudness(); renderAiDetection(); toast('Restauro completato');
   } catch (e) { toast(e.message, true); } finally { busy(false); }
 }
 
@@ -444,7 +592,6 @@ function setRestoreVariant(variant) {
   if (variant === 'restored' && !state.master?.restored) return toast('Crea prima la versione restaurata', true);
   $$('.restore-listen').forEach(b => b.classList.toggle('active', b.dataset.restoreVariant === variant));
   $('#restorationPlayer').src = audioUrl(state.master, variant);
-  $('#restorationPlayer').play().catch(() => {});
 }
 
 function refreshRestoration() {
@@ -465,7 +612,7 @@ function refreshModule(name) {
   else if (name === 'align') drawAlignment();
   else if (name === 'restoration') refreshRestoration();
   else if (name === 'mastering') renderLoudness();
-  else if (name === 'ai') renderAiDetection();
+  else if (name === 'export') { renderLoudness(); renderAiDetection(); }
 }
 
 function refreshVisibleModule(name) {
@@ -475,27 +622,72 @@ function refreshVisibleModule(name) {
   }));
 }
 
+const WORKFLOW_ORDER = ['import', 'quantize', 'align', 'restoration', 'mastering', 'export'];
+
+function allTracksProcessed() {
+  return Boolean(state.project?.tracks?.length)
+    && state.project.tracks.every(track => Boolean(track.output));
+}
+
+function workflowReady(name) {
+  if (name === 'import') return Boolean(state.master);
+  if (name === 'quantize') return allTracksProcessed() && !state.quantizeDirty;
+  if (name === 'align') {
+    if (!$('#moduleAlign').checked) return allTracksProcessed();
+    const reviewed = state.alignmentConfirmed === true;
+    return allTracksProcessed() && reviewed && !state.alignmentDirty;
+  }
+  if (name === 'restoration') return !$('#moduleRestoration').checked || Boolean(state.master?.restored && !state.restorationDirty);
+  if (name === 'mastering') return !$('#moduleMastering').checked || Boolean(state.master?.mastered && !state.masteringDirty);
+  return true;
+}
+
+function workflowGateMessage(name) {
+  return {
+    import: 'Importa e analizza una traccia master prima di continuare.',
+    quantize: 'Quantizza tutte le tracce con le impostazioni correnti prima di continuare.',
+    align: 'Applica l’allineamento oppure scegli esplicitamente di saltarlo.',
+    restoration: 'Crea la versione restaurata oppure scegli “Salta restauro”.',
+    mastering: 'Crea il master finale oppure scegli “Salta mastering”.'
+  }[name] || 'Completa il passaggio corrente prima di continuare.';
+}
+
+function canOpenWorkflowStage(name) {
+  const currentName = $('.module-stage.active')?.dataset.stage || 'import';
+  const currentIndex = WORKFLOW_ORDER.indexOf(currentName);
+  const targetIndex = WORKFLOW_ORDER.indexOf(name);
+  if (targetIndex <= currentIndex) return true;
+  for (let index = 0; index < targetIndex; index += 1) {
+    const step = WORKFLOW_ORDER[index];
+    if (!workflowReady(step)) {
+      toast(workflowGateMessage(step), true);
+      return false;
+    }
+  }
+  return true;
+}
+
 function showModule(name) {
-  const enabled = $(`#module${name[0].toUpperCase()}${name.slice(1)}`)?.checked;
-  if (enabled === false) {
-    const tabs = $$('.module-tab').filter(t => t.querySelector('input').checked);
-    return tabs[0] && showModule(tabs[0].dataset.module);
-  }
-  const current = $('.module-stage.active'), next = $(`.module-stage[data-stage="${name}"]`);
-  if (!next) return;
-  if (current === next) {
-    refreshVisibleModule(name);
-    return;
-  }
-  current?.classList.add('flip-out');
-  setTimeout(() => {
-    current?.classList.remove('active', 'flip-out');
-    next.classList.add('active', 'flip-in');
-    refreshVisibleModule(name);
-    next.addEventListener('animationend', () => next.classList.remove('flip-in'), { once: true });
-    next.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }, 260);
-  $$('.module-tab').forEach(t => t.classList.toggle('active', t.dataset.module === name));
+  const next = $(`.module-stage[data-stage="${name}"]`);
+  if (!next || !canOpenWorkflowStage(name)) return false;
+  const current = $('.module-stage.active');
+  $$('audio').forEach(player => player.pause());
+  current?.classList.remove('active', 'flip-out', 'flip-in');
+  next.classList.add('active');
+  $$('.module-tab').forEach(tab => {
+    const active = tab.dataset.module === name;
+    tab.classList.toggle('active', active);
+    if (active) tab.setAttribute('aria-current', 'step');
+    else tab.removeAttribute('aria-current');
+  });
+  updateWorkflow();
+  refreshVisibleModule(name);
+  requestAnimationFrame(() => {
+    const heading = next.querySelector('.stage-heading') || next;
+    heading.setAttribute('tabindex', '-1'); heading.focus({ preventScroll: true });
+    heading.scrollIntoView({ behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+  });
+  return true;
 }
 
 function moduleFlags() {
@@ -507,19 +699,64 @@ function moduleFlags() {
 }
 
 function syncModules() {
-  $$('.module-tab').forEach(tab => {
-    const enabled = tab.querySelector('input').checked;
-    tab.classList.toggle('disabled', !enabled);
-    const stage = $(`.module-stage[data-stage="${tab.dataset.module}"]`);
-    if (!enabled && stage?.classList.contains('active')) {
-      const fallback = $$('.module-tab').find(t => t.querySelector('input').checked);
-      if (fallback) showModule(fallback.dataset.module);
-    }
-  });
-  $('#alignEnabled').disabled = !$('#moduleAlign').checked;
+  $('#alignEnabled').disabled = !state.master;
   $('#renderRestoration').disabled = !$('#moduleRestoration').checked;
   $('#renderMaster').disabled = !$('#moduleMastering').checked;
   $('#detectAi').disabled = !$('#moduleAi').checked;
+  updateWorkflow();
+}
+
+function updateWorkflow() {
+  const optional = {
+    quantize: $('#moduleQuantize').checked,
+    align: $('#moduleAlign').checked,
+    restoration: $('#moduleRestoration').checked,
+    mastering: $('#moduleMastering').checked
+  };
+  $$('.module-tab').forEach(tab => {
+    const name = tab.dataset.module;
+    const skipped = name in optional && !optional[name];
+    tab.classList.toggle('complete', name !== 'export' && workflowReady(name));
+    tab.classList.toggle('skipped', skipped);
+    tab.disabled = name !== 'import' && !state.master;
+  });
+  $$('.module-stage').forEach(stage => {
+    const enabled = optional[stage.dataset.stage];
+    stage.classList.toggle('step-skipped', enabled === false);
+  });
+  $('#applyAlignment').disabled = !state.master || !$('#alignEnabled').checked;
+  $$('.workflow-next').forEach(button => {
+    const name = button.closest('.module-stage').dataset.stage;
+    const ready = workflowReady(name);
+    button.setAttribute('aria-disabled', String(!ready));
+    button.title = ready ? '' : workflowGateMessage(name);
+    button.classList.toggle('primary', ready); button.classList.toggle('secondary', !ready);
+    const execute = button.closest('.workflow-actions').querySelector('.step-primary-action');
+    if (execute) { execute.classList.toggle('primary', !ready); execute.classList.toggle('secondary', ready); }
+  });
+}
+
+async function persistModuleChoice(input) {
+  const moduleName = input.id.replace('module', '').toLowerCase();
+  const previousAlignment = $('#alignEnabled').checked;
+  if (moduleName === 'align' && !input.checked) $('#alignEnabled').checked = false;
+  syncModules();
+  const saved = await saveModuleSettings();
+  if (!saved) { $('#alignEnabled').checked = previousAlignment; updateWorkflow(); return false; }
+  if (moduleName === 'quantize' && input.checked) {
+    state.quantizeDirty = true; state.alignmentConfirmed = false; rebuildMap();
+  }
+  if (!input.checked && (moduleName === 'quantize' || moduleName === 'align')) {
+    if (moduleName === 'align') state.alignmentConfirmed = true;
+    if (moduleName === 'align' && state.master?.alignment) {
+      if (!await applyAlignment()) return false;
+    } else if (!allTracksProcessed()) {
+      const processed = await saveAndProcess();
+      if (processed !== true) return false;
+    }
+  }
+  updateWorkflow();
+  return true;
 }
 
 function renderTracks() {
@@ -531,13 +768,15 @@ function renderTracks() {
     ${t.mastered ? `<a class="download" href="${audioUrl(t, 'mastered')}" download="${escapeHtml(t.name.replace(/\.[^.]+$/, ''))}-mastered.wav">Master WAV</a>` :
       t.output ? `<a class="download" href="${audioUrl(t, 'output')}" download="${escapeHtml(t.name.replace(/\.[^.]+$/, ''))}-quantized.wav">Scarica WAV</a>` : '<span></span>'}
   </div>`).join('');
+  if ($('#exportTrackList')) $('#exportTrackList').innerHTML = $('#trackList').innerHTML;
   const allReady = state.project.tracks.length > 0
     && state.project.tracks.every(track => Boolean(track.output));
   const downloadAll = $('#downloadAll');
-  downloadAll.disabled = !allReady;
+  downloadAll.disabled = exporting || !allReady;
   downloadAll.title = allReady
     ? 'Scarica master e stem in un unico archivio ZIP'
     : 'Completa prima la quantizzazione di tutte le tracce';
+  updateWorkflow();
 }
 
 function audioUrl(track, variant) { return `/music/ai-quantizer/api/projects/${state.project.id}/audio/${track.id}?variant=${variant}&v=${encodeURIComponent(track.processedAt || '')}`; }
@@ -545,7 +784,7 @@ function formatTime(s) { const m = Math.floor(s / 60), sec = Math.floor(s % 60);
 function setVariant(variant) {
   if (variant === 'output' && !state.master?.output) return toast('Genera prima il risultato', true);
   state.variant = variant; $$('.ab-switch button').forEach(b => b.classList.toggle('active', b.dataset.variant === variant));
-  const current = $('#player').currentTime; $('#player').src = audioUrl(state.master, variant); $('#player').currentTime = current; $('#player').play().catch(() => {});
+  const current = $('#player').currentTime; $('#player').pause(); $('#player').src = audioUrl(state.master, variant); $('#player').currentTime = current;
 }
 
 $('#newProject').onclick = $('#emptyNew').onclick = createProject;
@@ -553,31 +792,57 @@ $('#masterInput').onchange = e => upload([...e.target.files], 'master');
 $('#stemInput').onchange = e => upload([...e.target.files], 'stem');
 $('#analyze').onclick = analyze;
 $('#processMaster').onclick = saveAndProcess;
-$('#processAll').onclick = saveAndProcess;
-$('#downloadAll').onclick = () => {
-  if (!state.project?.tracks.length || state.project.tracks.some(track => !track.output))
-    return toast('Completa prima la quantizzazione di tutte le tracce', true);
-  window.location.assign(`/music/ai-quantizer/api/projects/${state.project.id}/download-all`);
+$('#processAll').onclick = () => showModule('quantize');
+$('#downloadAll').onclick = downloadArchive;
+$('#applyAlignment').onclick = applyAlignment;
+$$('[data-map-variant]').forEach(button => button.onclick = () => {
+  if (button.dataset.mapVariant === 'output' && !state.master?.output) return toast('Genera prima il risultato', true);
+  state.mapVariant = button.dataset.mapVariant;
+  draw();
+});
+$('#targetBpm').onchange = () => {
+  state.quantizeDirty = true; state.alignmentConfirmed = false;
+  if (state.project.workflow) state.project.workflow.alignmentReviewed = false;
+  rebuildMap(); updateWorkflow();
 };
-$('#targetBpm').onchange = rebuildMap;
 $('#measureLoudness').onclick = measureLoudness;
 $('#renderMaster').onclick = renderMaster;
 $('#detectAi').onclick = detectAi;
 $('#renderRestoration').onclick = renderRestoration;
 $('#restoreIntensity').oninput = e => $('#restoreIntensityValue').textContent = `${e.target.value}%`;
+['restoreClean', 'restoreDeclip', 'restoreBandwidth', 'restoreIntensity'].forEach(id => $(`#${id}`).addEventListener('input', () => {
+  state.restorationDirty = true; updateWorkflow();
+}));
+['masterGain', 'limiterEnabled', 'limiterCeiling', 'limiterRelease'].forEach(id => $(`#${id}`).addEventListener('input', () => {
+  state.masteringDirty = true; updateWorkflow();
+}));
 $$('.restore-listen').forEach(button => button.onclick = () => setRestoreVariant(button.dataset.restoreVariant));
-$$('.module-tab').forEach(tab => tab.onclick = e => {
-  if (e.target.closest('.mini-toggle')) return;
-  showModule(tab.dataset.module);
+$$('.module-tab').forEach(tab => tab.onclick = () => showModule(tab.dataset.module));
+$$('.step-switch input').forEach(input => input.onchange = () => persistModuleChoice(input));
+$$('.workflow-next').forEach(button => button.onclick = () => {
+  const start = WORKFLOW_ORDER.indexOf(button.dataset.next);
+  const next = WORKFLOW_ORDER.slice(start).find(name => {
+    const input = $(`#module${name[0].toUpperCase()}${name.slice(1)}`);
+    return !input || input.checked;
+  }) || 'export';
+  showModule(next);
 });
-$$('.mini-toggle input').forEach(input => input.onchange = syncModules);
-$$('.next-module').forEach(button => button.onclick = () => {
-  const order = ['quantize', 'align', 'restoration', 'mastering', 'ai'];
-  const start = order.indexOf(button.dataset.next);
-  const next = order.slice(start).find(name => $(`#module${name[0].toUpperCase()}${name.slice(1)}`).checked);
-  if (next) showModule(next); else toast('Non ci sono altri moduli attivi');
+$$('.workflow-back').forEach(button => button.onclick = () => showModule(button.dataset.back));
+$$('.workflow-skip').forEach(button => button.onclick = async () => {
+  const input = $(`#module${button.dataset.skip[0].toUpperCase()}${button.dataset.skip.slice(1)}`);
+  input.checked = false;
+  if (!await persistModuleChoice(input)) return;
+  const start = WORKFLOW_ORDER.indexOf(button.dataset.skip) + 1;
+  const next = WORKFLOW_ORDER.slice(start).find(name => {
+    const candidate = $(`#module${name[0].toUpperCase()}${name.slice(1)}`);
+    return !candidate || candidate.checked;
+  }) || 'export';
+  showModule(next);
 });
-['alignEnabled', 'alignMode', 'fadeSeconds'].forEach(id => $(`#${id}`).oninput = drawAlignment);
+['alignEnabled', 'alignMode', 'fadeSeconds'].forEach(id => $(`#${id}`).oninput = () => {
+  if (id === 'alignEnabled' && $('#alignEnabled').checked) $('#moduleAlign').checked = true;
+  state.alignmentDirty = true; state.alignmentConfirmed = false; drawAlignment(); updateWorkflow();
+});
 $$('.ab-switch button').forEach(b => b.onclick = () => setVariant(b.dataset.variant));
 $('#deleteProject').onclick = async () => {
   if (!confirm(tr(`Eliminare definitivamente “${state.project.name}”?`))) return;
@@ -589,12 +854,16 @@ const drop = $('#masterDrop');
 ['dragleave', 'drop'].forEach(type => drop.addEventListener(type, e => { e.preventDefault(); drop.classList.remove('drag'); }));
 drop.addEventListener('drop', e => upload([...e.dataTransfer.files], 'master'));
 $('#waveform').onclick = e => {
+  if (state.mapVariant === 'output' && state.master?.output) return;
   if (!state.buffer) return;
   const time = e.offsetX / e.currentTarget.clientWidth * state.buffer.duration;
   if (e.altKey) {
     if (state.beats.length) state.beats.splice(state.beats.reduce((best, v, i) => Math.abs(v - time) < Math.abs(state.beats[best] - time) ? i : best, 0), 1);
   } else state.beats.push(time);
-  state.beats.sort((a, b) => a - b); rebuildMap();
+  state.quantizeDirty = true;
+  state.alignmentConfirmed = false;
+  if (state.project.workflow) state.project.workflow.alignmentReviewed = false;
+  state.beats.sort((a, b) => a - b); rebuildMap(); updateWorkflow();
 };
 window.onresize = () => {
   const active = $('.module-stage.active')?.dataset.stage;

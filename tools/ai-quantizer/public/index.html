@@ -37,21 +37,36 @@
         <div class="header-actions"><span id="saveState">Salvato</span><button id="deleteProject" class="icon-btn" title="Elimina progetto">⌫</button></div>
       </header>
 
-      <div class="module-rail">
-        <button class="module-tab active" data-module="quantize"><i>01</i><span>Quantizza</span><label class="mini-toggle"><input id="moduleQuantize" type="checkbox" checked><b></b></label></button>
-        <button class="module-tab" data-module="align"><i>02</i><span>DAW Align</span><label class="mini-toggle"><input id="moduleAlign" type="checkbox" checked><b></b></label></button>
-        <button class="module-tab" data-module="restoration"><i>03</i><span>Restoration</span><label class="mini-toggle"><input id="moduleRestoration" type="checkbox" checked><b></b></label></button>
-        <button class="module-tab" data-module="mastering"><i>04</i><span>Mastering</span><label class="mini-toggle"><input id="moduleMastering" type="checkbox" checked><b></b></label></button>
-        <button class="module-tab" data-module="ai"><i>05</i><span>AI Forensics</span><label class="mini-toggle"><input id="moduleAi" type="checkbox" checked><b></b></label></button>
-      </div>
+      <nav class="module-rail" aria-label="Flusso di lavorazione">
+        <button class="module-tab active" type="button" data-module="import" aria-current="step"><i>01</i><span>Importa<small>Master e stem</small></span></button>
+        <button class="module-tab" type="button" data-module="quantize"><i>02</i><span>Quantizza<small>Tempo e warp</small></span></button>
+        <button class="module-tab" type="button" data-module="align"><i>03</i><span>Allinea<small>Griglia DAW</small></span></button>
+        <button class="module-tab" type="button" data-module="restoration"><i>04</i><span>Restauro<small>Facoltativo</small></span></button>
+        <button class="module-tab" type="button" data-module="mastering"><i>05</i><span>Master<small>Facoltativo</small></span></button>
+        <button class="module-tab" type="button" data-module="export"><i>06</i><span>Esporta<small>File e verifica</small></span></button>
+      </nav>
 
-      <section class="panel upload-panel" id="masterDrop">
-        <div><p class="eyebrow">TRACCIA DI RIFERIMENTO</p><h3>Master track</h3><p id="masterHint">Trascina il mix completo o scegli un file audio.</p></div>
-        <label class="file-button"><input id="masterInput" type="file" accept="audio/*">Scegli audio</label>
-      </section>
+      <section id="editor">
+        <div class="module-stage active" data-stage="import">
+          <div class="stage-heading"><div><p class="eyebrow">PASSAGGIO 1 DI 6</p><h3>Importa le tracce</h3><p>Parti dal mix completo; aggiungi gli stem che dovranno seguire la stessa mappa temporale.</p></div></div>
+          <section class="panel upload-panel" id="masterDrop">
+            <div><p class="eyebrow">TRACCIA DI RIFERIMENTO</p><h3>Master track</h3><p id="masterHint">Trascina il mix completo o scegli un file audio.</p></div>
+            <label class="file-button"><input id="masterInput" type="file" accept="audio/*">Scegli audio</label>
+          </section>
+          <section class="panel stems-panel">
+            <div class="panel-head"><div><p class="eyebrow">TRACCE DEL PROGETTO</p><h3>Master e stem</h3><p>La stessa warp map verrà applicata a ogni traccia senza rianalizzarla.</p></div>
+              <label class="file-button secondary"><input id="stemInput" type="file" accept="audio/*" multiple>＋ Aggiungi stem</label>
+            </div>
+            <div id="trackList" class="track-list"></div>
+          </section>
+          <div class="workflow-actions"><span></span><button class="workflow-next primary" type="button" data-next="quantize">Continua · Quantizza ↗</button></div>
+        </div>
 
-      <section id="editor" class="hidden">
-        <div class="module-stage active" data-stage="quantize"><div class="metrics">
+        <div class="module-stage" data-stage="quantize">
+          <div class="stage-heading"><div><p class="eyebrow">PASSAGGIO 2 DI 6</p><h3>Stabilizza il tempo</h3><p>Analizza il master, rifinisci i marker e crea una sola warp map per tutte le tracce.</p></div>
+            <label class="step-switch"><input id="moduleQuantize" type="checkbox" checked><span></span><b>Warp ritmico attivo</b></label>
+          </div>
+          <div class="metrics">
           <div><span>BPM rilevato</span><strong id="detectedBpm">—</strong></div>
           <div><span>BPM obiettivo</span><label class="bpm-input"><input id="targetBpm" type="number" min="40" max="240" step="1" value="120"><small>BPM</small></label></div>
           <div><span>Confidenza analisi</span><strong id="confidence">—</strong></div>
@@ -60,14 +75,17 @@
 
         <section class="panel timeline-panel">
           <div class="panel-head"><div><p class="eyebrow">WARP MAP</p><h3>Timeline ritmica</h3></div>
-            <div class="legend"><span class="original">Beat originale</span><span class="target">Griglia target</span><span class="critical">Correzione forte</span></div>
+            <div class="timeline-tools">
+              <div class="mapping-switch" aria-label="Vista della mappa temporale"><button class="active" type="button" data-map-variant="source">Prima · originale</button><button type="button" data-map-variant="output">Dopo · quantizzato</button></div>
+              <div class="legend"><span class="original">Beat originale</span><span class="target">Griglia target</span><span class="critical">Correzione forte</span></div>
+            </div>
           </div>
           <canvas id="waveform" height="270"></canvas>
+          <p id="mappingCaption" class="mapping-caption">Mappa originale: i colori indicano le correzioni di tempo.</p>
           <div class="canvas-help">Marker = ogni beat quantizzato · Click: aggiungi beat · Alt/⌥ + click: rimuovi il beat più vicino</div>
           <div class="controls-row">
             <label>Modalità <strong>Tempo fisso · quantizzazione beat-by-beat</strong></label>
             <button id="analyze" class="secondary">Analisi Smart</button>
-            <button id="processMaster" class="primary">Quantizza master + stem</button>
           </div>
         </section>
 
@@ -76,14 +94,18 @@
           <div class="ab-switch"><button class="active" data-variant="source">Originale</button><button data-variant="output">Risultato</button></div>
           <audio id="player" controls preload="metadata"></audio>
         </section>
-        <button class="next-module primary" data-next="align">Continua · DAW Align ↗</button></div>
+          <div class="workflow-actions"><button class="workflow-back secondary" type="button" data-back="import">← Importa</button><div><button class="workflow-skip secondary" type="button" data-skip="quantize">Salta quantizzazione</button><button id="processMaster" class="primary step-primary-action" type="button">Quantizza master + stem</button><button class="workflow-next secondary" type="button" data-next="align">Continua · Allinea ↗</button></div></div>
+        </div>
 
-        <div class="module-stage" data-stage="align"><section class="panel alignment-panel">
+        <div class="module-stage" data-stage="align">
+          <input id="moduleAlign" type="checkbox" checked hidden>
+          <div class="stage-heading"><div><p class="eyebrow">PASSAGGIO 3 DI 6</p><h3>Allinea alla sessione DAW</h3><p>Porta il primo downbeat utile su una battuta intera, poi applica nuovamente il render.</p></div></div>
+          <section class="panel alignment-panel">
           <div class="panel-head">
             <div><p class="eyebrow">DAW GRID ALIGNMENT</p><h3>Allinea il brano alle battute</h3>
               <p>Prima quantizza il tempo, poi porta il primo downbeat forte sulla battuta DAW più adatta.</p>
             </div>
-            <label class="toggle"><input id="alignEnabled" type="checkbox"><span></span> Abilita</label>
+            <label class="toggle"><input id="alignEnabled" type="checkbox"><span></span> Applica spostamento DAW</label>
           </div>
           <canvas id="alignmentWaveform" height="220"></canvas>
           <div class="alignment-readout">
@@ -100,12 +122,17 @@
             </label>
             <p id="alignExplanation">Abilita l'opzione per visualizzare lo spostamento.</p>
           </div>
-        </section><button class="next-module primary" data-next="restoration">Continua · Restoration ↗</button></div>
+          </section>
+          <div class="workflow-actions"><button class="workflow-back secondary" type="button" data-back="quantize">← Quantizza</button><div><button class="workflow-skip secondary" type="button" data-skip="align">Salta allineamento</button><button id="applyAlignment" class="primary step-primary-action" type="button">Applica allineamento</button><button class="workflow-next secondary" type="button" data-next="restoration">Continua · Restauro ↗</button></div></div>
+        </div>
 
-        <div class="module-stage" data-stage="restoration"><section class="panel restoration-panel">
+        <div class="module-stage" data-stage="restoration">
+          <div class="stage-heading"><div><p class="eyebrow">PASSAGGIO 4 DI 6 · FACOLTATIVO</p><h3>Recupera qualità e dettaglio</h3><p>Usa il restauro solo se la sorgente presenta artefatti, clipping o banda limitata.</p></div>
+            <label class="step-switch"><input id="moduleRestoration" type="checkbox" checked><span></span><b>Includi restauro</b></label>
+          </div>
+          <section class="panel restoration-panel">
           <div class="panel-head"><div><p class="eyebrow">AUDIO RESTORATION</p><h3>Recupero qualità e dettaglio</h3>
             <p>Riduce artefatti di compressione e ricostruisce armoniche plausibili prima del mastering.</p></div>
-            <button id="renderRestoration" class="primary">Crea versione restaurata</button>
           </div>
           <div class="restoration-options">
             <label class="option-card"><input id="restoreClean" type="checkbox" checked><span><b>De-artifact</b><small>Riduzione conservativa della texture MP3</small></span></label>
@@ -115,9 +142,15 @@
           <label class="restore-intensity">Intensità <input id="restoreIntensity" type="range" min="0" max="100" value="35"><output id="restoreIntensityValue">35%</output></label>
           <div class="restore-ab"><button class="secondary restore-listen active" data-restore-variant="output">Prima</button><button class="secondary restore-listen" data-restore-variant="restored">Dopo</button><audio id="restorationPlayer" controls preload="metadata"></audio></div>
           <div class="forensic-warning">L'estensione di banda crea contenuto armonico plausibile: non recupera le frequenze originali eliminate da un codec lossy.</div>
-        </section><button class="next-module primary" data-next="mastering">Continua · Mastering ↗</button></div>
+        </section>
+          <div class="workflow-actions"><button class="workflow-back secondary" type="button" data-back="align">← Allinea</button><div><button class="workflow-skip secondary" type="button" data-skip="restoration">Salta restauro</button><button id="renderRestoration" class="primary step-primary-action" type="button">Crea versione restaurata</button><button class="workflow-next secondary" type="button" data-next="mastering">Continua · Master ↗</button></div></div>
+        </div>
 
-        <div class="module-stage" data-stage="mastering"><section class="panel mastering-panel">
+        <div class="module-stage" data-stage="mastering">
+          <div class="stage-heading"><div><p class="eyebrow">PASSAGGIO 5 DI 6 · FACOLTATIVO</p><h3>Prepara il master finale</h3><p>Misura prima del render, applica gain e limiter, quindi verifica il risultato.</p></div>
+            <label class="step-switch"><input id="moduleMastering" type="checkbox" checked><span></span><b>Includi mastering</b></label>
+          </div>
+          <section class="panel mastering-panel">
           <div class="panel-head">
             <div><p class="eyebrow">LOUDNESS & ISP MASTERING</p><h3>Controllo finale Spotify</h3>
               <p>Misura il risultato allineato, applica gain e limiter ISP-aware, quindi verifica nuovamente il master.</p>
@@ -134,37 +167,42 @@
             <label class="toggle limiter-toggle"><input id="limiterEnabled" type="checkbox" checked><span></span> Limiter ISP 4×</label>
             <label>Ceiling <div class="unit-input"><input id="limiterCeiling" type="number" min="-9" max="-.1" step=".1" value="-1"><small>dBTP</small></div></label>
             <label>Release <div class="unit-input"><input id="limiterRelease" type="number" min="10" max="1000" step="1" value="100"><small>ms</small></div></label>
-            <button id="renderMaster" class="primary">Crea master finale</button>
           </div>
           <div class="spotify-note">Spotify Normal: target −14 LUFS · massimo consigliato −1 dBTP. Se il master supera −14 LUFS, consigliato −2 dBTP.</div>
           <audio id="masterPlayer" controls preload="metadata"></audio>
-        </section><button class="next-module primary" data-next="ai">Continua · AI Forensics ↗</button></div>
-
-        <div class="module-stage" data-stage="ai"><section class="panel ai-panel">
-          <div class="panel-head"><div><p class="eyebrow">AI MUSIC FORENSICS</p><h3>Impronta generativa per ogni passaggio</h3>
-            <p>Confronta la probabilità stimata sul file originale, quantizzato/allineato e master finale.</p></div>
-            <button id="detectAi" class="primary">Analizza tutti i passaggi</button>
-          </div>
-          <div id="aiStageCards" class="ai-stage-cards"></div>
-          <div class="forensic-warning">Il valore è la probabilità del classificatore, non la percentuale di audio “creata dall’AI” e non costituisce prova legale. Time-stretch e mastering possono alterare l’impronta.</div>
-        </section></div>
-
-        <section class="panel stems-panel">
-          <div class="panel-head"><div><p class="eyebrow">STEM & EXPORT</p><h3>Tracce allineate</h3><p>La warp map del master viene riutilizzata senza rianalizzare.</p></div>
-            <label class="file-button secondary"><input id="stemInput" type="file" accept="audio/*" multiple>＋ Aggiungi stem</label>
-          </div>
-          <div id="trackList" class="track-list"></div>
-          <div class="stem-actions">
-            <button id="downloadAll" class="primary download-all" type="button" disabled>Download all · ZIP</button>
-            <button id="processAll" class="primary">Riapplica a master + stem</button>
-          </div>
         </section>
+          <div class="workflow-actions"><button class="workflow-back secondary" type="button" data-back="restoration">← Restauro</button><div><button class="workflow-skip secondary" type="button" data-skip="mastering">Salta mastering</button><button id="renderMaster" class="primary step-primary-action" type="button">Crea master finale</button><button class="workflow-next secondary" type="button" data-next="export">Continua · Esporta ↗</button></div></div>
+        </div>
+
+        <div class="module-stage" data-stage="export">
+          <div class="stage-heading"><div><p class="eyebrow">PASSAGGIO 6 DI 6</p><h3>Verifica ed esporta</h3><p>Scarica le tracce pronte. Se serve, rigenera tutto con le impostazioni correnti.</p></div></div>
+          <section class="panel export-panel">
+            <div class="panel-head"><div><p class="eyebrow">STEM & EXPORT</p><h3>Consegna del progetto</h3><p>Lo ZIP raccoglie master e stem quantizzati nello stesso archivio.</p></div></div>
+            <p id="exportSummary" class="export-summary">Scarica i WAV singolarmente oppure crea uno ZIP; le versioni restaurata e masterizzata vengono incluse quando disponibili.</p>
+            <div id="exportTrackList" class="track-list"></div>
+            <div class="stem-actions">
+              <button id="processAll" class="secondary" type="button">Rivedi quantizzazione</button>
+              <button id="downloadAll" class="primary download-all" type="button" disabled>Download all · ZIP</button>
+            </div>
+          </section>
+
+          <section class="panel ai-panel optional-panel">
+            <div class="panel-head"><div><p class="eyebrow">STRUMENTO FACOLTATIVO · AI MUSIC FORENSICS</p><h3>Controlla l’impronta generativa</h3>
+              <p>Confronta la probabilità stimata sul file originale, quantizzato/allineato, restaurato e master finale. Non è necessaria per esportare.</p></div>
+              <label class="step-switch"><input id="moduleAi" type="checkbox" checked><span></span><b>Abilita verifica AI</b></label>
+            </div>
+            <div class="optional-action"><span>Avvia l’analisi solo se ti serve un controllo forense aggiuntivo.</span><button id="detectAi" class="secondary" type="button">Analizza tutti i passaggi</button></div>
+            <div id="aiStageCards" class="ai-stage-cards"></div>
+            <div class="forensic-warning">Il valore è la probabilità del classificatore, non la percentuale di audio “creata dall’AI” e non costituisce prova legale. Time-stretch e mastering possono alterare l’impronta.</div>
+          </section>
+          <div class="workflow-actions"><button class="workflow-back secondary" type="button" data-back="mastering">← Master</button><span></span></div>
+        </div>
       </section>
     </section>
   </main>
 
   <div id="toast" class="toast"></div>
-  <div id="busy" class="busy hidden"><div class="spinner"></div><strong id="busyTitle">Elaborazione audio</strong><span id="busyText">Questa operazione può richiedere qualche minuto.</span></div>
+  <div id="busy" class="busy hidden" role="status" aria-live="polite" tabindex="-1"><div class="spinner"></div><strong id="busyTitle">Elaborazione audio</strong><span id="busyText">Questa operazione può richiedere qualche minuto.</span><div id="zipProgressArea" class="busy-progress hidden"><progress id="zipProgress" max="100" value="0"></progress><span id="zipProgressText">Preparazione archivio…</span></div></div>
   <script src="./i18n.js"></script>
   <script>document.documentElement.dataset.theme=new URLSearchParams(location.search).get("theme")||parent.documentElement.dataset.theme||"day";</script>
   <script src="./app.js"></script>
