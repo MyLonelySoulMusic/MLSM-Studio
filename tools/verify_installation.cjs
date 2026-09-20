@@ -4,6 +4,8 @@ const { spawnSync } = require("node:child_process");
 const { existsSync } = require("node:fs");
 const { resolve } = require("node:path");
 const { python311Probe } = require("./setup_python_runtime.cjs");
+const { resolveTool } = require("./platform_tools.cjs");
+const { verifyNodeDependencies } = require("./verify_node_dependencies.cjs");
 
 const root = resolve(__dirname, "..");
 function versionTuple(value) { return String(value).replace(/^v/, "").split(".").slice(0, 3).map((part) => Number.parseInt(part, 10) || 0); }
@@ -38,10 +40,14 @@ function collect(platform = process.platform) {
   const venv = (name) => resolve(root, name, platform === "win32" ? "Scripts/python.exe" : "bin/python");
   return {
     node: probe(process.execPath, ["--version"], (v) => versionAtLeast(v, "22.12.0")),
-    npm: probe(platform === "win32" ? "npm.cmd" : "npm", ["--version"]),
+    npm: probe(resolveTool("npm", platform), ["--version"]),
+    npmDependencies: verifyNodeDependencies(),
     python311: systemPython311(platform),
-    ffmpeg: probe("ffmpeg", ["-version"]), ffprobe: probe("ffprobe", ["-version"]),
-    rubberband: probe("rubberband", ["--version"]), rust: probe("rustc", ["--version"]), cargo: probe("cargo", ["--version"]),
+    ffmpeg: probe(resolveTool("ffmpeg", platform), ["-version"]),
+    ffprobe: probe(resolveTool("ffprobe", platform), ["-version"]),
+    rubberband: probe(resolveTool("rubberband", platform), ["--version"]),
+    rust: probe(resolveTool("rustc", platform), ["--version"]),
+    cargo: probe(resolveTool("cargo", platform), ["--version"]),
     upscalerPython: pythonRuntime(venv(".venv"), "import types,torch,fastapi,cv2; from torchvision.transforms.functional import rgb_to_grayscale; m=types.ModuleType('torchvision.transforms.functional_tensor'); m.rgb_to_grayscale=rgb_to_grayscale; sys.modules['torchvision.transforms.functional_tensor']=m; import realesrgan", "ambiente .venv assente"),
     quantizerPython: pythonRuntime(venv(".venv-ai-quantizer"), "import beat_this, soundfile, scipy, onnxruntime", "ambiente .venv-ai-quantizer assente"),
     songPlayerPython: pythonRuntime(venv(".venv-song-player"), "import torch,torchaudio,demucs,cv2,mediapipe,faster_whisper", "ambiente .venv-song-player assente"),

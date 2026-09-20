@@ -4,6 +4,7 @@ import { videoEditorAdjustmentsAreNeutral, videoEditorFilter, videoEditorSetting
 import { mediaDrawRect, type ExportMediaFit } from "./offline-video-exporter";
 import { videoEditorClipPlaybackRateAtLocalSeconds } from "./video-editor-speed";
 import { defaultVideoEditorImageShadow, videoEditorImageLongShadowStops, videoEditorImageShadowCssFilter, videoEditorImageShadowPaint } from "./video-editor-image-shadow";
+import { videoEditorAudioMix, videoEditorDbToGain } from "./video-editor-audio-mix";
 
 /** Le sorgenti vengono preparate poco prima del loro attacco: evita il fotogramma nero al taglio. */
 const preloadWindowSeconds = .4;
@@ -65,6 +66,13 @@ interface PoolEntry {
   element: HTMLVideoElement | HTMLImageElement | HTMLAudioElement;
   ready: boolean;
   gain: GainNode | null;
+  audioSource: MediaElementAudioSourceNode | null;
+  lowEq: BiquadFilterNode | null;
+  midEq: BiquadFilterNode | null;
+  highEq: BiquadFilterNode | null;
+  compressor: DynamicsCompressorNode | null;
+  panner: StereoPannerNode | null;
+  makeup: GainNode | null;
   routed: boolean;
   playPromise: Promise<void> | null;
   primePromise: Promise<void> | null;
@@ -537,6 +545,26 @@ export class VideoEditorMediaPool {
         element.muted = gainValue <= 0;
         element.volume = Math.max(0, Math.min(1, gainValue));
       }
+      if (entry.routed && this.context) {
+        const mix = videoEditorAudioMix(clip);
+        const now = this.context.currentTime;
+        const set = (parameter: AudioParam | undefined, value: number) => parameter?.setTargetAtTime(value, now, .012);
+        set(entry.panner?.pan, mix.pan);
+        const nyquist = this.context.sampleRate / 2;
+        set(entry.lowEq?.frequency, Math.min(nyquist, mix.eq.lowFrequencyHz));
+        set(entry.lowEq?.gain, mix.eq.enabled ? mix.eq.lowGainDb : 0);
+        set(entry.midEq?.frequency, Math.min(nyquist, mix.eq.midFrequencyHz));
+        set(entry.midEq?.Q, mix.eq.midQ);
+        set(entry.midEq?.gain, mix.eq.enabled ? mix.eq.midGainDb : 0);
+        set(entry.highEq?.frequency, Math.min(nyquist, mix.eq.highFrequencyHz));
+        set(entry.highEq?.gain, mix.eq.enabled ? mix.eq.highGainDb : 0);
+        set(entry.compressor?.threshold, mix.compressor.enabled ? mix.compressor.thresholdDb : 0);
+        set(entry.compressor?.ratio, mix.compressor.enabled ? mix.compressor.ratio : 1);
+        set(entry.compressor?.attack, mix.compressor.enabled ? mix.compressor.attackMs / 1_000 : 0);
+        set(entry.compressor?.release, mix.compressor.enabled ? Math.min(1, mix.compressor.releaseMs / 1_000) : .01);
+        set(entry.compressor?.knee, mix.compressor.enabled ? mix.compressor.kneeDb : 0);
+        set(entry.makeup?.gain, mix.compressor.enabled ? videoEditorDbToGain(mix.compressor.makeupGainDb) : 1);
+      }
       const localSeconds = Math.max(0, presentationTime - clip.startSeconds);
       const sourceTarget = videoEditorSourceTime(clip, presentationTime, settings.timebase);
       const target = clip.reversed ? Math.max(clip.sourceInSeconds, sourceTarget - 1e-6) : sourceTarget;
@@ -583,6 +611,7 @@ export class VideoEditorMediaPool {
     // una falsa partenza senza media.
     this.sync(settings);
     this.update(settings, timeSeconds, false);
+    settings = videoEditorSettingsAtAutomationFrame(settings, timeSeconds);
 
     const active: { entry: PoolEntry; element: HTMLMediaElement; kind: "video" | "audio" }[] = [];
     const future: { entry: PoolEntry; element: HTMLMediaElement }[] = [];
@@ -665,7 +694,8 @@ export class VideoEditorMediaPool {
   private create(clipId: string, asset: VideoEditorAsset): PoolEntry {
     const entry: PoolEntry = {
       clipId, assetId: asset.id, url: asset.url, kind: asset.kind, element: new Image(),
-      ready: false, gain: null, routed: false, playPromise: null, lastFrame: null, lastFrameTime: -1,
+      ready: false, gain: null, audioSource: null, lowEq: null, midEq: null, highEq: null,
+      compressor: null, panner: null, makeup: null, routed: false, playPromise: null, lastFrame: null, lastFrameTime: -1,
       primePromise: null, wantedPlaying: false,
       frameCallbackId: null, playbackError: null,
       effectOverlay: asset.kind === "audio" ? null : document.createElement("div"),
@@ -735,12 +765,33 @@ export class VideoEditorMediaPool {
   private route(entry: PoolEntry): void {
     if (entry.routed || entry.kind === "image" || !this.context || !this.master) return;
     try {
-      const source = this.context.createMediaElementSource(entry.element as HTMLMediaElement);
+      // Costruisci prima l'intera catena. Se un WebView non espone un nodo (per
+      // esempio StereoPanner), l'elemento resta ancora libero e può usare il
+      // volume HTML nativo; catturarlo prima lo renderebbe invece muto per sempre.
       const gain = this.context.createGain();
       gain.gain.value = 0;
-      source.connect(gain);
+      const lowEq = this.context.createBiquadFilter();
+      lowEq.type = "lowshelf";
+      const midEq = this.context.createBiquadFilter();
+      midEq.type = "peaking";
+      const highEq = this.context.createBiquadFilter();
+      highEq.type = "highshelf";
+      const compressor = this.context.createDynamicsCompressor();
+      const panner = this.context.createStereoPanner();
+      const makeup = this.context.createGain();
+      const source = this.context.createMediaElementSource(entry.element as HTMLMediaElement);
+      let tail: AudioNode = source;
+      for (const node of [lowEq, midEq, highEq, compressor, panner, makeup]) { tail.connect(node); tail = node; }
+      tail.connect(gain);
       gain.connect(this.master);
+      entry.audioSource = source;
       entry.gain = gain;
+      entry.lowEq = lowEq;
+      entry.midEq = midEq;
+      entry.highEq = highEq;
+      entry.compressor = compressor;
+      entry.panner = panner;
+      entry.makeup = makeup;
       entry.routed = true;
       const element = entry.element as HTMLMediaElement;
       element.muted = false;
@@ -873,7 +924,21 @@ export class VideoEditorMediaPool {
     element.onseeked = null;
     element.onerror = null;
     entry.gain?.disconnect();
+    entry.audioSource?.disconnect();
+    entry.lowEq?.disconnect();
+    entry.midEq?.disconnect();
+    entry.highEq?.disconnect();
+    entry.compressor?.disconnect();
+    entry.panner?.disconnect();
+    entry.makeup?.disconnect();
     entry.gain = null;
+    entry.audioSource = null;
+    entry.lowEq = null;
+    entry.midEq = null;
+    entry.highEq = null;
+    entry.compressor = null;
+    entry.panner = null;
+    entry.makeup = null;
     entry.routed = false;
     element.remove();
     entry.effectOverlay?.remove();

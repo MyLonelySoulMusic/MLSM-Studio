@@ -506,6 +506,29 @@ const videoEditorImageShadowSchema = z.object({
   distance: z.number().min(0).max(.5).default(defaultVideoEditorImageShadow.distance),
   angle: z.number().min(-360).max(360).default(defaultVideoEditorImageShadow.angle)
 }).strict().default(defaultVideoEditorImageShadow);
+const videoEditorAudioMixSchema = z.object({
+  pan: z.number().min(-1).max(1).default(0),
+  fadeMode: z.enum(["manual", "automatic", "envelope"]).default("manual"),
+  eq: z.object({
+    enabled: z.boolean().default(false),
+    lowGainDb: z.number().min(-24).max(24).default(0),
+    lowFrequencyHz: z.number().min(40).max(500).default(120),
+    midGainDb: z.number().min(-24).max(24).default(0),
+    midFrequencyHz: z.number().min(200).max(8_000).default(1_000),
+    midQ: z.number().min(.1).max(12).default(1),
+    highGainDb: z.number().min(-24).max(24).default(0),
+    highFrequencyHz: z.number().min(2_000).max(18_000).default(8_000)
+  }).strict().default({ enabled: false, lowGainDb: 0, lowFrequencyHz: 120, midGainDb: 0, midFrequencyHz: 1_000, midQ: 1, highGainDb: 0, highFrequencyHz: 8_000 }),
+  compressor: z.object({
+    enabled: z.boolean().default(false),
+    thresholdDb: z.number().min(-80).max(0).default(-18),
+    ratio: z.number().min(1).max(20).default(4),
+    attackMs: z.number().min(0).max(1_000).default(10),
+    releaseMs: z.number().min(10).max(1_000).default(180),
+    kneeDb: z.number().min(0).max(40).default(8),
+    makeupGainDb: z.number().min(-12).max(24).default(0)
+  }).strict().default({ enabled: false, thresholdDb: -18, ratio: 4, attackMs: 10, releaseMs: 180, kneeDb: 8, makeupGainDb: 0 })
+}).strict();
 const videoEditorClipSchema = z.object({
   id: z.string().min(1), assetId: z.string().min(1), trackId: z.string().min(1),
   startSeconds: z.number().nonnegative(), durationSeconds: z.number().positive(), sourceInSeconds: z.number().nonnegative().default(0),
@@ -526,7 +549,10 @@ const videoEditorClipSchema = z.object({
   transform: z.object({ x: z.number().min(-2).max(2), y: z.number().min(-2).max(2), scale: z.number().min(.05).max(6), rotation: z.number().min(-360).max(360) }).strict().optional(),
   imageShadow: videoEditorImageShadowSchema,
   fit: z.enum(["cover", "contain", "fill"]).default("cover"),
-  muted: z.boolean().default(false), volume: z.number().min(0).max(2).default(1)
+  muted: z.boolean().default(false), volume: z.number().min(0).max(2).default(1),
+  // Optional keeps older in-memory projects and hand-authored fixtures valid. The
+  // audio engine resolves the same neutral defaults whenever this block is absent.
+  audioMix: videoEditorAudioMixSchema.optional()
 }).strict();
 const defaultVideoEditor = {
   assets: [] as [], tracks: [

@@ -6,6 +6,7 @@ const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
+const { resolveTool } = require('../platform_tools.cjs');
 
 const ROOT = __dirname;
 const PUBLIC = path.join(ROOT, 'public');
@@ -14,6 +15,9 @@ const PYTHON = process.env.AIQ_PYTHON || path.resolve(ROOT, '..', '..', '.venv-a
 const PORT = Number(process.env.PORT || 4173);
 const MAX_UPLOAD = 1024 * 1024 * 1024;
 const PROCESS_SAMPLE_RATE = 48000;
+const FFMPEG = resolveTool('ffmpeg');
+const FFPROBE = resolveTool('ffprobe');
+const RUBBERBAND = resolveTool('rubberband');
 const activeChildren = new Set();
 
 function spawnTracked(command, args, options = {}) {
@@ -238,7 +242,7 @@ function runCapture(command, args) {
 }
 
 async function measureLoudness(file) {
-  const { stderr } = await runCapture('ffmpeg', ['-hide_banner', '-nostats', '-i', file,
+  const { stderr } = await runCapture(FFMPEG, ['-hide_banner', '-nostats', '-i', file,
     '-af', 'loudnorm=I=-14:LRA=50:TP=-1:print_format=json', '-f', 'null', '-']);
   const matches = [...stderr.matchAll(/\{\s*"input_i"[\s\S]*?\}/g)];
   if (!matches.length) throw new Error('Misurazione loudness non disponibile');
@@ -292,7 +296,7 @@ async function analyzeAiStage(id, project, stage, file, strict = false) {
 }
 
 async function probe(file) {
-  const result = spawnSync('ffprobe', [
+  const result = spawnSync(FFPROBE, [
     '-v', 'error', '-show_entries', 'format=duration:stream=sample_rate,channels',
     '-select_streams', 'a:0', '-of', 'json', file
   ], { encoding: 'utf8' });
@@ -391,7 +395,7 @@ async function processTrack(id, track, project) {
     `atrim=end_sample=${timeline.sourceFrames}`,
     'asetpts=N/SR/TB'
   ].join(',');
-  await run('ffmpeg', ['-y', '-v', 'error', '-i', input, '-vn', '-af', normalizeFilter,
+  await run(FFMPEG, ['-y', '-v', 'error', '-i', input, '-vn', '-af', normalizeFilter,
     '-ar', String(PROCESS_SAMPLE_RATE), '-c:a', 'pcm_f32le', converted]);
   const lines = timeline.points.map(point =>
     `${point.sourceFrame} ${point.targetFrame}`).join('\n');
@@ -400,7 +404,7 @@ async function processTrack(id, track, project) {
   if (project.modules?.quantize === false) {
     await fsp.copyFile(converted, warped);
   } else {
-    await run('rubberband', ['-q', '-3', '--centre-focus', '-M', mapFile,
+    await run(RUBBERBAND, ['-q', '-3', '--centre-focus', '-M', mapFile,
       '-D', targetDuration.toFixed(6), converted, warped]);
   }
   const alignment = project.modules?.align !== false && project.alignment?.enabled ? project.alignment : null;
@@ -408,7 +412,7 @@ async function processTrack(id, track, project) {
     ? timeline.sourceFrames
     : timeline.targetFrames;
   const { filters, outputFrames } = alignmentRenderPlan(effectiveTargetFrames, alignment);
-  await run('ffmpeg', ['-y', '-v', 'error', '-i', warped, '-af', filters.join(','),
+  await run(FFMPEG, ['-y', '-v', 'error', '-i', warped, '-af', filters.join(','),
     '-ar', String(PROCESS_SAMPLE_RATE), '-c:a', 'pcm_f32le', output]);
   const outputInfo = await probe(output);
   track.output = outputRel;
@@ -455,7 +459,7 @@ async function applyAlignmentToTrack(id, track, alignment) {
   const { filters, outputFrames } = alignmentRenderPlan(sourceFrames, effectiveAlignment);
   const temporary = path.join(dir, 'work', `${track.id}-alignment-${crypto.randomUUID()}.wav`);
   try {
-    await run('ffmpeg', ['-y', '-v', 'error', '-i', source, '-af', filters.join(','),
+    await run(FFMPEG, ['-y', '-v', 'error', '-i', source, '-af', filters.join(','),
       '-ar', String(PROCESS_SAMPLE_RATE), '-c:a', 'pcm_f32le', temporary]);
     // copyFile replaces the destination on both Windows and macOS; rename does
     // not reliably replace an existing WAV on Windows.
@@ -569,12 +573,13 @@ async function createProjectArchive(id, project) {
 async function api(req, res, url) {
   const parts = url.pathname.split('/').filter(Boolean);
   if (url.pathname === '/api/health') {
-    const toolArgs = {
-      ffmpeg: ['-version'], ffprobe: ['-version'],
-      rubberband: ['--version']
+    const tools = {
+      ffmpeg: [FFMPEG, ['-version']],
+      ffprobe: [FFPROBE, ['-version']],
+      rubberband: [RUBBERBAND, ['--version']]
     };
-    const checks = Object.fromEntries(Object.entries(toolArgs).map(([cmd, args]) =>
-      [cmd, spawnSync(cmd, args, { stdio: 'ignore' }).status === 0]));
+    const checks = Object.fromEntries(Object.entries(tools).map(([name, [command, args]]) =>
+      [name, spawnSync(command, args, { stdio: 'ignore' }).status === 0]));
     checks.beatTracker = spawnSync(PYTHON, ['-c', 'import beat_this, soundfile'], { stdio: 'ignore' }).status === 0;
     return json(res, 200, { runtime: 'mlsm-internal-ai-quantizer', apiVersion: 1, ok: Object.values(checks).every(Boolean), checks });
   }
@@ -803,7 +808,7 @@ async function api(req, res, url) {
       filters.push(`alimiter=limit=${linear.toFixed(9)}:attack=5:release=${releaseMs.toFixed(1)}:level=false:latency=true`);
     }
     filters.push('aresample=48000:resampler=soxr');
-    await run('ffmpeg', ['-y', '-v', 'error', '-i', source, '-af', filters.join(','),
+    await run(FFMPEG, ['-y', '-v', 'error', '-i', source, '-af', filters.join(','),
       '-ar', '48000', '-c:a', 'pcm_f32le', mastered]);
     const metrics = await measureLoudness(mastered);
     master.mastered = masteredRel;
@@ -835,7 +840,7 @@ async function api(req, res, url) {
     if (clean) filters.push(`afftdn=nr=${(3 + intensity * .07).toFixed(2)}:nf=-55:tn=1:gs=4`);
     if (bandwidth) filters.push(`aexciter=amount=${(.2 + intensity * .012).toFixed(3)}:drive=2.5:blend=${(.05 + intensity * .004).toFixed(3)}:freq=7500:ceil=18000`);
     filters.push('aresample=48000:resampler=soxr');
-    await run('ffmpeg', ['-y', '-v', 'error', '-i', source, '-af', filters.join(','),
+    await run(FFMPEG, ['-y', '-v', 'error', '-i', source, '-af', filters.join(','),
       '-ar', '48000', '-c:a', 'pcm_f32le', restored]);
     master.restored = restoredRel;
     master.restoredAt = new Date().toISOString();

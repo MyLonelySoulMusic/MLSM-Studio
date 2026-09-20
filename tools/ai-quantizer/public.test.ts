@@ -90,6 +90,43 @@ describe('Music guided workflow', () => {
     expect(document.querySelector('#exportTrackList')?.textContent).toContain('Song.wav');
   });
 
+  it('replaces the browser confirmation with an accessible high-correction modal', async () => {
+    const { app, fetcher } = boot();
+    await tick(); fetcher.mockClear();
+    fetcher.mockResolvedValueOnce(new Response(JSON.stringify({ error: 'CONFERMA_WARP: correzione locale fino al 18%, oltre il limite consigliato' }), { status: 400, headers: { 'content-type': 'application/json' } }));
+    const processing = app.saveAndProcess();
+    await tick();
+    const dialog = document.querySelector('#unsafeWarpModal [role="alertdialog"]');
+    expect(dialog).not.toBeNull();
+    expect(document.querySelector('#unsafeWarpModal')?.classList.contains('hidden')).toBe(false);
+    expect(document.querySelector('#unsafeWarpValue')?.textContent).toBe('18%');
+    expect(document.querySelector('#unsafeWarpDetail')?.textContent).toContain('correzione locale fino al 18%');
+    expect(document.querySelector('#busy')?.classList.contains('hidden')).toBe(true);
+    expect(document.activeElement).toBe(document.querySelector('#unsafeWarpCancel'));
+    (document.querySelector('#unsafeWarpCancel') as HTMLButtonElement).click();
+    expect(await processing).toBe(false);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('#toast')?.textContent).toBe('Quantizzazione annullata');
+  });
+
+  it('continues the render only after explicit confirmation in the custom modal', async () => {
+    const { app, fetcher } = boot();
+    await tick(); fetcher.mockClear();
+    const result = JSON.parse(JSON.stringify(app.state.project));
+    result.workflow = { alignmentReviewed: false };
+    fetcher
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'CONFERMA_WARP: correzione locale fino al 21%, oltre il limite consigliato' }), { status: 400, headers: { 'content-type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(result), { headers: { 'content-type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(result), { headers: { 'content-type': 'application/json' } }));
+    const processing = app.saveAndProcess();
+    await tick();
+    (document.querySelector('#unsafeWarpContinue') as HTMLButtonElement).click();
+    expect(await processing).toBe(true);
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(JSON.parse(String(fetcher.mock.calls[1][1]?.body))).toMatchObject({ confirmUnsafe: true });
+    expect(document.querySelector('#busy')?.classList.contains('hidden')).toBe(true);
+  });
+
   it('applies alignment through its dedicated endpoint without saving or processing the warp map', async () => {
     const { app, fetcher } = boot();
     await tick(); fetcher.mockClear();
@@ -169,6 +206,9 @@ it('translates the guided workflow and download feedback into English', () => {
     expect(document.querySelector('[data-skip="restoration"]')?.textContent).toBe('Skip restoration');
     expect(translator.translate('Preparazione ZIP')).toBe('Preparing ZIP');
     expect(translator.translate('Download incompleto. Riprova.')).not.toBe('Download incompleto. Riprova.');
+    expect(translator.translate('Correzione oltre il limite consigliato')).toBe('Correction above the recommended limit');
+    expect(translator.translate('correzione locale fino al 18%, oltre il limite consigliato')).toBe('Local correction up to 18%, above the recommended limit');
+    expect(document.querySelector('#unsafeWarpCancel')?.textContent).toBe('Return to the map');
   } finally { translator.setLanguage('it'); }
 });
 

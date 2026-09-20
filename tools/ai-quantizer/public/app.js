@@ -5,6 +5,9 @@ const tr = value => window.AIQ_I18N?.translate(value) || value;
 const state = { projects: [], project: null, master: null, buffer: null, peaks: [], beats: [], downbeats: [], map: [], variant: 'source', mapVariant: 'source', quantizeDirty: false, alignmentDirty: false, alignmentConfirmed: false };
 let exporting = false;
 let busyFocus = null;
+let unsafeWarpResolver = null;
+let unsafeWarpFocus = null;
+let unsafeWarpCloseTimer = null;
 
 async function request(url, options = {}) {
   const res = await fetch(url, options);
@@ -27,6 +30,37 @@ function busy(on, title = 'Elaborazione audio', text = 'Questa operazione può r
   if (on) $('#busy').focus();
   else { busyFocus?.focus(); busyFocus = null; }
   if (!exporting) $('#zipProgressArea')?.classList.add('hidden');
+}
+
+function closeUnsafeWarpDecision(confirmed = false) {
+  if (!unsafeWarpResolver) return;
+  const backdrop = $('#unsafeWarpModal'), resolve = unsafeWarpResolver, restoreFocus = unsafeWarpFocus;
+  unsafeWarpResolver = null; unsafeWarpFocus = null;
+  backdrop.classList.add('is-closing');
+  document.body.classList.remove('decision-modal-open');
+  $('main').inert = false; $('.sidebar').inert = false;
+  resolve(confirmed);
+  unsafeWarpCloseTimer = setTimeout(() => {
+    backdrop.classList.add('hidden'); backdrop.classList.remove('is-closing');
+    restoreFocus?.focus();
+    unsafeWarpCloseTimer = null;
+  }, 180);
+}
+
+function confirmUnsafeWarp(warning) {
+  const percentage = /([\d.,]+)%/.exec(warning)?.[1];
+  $('#unsafeWarpValue').textContent = percentage ? `${percentage.replace(',', '.')}%` : tr('Oltre soglia');
+  $('#unsafeWarpDetail').textContent = `${tr(warning)}. ${tr('La correzione può alterare transienti, batteria e materiale percussivo. Tornando alla mappa puoi modificare BPM o marker prima del render.')}`;
+  const backdrop = $('#unsafeWarpModal');
+  clearTimeout(unsafeWarpCloseTimer); unsafeWarpCloseTimer = null;
+  backdrop.classList.remove('hidden', 'is-closing');
+  document.body.classList.add('decision-modal-open');
+  unsafeWarpFocus = document.activeElement;
+  $('main').inert = true; $('.sidebar').inert = true;
+  return new Promise(resolve => {
+    unsafeWarpResolver = resolve;
+    requestAnimationFrame(() => $('#unsafeWarpCancel').focus());
+  });
 }
 
 async function saveModuleSettings() {
@@ -462,10 +496,12 @@ async function saveAndProcess(alignmentReviewed = false) {
     } catch (error) {
       if (!error.message.startsWith('CONFERMA_WARP:')) throw error;
       const warning = error.message.replace('CONFERMA_WARP:', '').trim();
-      if (!confirm(tr(`${warning}. La correzione può produrre artefatti udibili. Procedere comunque?`))) {
+      busy(false);
+      if (!await confirmUnsafeWarp(warning)) {
         toast('Quantizzazione annullata');
-        return;
+        return false;
       }
+      busy(true, 'Quantizzazione di master e stem', 'Applico a tutte le tracce una sola timeline, conservando il pitch.');
       state.project = await saveWarpMap(true);
     }
     state.master = state.project.tracks.find(t => t.role === 'master');
@@ -848,6 +884,21 @@ $('#deleteProject').onclick = async () => {
   if (!confirm(tr(`Eliminare definitivamente “${state.project.name}”?`))) return;
   await request(`/music/ai-quantizer/api/projects/${state.project.id}`, { method: 'DELETE' }); state.project = null;
   $('#workspace').classList.add('hidden'); $('#emptyState').classList.remove('hidden'); await loadProjects();
+};
+$('#unsafeWarpCancel').onclick = () => closeUnsafeWarpDecision(false);
+$('#unsafeWarpClose').onclick = () => closeUnsafeWarpDecision(false);
+$('#unsafeWarpContinue').onclick = () => closeUnsafeWarpDecision(true);
+$('#unsafeWarpModal').onclick = event => {
+  if (event.target === event.currentTarget) closeUnsafeWarpDecision(false);
+};
+$('#unsafeWarpModal').onkeydown = event => {
+  if (event.key === 'Escape') { event.preventDefault(); closeUnsafeWarpDecision(false); return; }
+  if (event.key !== 'Tab') return;
+  const focusable = [...$('#unsafeWarpModal').querySelectorAll('button:not(:disabled)')];
+  if (!focusable.length) return;
+  const first = focusable[0], last = focusable.at(-1);
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
 };
 const drop = $('#masterDrop');
 ['dragenter', 'dragover'].forEach(type => drop.addEventListener(type, e => { e.preventDefault(); drop.classList.add('drag'); }));

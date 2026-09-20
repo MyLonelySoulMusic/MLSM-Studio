@@ -83,3 +83,36 @@ body { -webkit-font-smoothing: antialiased; }
   .mapping-switch { width: 100%; }
   .mapping-switch button { flex: 1; }
 }
+
+/* High-correction decision modal */
+body.decision-modal-open { overflow: hidden; }
+.decision-modal-backdrop { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: 24px; background: color-mix(in srgb, #171217 72%, transparent); backdrop-filter: blur(14px); animation: decisionBackdropIn .2s ease-out both; }
+.decision-modal-backdrop.is-closing { pointer-events: none; animation: decisionBackdropOut .18s ease-in both; }
+.decision-modal { position: relative; width: min(580px, 100%); overflow: hidden; padding: clamp(24px, 4vw, 36px); color: var(--text); background: linear-gradient(145deg, color-mix(in srgb, var(--panel) 97%, var(--lime)), var(--panel)); border: 1px solid color-mix(in srgb, var(--lime) 48%, var(--line)); border-radius: 24px; box-shadow: 0 30px 90px #16081245, 0 0 0 1px #fff7 inset; animation: decisionModalIn .28s cubic-bezier(.2,.8,.2,1) both; }
+.decision-modal-backdrop.is-closing .decision-modal { animation: decisionModalOut .16s ease-in both; }
+.decision-modal:before { content: ""; position: absolute; inset: 0 0 auto; height: 4px; background: linear-gradient(90deg, var(--lime), color-mix(in srgb, var(--lime) 35%, white)); }
+.decision-modal-close { position: absolute; top: 16px; right: 16px; width: 38px; height: 38px; display: grid; place-items: center; padding: 0; border-radius: 50%; color: var(--muted); background: color-mix(in srgb, var(--text) 5%, transparent); border: 1px solid var(--line); font-size: 22px; font-weight: 400; }
+.decision-modal-close:hover { color: var(--text); border-color: var(--lime); }
+.decision-modal-heading { display: grid; grid-template-columns: auto 1fr; gap: 16px; align-items: center; padding-right: 38px; }
+.decision-modal-heading h2 { margin: 5px 0 0; font-size: clamp(25px, 4vw, 34px); line-height: 1.05; letter-spacing: -.045em; }
+.decision-modal-icon { width: 50px; height: 50px; display: grid; place-items: center; border-radius: 16px; color: #fff; background: var(--red); box-shadow: 0 10px 24px color-mix(in srgb, var(--red) 28%, transparent); font-size: 25px; font-weight: 850; }
+.decision-modal-lead { margin: 22px 0 18px; color: var(--muted); font-size: 14px; line-height: 1.65; }
+.decision-modal-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.decision-modal-metrics > div { padding: 17px 18px; background: color-mix(in srgb, var(--lime) 7%, var(--panel)); border: 1px solid var(--line); border-radius: 14px; }
+.decision-modal-metrics span, .decision-modal-metrics strong { display: block; }
+.decision-modal-metrics span { margin-bottom: 7px; color: var(--muted); font-size: 10px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
+.decision-modal-metrics strong { color: var(--text); font-size: 27px; letter-spacing: -.04em; font-variant-numeric: tabular-nums; }
+.decision-modal-metrics > div:first-child strong { color: var(--red); }
+.decision-modal-note { display: grid; grid-template-columns: auto 1fr; gap: 11px; align-items: start; margin-top: 12px; padding: 15px 17px; color: var(--muted); background: color-mix(in srgb, var(--red) 6%, var(--panel)); border-left: 3px solid var(--red); border-radius: 10px; }
+.decision-modal-note > span { color: var(--red); font-size: 18px; line-height: 1.4; }
+.decision-modal-note p { margin: 0; font-size: 12px; line-height: 1.6; }
+.decision-modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--line); }
+.decision-modal-actions button { min-width: 170px; }
+.decision-modal-confirm { background: var(--red); border-color: var(--red); color: #fff; box-shadow: 0 9px 22px color-mix(in srgb, var(--red) 22%, transparent); }
+.decision-modal-confirm:hover { background: color-mix(in srgb, var(--red) 88%, white); }
+@keyframes decisionBackdropIn { from { opacity: 0; } }
+@keyframes decisionBackdropOut { to { opacity: 0; } }
+@keyframes decisionModalIn { from { opacity: 0; transform: translateY(18px) scale(.965); } to { opacity: 1; transform: none; } }
+@keyframes decisionModalOut { to { opacity: 0; transform: translateY(10px) scale(.98); } }
+@media (max-width: 560px) { .decision-modal-backdrop { padding: 12px; } .decision-modal { border-radius: 19px; } .decision-modal-metrics { grid-template-columns: 1fr; } .decision-modal-actions { display: grid; } .decision-modal-actions button { width: 100%; } }
+@media (prefers-reduced-motion: reduce) { .decision-modal-backdrop, .decision-modal, .decision-modal-backdrop.is-closing, .decision-modal-backdrop.is-closing .decision-modal { animation: none; } }

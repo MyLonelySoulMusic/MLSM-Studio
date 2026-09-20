@@ -188,7 +188,7 @@ describe("AI Quantizer modules API", () => {
 
     const source = await readFile(serverPath, "utf8");
     const alignmentOnly = source.slice(source.indexOf("async function applyAlignmentToTrack"), source.indexOf("async function serveFile"));
-    expect(alignmentOnly).toContain("run('ffmpeg'");
+    expect(alignmentOnly).toContain("run(FFMPEG");
     expect(alignmentOnly).not.toContain("rubberband");
     expect(alignmentOnly).not.toContain("sharedWarpTimeline");
   });

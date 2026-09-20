@@ -543,4 +543,16 @@ describe("Video Editor · montaggio nello store", () => {
     expect(editor()).toMatchObject({ outputWidth: 3840, outputHeight: 2160, snapThresholdSeconds: .12, snapToBeats: false, backgroundColor: "#101820", interpolationEnabled: true, interpolationTargetFps: 120, interpolationMethod: "rife" });
     expect(useProjectStore.getState().dirty).toBe(true);
   });
+
+  it("rimuove gli inviluppi quando la clip audio viene eliminata", () => {
+    useProjectStore.getState().addVideoEditorAssets([audioAsset]);
+    const clipId = useProjectStore.getState().addVideoEditorClip("media-audio")!;
+    useProjectStore.getState().upsertVideoEditorKeyframe(
+      { kind: "clip", clipId, property: "audioMix.pan" },
+      { id: "pan-point", frame: 0, value: -.5, curve: "linear" }
+    );
+    expect(editor().automationLanes).toHaveLength(1);
+    useProjectStore.getState().deleteVideoEditorClips([clipId]);
+    expect(editor().automationLanes).toHaveLength(0);
+  });
 });

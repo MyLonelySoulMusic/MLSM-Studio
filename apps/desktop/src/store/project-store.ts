@@ -748,6 +748,7 @@ export const useProjectStore = create<ProjectState>((set) => ({
       assets: settings.assets.filter((asset) => asset.id !== assetId),
       clips,
       effectClips,
+      automationLanes: settings.automationLanes.filter((lane) => lane.target.kind !== "clip" || clipIds.has(lane.target.clipId)),
       selectedClipIds: settings.selectedClipIds.filter((id) => clipIds.has(id)),
       selectedEffectClipIds: settings.selectedEffectClipIds.filter((id) => effectClips.some((effect) => effect.id === id))
     }, "Media rimosso dal pool con le clip collegate");
@@ -894,6 +895,7 @@ export const useProjectStore = create<ProjectState>((set) => ({
       ...settings,
       clips: settings.clips.filter((clip) => !targets.has(clip.id)),
       effectClips,
+      automationLanes: settings.automationLanes.filter((lane) => lane.target.kind !== "clip" || !targets.has(lane.target.clipId)),
       selectedClipIds: settings.selectedClipIds.filter((id) => !targets.has(id)),
       selectedEffectClipIds: settings.selectedEffectClipIds.filter((id) => effectClips.some((effect) => effect.id === id))
     }, `${targets.size} clip rimosse dalla timeline`);
@@ -1024,6 +1026,7 @@ export const useProjectStore = create<ProjectState>((set) => ({
       tracks: settings.tracks.filter((track) => track.id !== trackId),
       clips,
       effectClips,
+      automationLanes: settings.automationLanes.filter((lane) => lane.target.kind !== "clip" || clipIds.has(lane.target.clipId)),
       selectedClipIds: settings.selectedClipIds.filter((id) => clipIds.has(id)),
       selectedEffectClipIds: settings.selectedEffectClipIds.filter((id) => effectClips.some((effect) => effect.id === id))
     }, "Traccia eliminata con le sue clip");

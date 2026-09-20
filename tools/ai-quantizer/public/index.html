@@ -202,6 +202,25 @@
   </main>
 
   <div id="toast" class="toast"></div>
+  <div id="unsafeWarpModal" class="decision-modal-backdrop hidden" role="presentation">
+    <section class="decision-modal" role="alertdialog" aria-modal="true" aria-labelledby="unsafeWarpTitle" aria-describedby="unsafeWarpDescription unsafeWarpDetail" tabindex="-1">
+      <button id="unsafeWarpClose" class="decision-modal-close" type="button" aria-label="Chiudi avviso">×</button>
+      <div class="decision-modal-heading">
+        <span class="decision-modal-icon" aria-hidden="true">!</span>
+        <div><p class="eyebrow">CONTROLLO QUALITÀ · TIME WARP</p><h2 id="unsafeWarpTitle">Correzione oltre il limite consigliato</h2></div>
+      </div>
+      <p id="unsafeWarpDescription" class="decision-modal-lead">La mappa temporale richiede una deformazione locale intensa. Prima di procedere, valuta il rischio di artefatti udibili.</p>
+      <div class="decision-modal-metrics" aria-label="Dettagli della correzione">
+        <div><span>Correzione rilevata</span><strong id="unsafeWarpValue">—</strong></div>
+        <div><span>Soglia consigliata</span><strong>≤ 12%</strong></div>
+      </div>
+      <div class="decision-modal-note"><span aria-hidden="true">◇</span><p id="unsafeWarpDetail">La correzione può alterare transienti, batteria e materiale percussivo. Tornando alla mappa puoi modificare BPM o marker prima del render.</p></div>
+      <div class="decision-modal-actions">
+        <button id="unsafeWarpCancel" class="secondary" type="button">Torna alla mappa</button>
+        <button id="unsafeWarpContinue" class="primary decision-modal-confirm" type="button">Procedi comunque</button>
+      </div>
+    </section>
+  </div>
   <div id="busy" class="busy hidden" role="status" aria-live="polite" tabindex="-1"><div class="spinner"></div><strong id="busyTitle">Elaborazione audio</strong><span id="busyText">Questa operazione può richiedere qualche minuto.</span><div id="zipProgressArea" class="busy-progress hidden"><progress id="zipProgress" max="100" value="0"></progress><span id="zipProgressText">Preparazione archivio…</span></div></div>
   <script src="./i18n.js"></script>
   <script>document.documentElement.dataset.theme=new URLSearchParams(location.search).get("theme")||parent.documentElement.dataset.theme||"day";</script>

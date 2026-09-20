@@ -14,7 +14,7 @@ Gli script di installazione rilevano il sistema operativo e installano o verific
 ## Comandi principali
 
 ```bash
-npm install              # dipendenze JavaScript
+npm ci --include=dev     # dipendenze JavaScript esatte dal lockfile
 npm run dev              # app e servizi locali integrati
 npm run build            # build web, nessun server
 npm run typecheck        # TypeScript
@@ -60,10 +60,10 @@ presente e la mini inferenza reale passa sul dispositivo selezionato.
 
 | Sistema | Installa | Avvia | Compila |
 | --- | --- | --- | --- |
-| macOS | `bash scripts/macos/install.sh` | `npm run launch:mac` | `npm run package:mac` |
-| Windows | `scripts\windows\install.bat` | `npm run launch:windows` | `npm run package:windows` |
+| macOS | `bash scripts/macos/install.sh` | `scripts/macos/launch.sh` | `scripts/macos/build.sh` |
+| Windows | `scripts\windows\install.bat` | `scripts\windows\launch.bat` | `scripts\windows\build.bat` |
 
-Gli script nativi sono raccolti in `scripts/macos/` e `scripts/windows/`. L’installazione iniziale usa direttamente lo script nativo perché Node/npm potrebbe non essere ancora presente; dopo il setup, gli alias npm sono gli ingressi stabili per l’uso quotidiano. La struttura completa è descritta in [`scripts/README.md`](../scripts/README.md). Ogni script supporta `--check` dove documentato. La CI usa runner nativi macOS e Windows; Windows non viene simulato con Docker Linux.
+Gli script nativi sono raccolti in `scripts/macos/` e `scripts/windows/`. Installazione, avvio e build possono essere richiamati direttamente anche su una macchina nuova; gli alias npm restano scorciatoie equivalenti dopo il setup. La struttura completa è descritta in [`scripts/README.md`](../scripts/README.md). Ogni script supporta `--check` dove documentato. La CI usa runner nativi macOS e Windows; Windows non viene simulato con Docker Linux.
 
 ## Screenshot del manuale
 

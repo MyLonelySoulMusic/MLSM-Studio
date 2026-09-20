@@ -96,7 +96,7 @@ async function decryptSecret(value) {
 }
 
 function publicState() {
-  const { config: _legacyConfig, ...safeState } = state;
+  const safeState = Object.fromEntries(Object.entries(state).filter(([key]) => key !== "config"));
   return {
     ...safeState,
     blogs: state.blogs.map(({ password, ...blog }) => ({ ...blog, hasPassword: Boolean(password) })),

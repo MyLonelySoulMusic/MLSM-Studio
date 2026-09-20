@@ -8,7 +8,10 @@ on:
       - "scripts/**"
       - "tools/setup_python_runtime.cjs"
       - "tools/run_python_service.cjs"
+      - "tools/platform_tools.cjs"
+      - "tools/verify_node_dependencies.cjs"
       - "tools/verify_installation.cjs"
+      - "tools/ai-quantizer/server.cjs"
       - "tools/installer.test.ts"
       - "tools/upscaler/requirements.txt"
       - "package.json"
@@ -18,11 +21,11 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version-file: ".nvmrc", cache: "npm" }
-      - run: npm ci
       - run: bash -n scripts/macos/*.sh
       - run: scripts/macos/install.sh --dry-run
+      - uses: actions/setup-node@v4
+        with: { node-version-file: ".nvmrc", cache: "npm" }
+      - run: npm ci --include=dev
       - run: scripts/macos/launch.sh --check
       - run: scripts/macos/build.sh --check
       - run: npx vitest run tools/installer.test.ts
@@ -31,13 +34,18 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version-file: ".nvmrc", cache: "npm" }
-      - run: npm ci
-      - shell: cmd
-        run: scripts\windows\launch.bat --check
       - shell: cmd
         run: scripts\windows\install.bat --dry-run
+      - shell: pwsh
+        run: |
+          $target = Join-Path $env:RUNNER_TEMP "mlsm-path-test"
+          New-Item -ItemType Directory -Force -Path $target | Out-Null
+          & scripts/windows/ensure-user-path.ps1 -Directory $target -DryRun
+      - uses: actions/setup-node@v4
+        with: { node-version-file: ".nvmrc", cache: "npm" }
+      - run: npm ci --include=dev
+      - shell: cmd
+        run: scripts\windows\launch.bat --check
       - shell: cmd
         run: scripts\windows\build.bat --check
       - run: npx vitest run tools/installer.test.ts

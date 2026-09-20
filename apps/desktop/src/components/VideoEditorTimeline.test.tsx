@@ -96,4 +96,16 @@ describe("VideoEditorTimeline · trim dei fermi immagine", () => {
     });
     expect(screen.getByRole("menuitem", { name: "Elimina clip" })).toBeInTheDocument();
   });
+
+  it("apre Mix audio dal tasto destro su una clip video con audio", () => {
+    useProjectStore.getState().addVideoEditorClip(video.id, { trackId: "video-editor-track-main" });
+    render(<VideoEditorTimeline timelineHeight={300} />);
+    fireEvent.contextMenu(screen.getByRole("button", { name: /Clip ripresa\.mp4/ }), { clientX: 300, clientY: 180 });
+    fireEvent.click(screen.getByRole("menuitem", { name: /Mix audio/ }));
+
+    expect(screen.getByRole("dialog", { name: "ripresa.mp4" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Modalità dissolvenza" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Inviluppo" }));
+    expect(useProjectStore.getState().project.animation.videoEditor.automationLanes.find((lane) => lane.target.kind === "clip" && lane.target.property === "volume")?.keyframes).toHaveLength(4);
+  });
 });

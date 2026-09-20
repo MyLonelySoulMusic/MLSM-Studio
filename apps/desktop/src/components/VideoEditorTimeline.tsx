@@ -29,6 +29,7 @@ import { VideoEditorClipWaveform } from "./VideoEditorClipWaveform";
 import { videoEditorAssetDragType, videoEditorAssetKindDragType } from "../services/video-editor-import";
 import { videoEditorClipSourceDuration } from "../services/video-editor-speed";
 import { videoEditorContextMenuPosition } from "../services/video-editor-context-menu";
+import { VideoEditorAudioMixModal } from "./VideoEditorAudioMixModal";
 
 /** Altezza di una traccia in timeline: le clip video mostrano etichetta e onda, quelle audio la sola onda. */
 const trackHeight = 52;
@@ -121,6 +122,7 @@ export function VideoEditorTimeline({ timelineHeight = 300, onResizeHeight }: { 
   const setZoom = useVideoEditorPlayback((state) => state.setZoom);
 
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
+  const [audioMixClipId, setAudioMixClipId] = useState<string | null>(null);
   const [preview, setPreview] = useState<DragPreview | null>(null);
   const [effectPreview, setEffectPreview] = useState<EffectDragPreview | null>(null);
   const lanes = useRef<HTMLDivElement>(null);
@@ -639,6 +641,7 @@ export function VideoEditorTimeline({ timelineHeight = 300, onResizeHeight }: { 
         <button type="button" role="menuitem" onClick={() => runMenu(() => moveClip(menuClip.id, currentTime, currentTime))}>Sposta sul playhead</button>
         <button type="button" role="menuitem" onClick={() => runMenu(() => closeGaps(menuClip.trackId))}>Chiudi i vuoti della traccia</button>
         <hr />
+        <button type="button" role="menuitem" disabled={!menuAsset || (menuAsset.kind !== "audio" && !menuAsset.hasAudio)} onClick={() => runMenu(() => setAudioMixClipId(menuClip.id))}>◫ Mix audio…</button>
         <button type="button" role="menuitem" onClick={() => runMenu(() => updateClip(menuClip.id, { muted: !menuClip.muted }))}>{menuClip.muted ? "Riattiva audio della clip" : "Disattiva audio della clip"}</button>
         <button type="button" role="menuitem" disabled={menuAsset?.kind === "audio"} onClick={() => runMenu(() => { addEffect("fade-in", { targetClipId: menuClip.id }); })}>＋ Aggiungi Fade In alla corsia Effetti</button>
         <button type="button" role="menuitem" disabled={menuAsset?.kind === "audio"} onClick={() => runMenu(() => { addEffect("fade-out", { targetClipId: menuClip.id }); })}>＋ Aggiungi Fade Out alla corsia Effetti</button>
@@ -646,5 +649,6 @@ export function VideoEditorTimeline({ timelineHeight = 300, onResizeHeight }: { 
         <button type="button" role="menuitem" className="delete-selection" onClick={() => runMenu(() => deleteClips(selectedSet.has(menuClip.id) ? selected : [menuClip.id]))}>Elimina {selectedSet.has(menuClip.id) && selected.length > 1 ? `${selected.length} clip` : "clip"}</button>
       </div>
       : null}
+    {audioMixClipId ? <VideoEditorAudioMixModal clipId={audioMixClipId} onClose={() => setAudioMixClipId(null)} /> : null}
   </section>;
 }

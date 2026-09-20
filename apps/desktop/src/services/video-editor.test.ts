@@ -461,6 +461,16 @@ describe("Video Editor · volume e disattivazione audio", () => {
     // La stessa clip senza dissolvenza video resta pienamente visibile mentre l’audio sale.
     expect(videoEditorClipOpacity(sounding, .5)).toBe(1);
   });
+
+  it("ricalcola la dissolvenza automatica quando cambia la durata della clip", () => {
+    const automatic = clip({
+      id: "auto", assetId: "a", trackId: audioTrack, durationSeconds: 10,
+      audioFadeInSeconds: 0, audioFadeOutSeconds: 0,
+      audioMix: { pan: 0, fadeMode: "automatic", eq: { enabled: false, lowGainDb: 0, lowFrequencyHz: 120, midGainDb: 0, midFrequencyHz: 1_000, midQ: 1, highGainDb: 0, highFrequencyHz: 8_000 }, compressor: { enabled: false, thresholdDb: -18, ratio: 4, attackMs: 10, releaseMs: 180, kneeDb: 8, makeupGainDb: 0 } }
+    });
+    expect(videoEditorClipGain(automatic, track, .2)).toBeCloseTo(.5, 10);
+    expect(videoEditorClipGain({ ...automatic, durationSeconds: 2 }, track, .04)).toBeCloseTo(.5, 10);
+  });
 });
 
 describe("Video Editor · composizione dei livelli", () => {

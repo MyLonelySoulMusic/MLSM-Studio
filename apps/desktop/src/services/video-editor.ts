@@ -1,5 +1,6 @@
 import type { RhythmBallProject } from "@rbs/project-schema";
 import { videoEditorClipSourceDuration, videoEditorClipSourceTimeAtLocalSeconds, videoEditorClipTimelineDurationForSource, videoEditorClipTimelineTimeForSourceTime, videoEditorSpeedAtFrame, videoEditorSplitSpeed, videoEditorTrimSpeed } from "./video-editor-speed";
+import { videoEditorAudioMix, videoEditorAutomaticAudioFadeSeconds } from "./video-editor-audio-mix";
 
 type SchemaVideoEditorSettings = RhythmBallProject["animation"]["videoEditor"];
 type SchemaVideoEditorAsset = SchemaVideoEditorSettings["assets"][number];
@@ -493,9 +494,13 @@ export function videoEditorClipGain(clip: VideoEditorClip, track: VideoEditorTra
   const local = timeSeconds - clip.startSeconds;
   if (local < 0 || local >= clip.durationSeconds) return 0;
   let gain = clip.volume * (track?.volume ?? 1);
-  if (clip.audioFadeInSeconds > 0 && local < clip.audioFadeInSeconds) gain *= videoEditorFadeCurveValue(local / clip.audioFadeInSeconds, clip.fadeCurve);
+  const mix = videoEditorAudioMix(clip);
+  const automaticFade = mix.fadeMode === "automatic" ? videoEditorAutomaticAudioFadeSeconds(clip.durationSeconds) : null;
+  const fadeInSeconds = automaticFade ?? clip.audioFadeInSeconds;
+  const fadeOutSeconds = automaticFade ?? clip.audioFadeOutSeconds;
+  if (fadeInSeconds > 0 && local < fadeInSeconds) gain *= videoEditorFadeCurveValue(local / fadeInSeconds, clip.fadeCurve);
   const fromEnd = clip.durationSeconds - local;
-  if (clip.audioFadeOutSeconds > 0 && fromEnd < clip.audioFadeOutSeconds) gain *= videoEditorFadeCurveValue(fromEnd / clip.audioFadeOutSeconds, clip.fadeCurve);
+  if (fadeOutSeconds > 0 && fromEnd < fadeOutSeconds) gain *= videoEditorFadeCurveValue(fromEnd / fadeOutSeconds, clip.fadeCurve);
   return clamp(gain, 0, 2);
 }
 

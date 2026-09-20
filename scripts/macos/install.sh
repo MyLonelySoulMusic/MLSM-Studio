@@ -38,7 +38,8 @@ if [[ -d /opt/homebrew/opt/node@22/bin ]]; then export PATH="/opt/homebrew/opt/n
 if [[ -d /usr/local/opt/node@22/bin ]]; then export PATH="/usr/local/opt/node@22/bin:$PATH"; fi
 export MLSM_PYTHON="$(brew --prefix python@3.11)/bin/python3.11"
 
-run npm ci
+run npm ci --include=dev
+run node tools/verify_node_dependencies.cjs
 run node tools/setup_python_runtime.cjs upscaler
 run node tools/setup_python_runtime.cjs ai-quantizer
 run node tools/setup_python_runtime.cjs song-player
@@ -47,4 +48,8 @@ run cargo fetch --manifest-path apps/desktop/src-tauri/Cargo.toml
 if [[ "$DRY_RUN" == 0 ]]; then node tools/verify_installation.cjs; fi
 run chmod +x scripts/macos/install.sh scripts/macos/launch.sh scripts/macos/build.sh scripts/macos/setup-ai-quantizer.sh scripts/macos/setup-upscaler.sh
 
-echo "MLSM Studio è pronto. L’installer non ha avviato alcun server."
+if [[ "$DRY_RUN" == 1 ]]; then
+  echo "Dry-run completata: nessuna modifica eseguita."
+else
+  echo "MLSM Studio è pronto. L’installer non ha avviato alcun server."
+fi

@@ -8,6 +8,7 @@ import {
 import { resolveVideoEditorAutomationValue } from "./video-editor-automation";
 import { videoEditorSecondsToFrame } from "./video-editor";
 import { defaultVideoEditorImageShadow, drawVideoEditorImageShadow, videoEditorImageShadowGeometry } from "./video-editor-image-shadow";
+import { videoEditorAudioAutomationProperties, videoEditorAudioMix, videoEditorAudioMixValue, videoEditorAudioMixWithValue } from "./video-editor-audio-mix";
 
 export interface VideoEditorFrameSource { width: number; height: number; source: CanvasImageSource }
 /** La preview e l’export offline condividono questa funzione: ogni clip risolve il proprio fotogramma. */
@@ -44,13 +45,20 @@ export function videoEditorSettingsAtAutomationFrame(settings: VideoEditorSettin
     const read = (property: string, fallback: number) => resolveVideoEditorAutomationValue(settings.automationLanes, { kind: "clip", clipId: clip.id, property }, frame, fallback);
     const transform = clip.transform ?? { x: 0, y: 0, scale: 1, rotation: 0 };
     const adjustments = Object.fromEntries(Object.entries(clip.adjustments).map(([property, value]) => [property, read(`adjustments.${property}`, value)])) as unknown as VideoEditorAdjustments;
-    return {
+    let resolved = {
       ...clip,
       transform: { x: read("transform.x", transform.x), y: read("transform.y", transform.y), scale: read("transform.scale", transform.scale), rotation: read("transform.rotation", transform.rotation) },
       volume: read("volume", clip.volume),
       blendIntensity: read("blendIntensity", clip.blendIntensity),
-      adjustments
+      adjustments,
+      audioMix: videoEditorAudioMix(clip)
     };
+    for (const property of videoEditorAudioAutomationProperties) {
+      if (property.key === "volume") continue;
+      const fallback = videoEditorAudioMixValue(resolved, property.key);
+      resolved = { ...resolved, ...videoEditorAudioMixWithValue(resolved, property.key, read(property.key, fallback)) };
+    }
+    return resolved;
   });
   const effectClips = settings.effectClips.map((effect) => ({
     ...effect,

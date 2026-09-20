@@ -6,6 +6,8 @@ import { createRequire } from "node:module";
 const root = resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
 const { versionAtLeast } = require("./verify_installation.cjs");
+const { resolveTool, windowsToolCandidates } = require("./platform_tools.cjs");
+const { verifyNodeDependencies } = require("./verify_node_dependencies.cjs");
 const { python311Probe, runtimes, venvPython } = require("./setup_python_runtime.cjs");
 const platformScript = (platform: "macos" | "windows", file: string) => resolve(root, "scripts", platform, file);
 
@@ -18,6 +20,14 @@ describe("installer multipiattaforma", () => {
   it("usa i percorsi venv nativi", () => {
     expect(venvPython(".venv", "win32")).toMatch(/\.venv[\\/]Scripts[\\/]python\.exe$/);
     expect(venvPython(".venv", "darwin")).toMatch(/\.venv[\\/]bin[\\/]python$/);
+  });
+  it("risolve Rubber Band anche se il terminale Windows non ha ancora ricaricato il PATH", () => {
+    const installed = "C:\\msys64\\ucrt64\\bin\\rubberband.exe";
+    expect(windowsToolCandidates("rubberband", {})).toContain(installed);
+    expect(resolveTool("rubberband", "win32", {}, (candidate: string) => candidate === installed)).toBe(installed);
+  });
+  it("verifica che npm ci abbia installato davvero le dipendenze essenziali", () => {
+    expect(verifyNodeDependencies()).toMatchObject({ ok: true });
   });
   it("blocca Python alla versione 3.11 e prepara tutti gli ambienti isolati", () => {
     expect(python311Probe).toContain("(3, 11)");
@@ -53,13 +63,18 @@ describe("installer multipiattaforma", () => {
   });
   it("include l’intera catena macOS", () => {
     const script = readFileSync(platformScript("macos", "install.sh"), "utf8");
-    for (const command of ["xcode-select", "brew install", "python@3.11", "npm ci", "setup_python_runtime.cjs upscaler", "setup_python_runtime.cjs ai-quantizer", "setup_python_runtime.cjs song-player", "setup_python_runtime.cjs audio-tts", "cargo fetch", "verify_installation.cjs"]) expect(script).toContain(command);
+    for (const command of ["xcode-select", "brew install", "python@3.11", "npm ci --include=dev", "verify_node_dependencies.cjs", "setup_python_runtime.cjs upscaler", "setup_python_runtime.cjs ai-quantizer", "setup_python_runtime.cjs song-player", "setup_python_runtime.cjs audio-tts", "cargo fetch", "verify_installation.cjs"]) expect(script).toContain(command);
   });
   it("include l’intera catena Windows senza Bash", () => {
     const script = readFileSync(platformScript("windows", "install.bat"), "utf8");
-    for (const command of ["OpenJS.NodeJS.LTS", "Python.Python.3.11", "py -3.11", "Rustlang.Rustup", "Gyan.FFmpeg", "MSYS2.MSYS2", "mingw-w64-ucrt-x86_64-rubberband", "Microsoft.EdgeWebView2Runtime", "Microsoft.VisualStudio.2022.BuildTools", "npm ci", "setup_python_runtime.cjs upscaler", "setup_python_runtime.cjs ai-quantizer", "setup_python_runtime.cjs song-player", "setup_python_runtime.cjs audio-tts"]) expect(script).toContain(command);
+    for (const command of ["OpenJS.NodeJS.LTS", "Python.Python.3.11", "py -3.11", "Rustlang.Rustup", "Gyan.FFmpeg", "MSYS2.MSYS2", "mingw-w64-ucrt-x86_64-rubberband", "Microsoft.EdgeWebView2Runtime", "Microsoft.VisualStudio.2022.BuildTools", "npm ci --include=dev", "verify_node_dependencies.cjs", "ensure-user-path.ps1", "rubberband.exe\" --version", "setup_python_runtime.cjs upscaler", "setup_python_runtime.cjs ai-quantizer", "setup_python_runtime.cjs song-player", "setup_python_runtime.cjs audio-tts", "verify_installation.cjs || exit /b"]) expect(script).toContain(command);
     expect(script).not.toContain("setup_ai_quantizer_env.sh");
     expect(script).not.toContain("setup_upscaler_env.sh");
+  });
+  it("aggiorna il PATH utente Windows senza usare setx", () => {
+    const script = readFileSync(platformScript("windows", "ensure-user-path.ps1"), "utf8");
+    expect(script).toContain("SetEnvironmentVariable('Path', $updated, 'User')");
+    expect(script.toLowerCase()).not.toContain("setx");
   });
   it("fornisce launcher separati e verificabili senza avviare server", () => {
     const mac = readFileSync(platformScript("macos", "launch.sh"), "utf8");

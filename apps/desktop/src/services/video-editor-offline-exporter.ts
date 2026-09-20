@@ -32,6 +32,7 @@ import { createVideoEditorFrameRenderer, videoEditorSettingsAtAutomationFrame, t
 import { videoEditorSessionFile } from "./video-editor-import";
 import { videoEditorInterpolateJob, videoEditorInterpolationCommand, videoEditorInterpolationHealth, type VideoEditorInterpolationJobStatus, type VideoEditorInterpolationMethod } from "./video-editor-interpolation-client";
 import { videoEditorClipPlaybackRateAtLocalSeconds, videoEditorClipSourceDuration } from "./video-editor-speed";
+import { videoEditorAudioMix, videoEditorDbToGain } from "./video-editor-audio-mix";
 
 export interface VideoEditorOfflineExportSettings {
   width: number;
@@ -78,6 +79,9 @@ const MIX_SAMPLE_RATE = 48_000;
 const MIX_CHANNELS = 2;
 /** Passo dell’inviluppo audio: 200 punti al secondo rendono ogni dissolvenza continua all’ascolto. */
 const ENVELOPE_STEP_SECONDS = .005;
+/** Gli effetti spettrali non richiedono 200 aggiornamenti/s: 30 Hz resta fluido e
+ * mantiene leggero il grafo anche su montaggi lunghi con molti inviluppi. */
+const AUDIO_EFFECT_STEP_SECONDS = 1 / 30;
 const INTERPOLATION_FRAME_TOLERANCE = 1;
 const INTERPOLATION_FPS_RELATIVE_TOLERANCE = .01;
 const INTERPOLATION_DURATION_TOLERANCE_SECONDS = .05;
@@ -381,8 +385,23 @@ export async function renderVideoEditorAudioMix(settings: VideoEditorSettings, d
     source.buffer = playbackBuffer;
     const rateAutomation = videoEditorAudioRateAutomation(clip, settings, clipEnd);
     for (const point of rateAutomation) source.playbackRate.setValueAtTime(point.rate, point.timeSeconds);
+    const lowEq = context.createBiquadFilter();
+    lowEq.type = "lowshelf";
+    const midEq = context.createBiquadFilter();
+    midEq.type = "peaking";
+    const highEq = context.createBiquadFilter();
+    highEq.type = "highshelf";
+    const compressor = context.createDynamicsCompressor();
+    const panner = context.createStereoPanner();
+    const makeup = context.createGain();
     const gain = context.createGain();
-    source.connect(gain);
+    source.connect(lowEq);
+    lowEq.connect(midEq);
+    midEq.connect(highEq);
+    highEq.connect(compressor);
+    compressor.connect(panner);
+    panner.connect(makeup);
+    makeup.connect(gain);
     gain.connect(context.destination);
     const gainAt = (time: number): number => {
       const snapshot = videoEditorSettingsAtAutomationFrame(settings, time);
@@ -395,6 +414,33 @@ export async function renderVideoEditorAudioMix(settings: VideoEditorSettings, d
       gain.gain.linearRampToValueAtTime(gainAt(time), time);
     }
     gain.gain.linearRampToValueAtTime(gainAt(clipEnd), Math.max(0, clipEnd));
+    const scheduleAt = (time: number, initial: boolean) => {
+      const snapshot = videoEditorSettingsAtAutomationFrame(settings, time);
+      const currentClip = snapshot.clips.find((item) => item.id === clip.id) ?? clip;
+      const mix = videoEditorAudioMix(currentClip);
+      const schedule = (parameter: AudioParam, value: number) => {
+        if (initial) parameter.setValueAtTime(value, time);
+        else parameter.linearRampToValueAtTime(value, time);
+      };
+      schedule(panner.pan, mix.pan);
+      const nyquist = context.sampleRate / 2;
+      schedule(lowEq.frequency, Math.min(nyquist, mix.eq.lowFrequencyHz));
+      schedule(lowEq.gain, mix.eq.enabled ? mix.eq.lowGainDb : 0);
+      schedule(midEq.frequency, Math.min(nyquist, mix.eq.midFrequencyHz));
+      schedule(midEq.Q, mix.eq.midQ);
+      schedule(midEq.gain, mix.eq.enabled ? mix.eq.midGainDb : 0);
+      schedule(highEq.frequency, Math.min(nyquist, mix.eq.highFrequencyHz));
+      schedule(highEq.gain, mix.eq.enabled ? mix.eq.highGainDb : 0);
+      schedule(compressor.threshold, mix.compressor.enabled ? mix.compressor.thresholdDb : 0);
+      schedule(compressor.ratio, mix.compressor.enabled ? mix.compressor.ratio : 1);
+      schedule(compressor.attack, mix.compressor.enabled ? Math.min(1, mix.compressor.attackMs / 1_000) : 0);
+      schedule(compressor.release, mix.compressor.enabled ? Math.min(1, mix.compressor.releaseMs / 1_000) : .01);
+      schedule(compressor.knee, mix.compressor.enabled ? mix.compressor.kneeDb : 0);
+      schedule(makeup.gain, mix.compressor.enabled ? videoEditorDbToGain(mix.compressor.makeupGainDb) : 1);
+    };
+    scheduleAt(Math.max(0, clip.startSeconds), true);
+    for (let time = clip.startSeconds + AUDIO_EFFECT_STEP_SECONDS; time < clipEnd; time += AUDIO_EFFECT_STEP_SECONDS) scheduleAt(time, false);
+    scheduleAt(Math.max(0, clipEnd), false);
     source.start(Math.max(0, clip.startSeconds), offset);
     source.stop(Math.max(0, clip.startSeconds) + playDuration);
     scheduled += 1;

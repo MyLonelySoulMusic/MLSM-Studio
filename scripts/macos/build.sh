@@ -4,13 +4,15 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 cd "$ROOT_DIR"
+if [[ -d /opt/homebrew/opt/node@22/bin ]]; then export PATH="/opt/homebrew/opt/node@22/bin:$PATH"; fi
+if [[ -d /usr/local/opt/node@22/bin ]]; then export PATH="/usr/local/opt/node@22/bin:$PATH"; fi
 
 check() {
   [[ "$(uname -s)" == "Darwin" ]] || { echo "Questo script deve essere eseguito su macOS." >&2; exit 2; }
   command -v node >/dev/null || { echo "Node non trovato: esegui prima scripts/macos/install.sh" >&2; exit 3; }
   command -v cargo >/dev/null || { echo "Cargo non trovato: esegui prima scripts/macos/install.sh" >&2; exit 3; }
   xcode-select -p >/dev/null 2>&1 || { echo "Xcode Command Line Tools non disponibili." >&2; exit 3; }
-  [[ -d node_modules ]] || { echo "Dipendenze npm assenti: esegui prima scripts/macos/install.sh" >&2; exit 3; }
+  node tools/verify_node_dependencies.cjs || { echo "Dipendenze npm incomplete: esegui prima scripts/macos/install.sh" >&2; exit 3; }
 }
 
 if [[ "${1:-}" == "--check" ]]; then check; echo "Packaging macOS pronto. Nessuna compilazione avviata."; exit 0; fi

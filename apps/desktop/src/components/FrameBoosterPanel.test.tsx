@@ -13,7 +13,10 @@ vi.mock("../services/frame-interpolation-client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../services/frame-interpolation-client")>();
   return { ...actual, waitForFrameInterpolationHealth, probeFrameInterpolationSource };
 });
-vi.mock("../services/python-service-lifecycle", () => ({ shutdownAreaPythonServices }));
+vi.mock("../services/python-service-lifecycle", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/python-service-lifecycle")>();
+  return { ...actual, shutdownAreaPythonServices };
+});
 
 import { FrameBoosterPanel } from "./FrameBoosterPanel";
 
