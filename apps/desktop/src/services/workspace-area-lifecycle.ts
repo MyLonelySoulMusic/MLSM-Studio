@@ -17,7 +17,7 @@ import { shutdownAreaPythonServices } from "./python-service-lifecycle";
  * area selected from Studio Home.
  */
 export function resetWorkspaceForAreaEntry(): void {
-  void shutdownAreaPythonServices();
+  void shutdownAreaPythonServices("workspace-entry");
   const previousProject = useProjectStore.getState().project;
   clearVideoEditorSession(previousProject.animation.videoEditor.assets);
   resetUpscalerRuntimeForProjectReplacement();

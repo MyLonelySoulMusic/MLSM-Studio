@@ -1,7 +1,7 @@
 import { trackTask } from "./task-history";
 export function frameInterpolationJob(...args: Parameters<typeof frameInterpolationJobImpl>): ReturnType<typeof frameInterpolationJobImpl> { return trackTask("Frame Booster", () => frameInterpolationJobImpl(...args)); }
 import type { FrameInterpolationMediaAudit } from "./frame-interpolation-audit";
-import { ensurePythonUpscalerService } from "./upscaler-python-client";
+import { ensurePythonUpscalerService, pythonUpscalerRuntimeDiagnostic, reportUpscalerDiagnostic } from "./upscaler-python-client";
 
 export type FrameInterpolationMethod = "blend" | "motion" | "motion-obmc";
 export type FrameInterpolationPhase = "uploading" | "queued" | "probing" | "preparing" | "interpolating" | "remuxing" | "verifying" | "downloading" | "ready" | "error" | "cancelled";
@@ -54,6 +54,13 @@ export interface FrameInterpolationResult { blob: Blob; status: FrameInterpolati
 export const frameInterpolationBaseUrl = "http://127.0.0.1:8765";
 export const frameInterpolationCommand = "npm run upscaler:server";
 
+function frameBoosterConnectionError(action: string, cause?: unknown): Error {
+  const diagnostic = pythonUpscalerRuntimeDiagnostic();
+  const causeText = cause instanceof Error ? cause.message : cause ? String(cause) : "connessione interrotta";
+  const log = diagnostic.logPath ? ` Log backend: ${diagnostic.logPath}` : "";
+  return new Error(`${action}: il backend locale non risponde (${causeText}). ${diagnostic.message}${log}`);
+}
+
 export function normalizeFrameInterpolationMethod(value: unknown): FrameInterpolationMethod {
   if (value === "blend" || value === "motion-obmc") return value;
   return "motion";
@@ -82,7 +89,10 @@ export async function waitForFrameInterpolationHealth(options: { timeoutMs?: num
     if (capabilities) return capabilities;
     if (!startRequested) {
       startRequested = true;
-      if (!await ensurePythonUpscalerService() || options.signal?.aborted) return null;
+      if (!await ensurePythonUpscalerService() || options.signal?.aborted) {
+        console.error("[MLSM Frame Booster] backend start failed", pythonUpscalerRuntimeDiagnostic());
+        return null;
+      }
     }
     if (Date.now() >= deadline || options.signal?.aborted) return null;
     await new Promise<void>((resolve) => {
@@ -98,9 +108,19 @@ export async function waitForFrameInterpolationHealth(options: { timeoutMs?: num
 }
 
 export async function probeFrameInterpolationSource(file: File, signal?: AbortSignal): Promise<FrameInterpolationMediaAudit> {
+  const capabilities = await waitForFrameInterpolationHealth({ timeoutMs: 15_000, ...(signal ? { signal } : {}) });
+  if (!capabilities?.ffmpeg) throw frameBoosterConnectionError("Rilevamento FPS non riuscito");
   const form = new FormData();
   form.set("file", file, file.name || "source.mp4");
-  const response = await fetch(`${frameInterpolationBaseUrl}/interpolation/probe`, { method: "POST", body: form, ...(signal ? { signal } : {}) });
+  reportUpscalerDiagnostic("frame-booster-probe-start", { fileName: file.name, bytes: file.size });
+  let response: Response;
+  try {
+    response = await fetch(`${frameInterpolationBaseUrl}/interpolation/probe`, { method: "POST", body: form, ...(signal ? { signal } : {}) });
+  } catch (error) {
+    signal?.throwIfAborted();
+    console.error("[MLSM Frame Booster] source probe failed", error, pythonUpscalerRuntimeDiagnostic());
+    throw frameBoosterConnectionError("Rilevamento FPS non riuscito", error);
+  }
   if (!response.ok) {
     const payload = await response.json().catch(() => null) as { detail?: unknown } | null;
     const detail = typeof payload?.detail === "string" ? payload.detail : `HTTP ${response.status}`;
@@ -137,7 +157,12 @@ function uploadJob(body: FormData, signal: AbortSignal, onProgress: (loaded: num
     const request = new XMLHttpRequest(); const abort = () => request.abort(); request.open("POST", `${frameInterpolationBaseUrl}/interpolation/jobs`); request.responseType = "json";
     request.upload.onprogress = (event) => onProgress(event.loaded, event.lengthComputable ? event.total : 0);
     request.onload = () => { signal.removeEventListener("abort", abort); if (request.status >= 200 && request.status < 300) resolve(request.response as FrameInterpolationJobStatus); else reject(new Error(typeof request.response === "string" ? request.response : request.response?.detail || `Avvio interpolazione fallito (HTTP ${request.status}).`)); };
-    request.onerror = () => { signal.removeEventListener("abort", abort); reject(new Error("Il servizio locale non ha ricevuto il video.")); };
+    request.onerror = () => {
+      signal.removeEventListener("abort", abort);
+      const error = frameBoosterConnectionError("Invio del video non riuscito");
+      console.error("[MLSM Frame Booster] job upload failed", error, pythonUpscalerRuntimeDiagnostic());
+      reject(error);
+    };
     request.onabort = () => { signal.removeEventListener("abort", abort); reject(new DOMException("Operazione annullata", "AbortError")); };
     signal.addEventListener("abort", abort, { once: true }); request.send(body);
   });
@@ -192,19 +217,29 @@ async function frameInterpolationJobImpl(options: FrameInterpolationRequest): Pr
   let status: FrameInterpolationJobStatus | undefined; let cleanup = false;
   const abort = () => { void frameInterpolationCancel(clientId, status?.id); }; options.signal.addEventListener("abort", abort, { once: true });
   try {
+    reportUpscalerDiagnostic("frame-booster-job-upload", { clientId, fileName: options.fileName, bytes: options.blob.size, method: options.method });
     status = await uploadJob(form, options.signal, (loaded, total) => { const progress = total ? loaded / total : 0; options.onStatus?.({ id: "upload", phase: "uploading", progress, stageProgress: total ? progress : null, currentFrame: 0, totalFrames: 0, processedBytes: loaded, totalBytes: total, indeterminate: !total, ...(options.sourceFps === undefined ? {} : { sourceFps: options.sourceFps }), ...(options.targetFps === undefined ? {} : { targetFps: options.targetFps }), method: options.method }); });
+    reportUpscalerDiagnostic("frame-booster-job-created", { clientId, jobId: status.id, phase: status.phase });
     options.onStatus?.(status);
     while (status.phase !== "ready") {
       if (options.signal.aborted) throw new DOMException("Operazione annullata", "AbortError");
       if (status.phase === "error") throw new Error(status.error || "Interpolazione interrotta dal servizio locale.");
       if (status.phase === "cancelled") throw new DOMException("Operazione annullata", "AbortError");
       await new Promise((resolve) => window.setTimeout(resolve, 300));
-      const response = await fetch(`${frameInterpolationBaseUrl}/interpolation/jobs/${encodeURIComponent(status.id)}`, { signal: options.signal });
+      let response: Response;
+      try {
+        response = await fetch(`${frameInterpolationBaseUrl}/interpolation/jobs/${encodeURIComponent(status.id)}`, { signal: options.signal });
+      } catch (error) {
+        options.signal.throwIfAborted();
+        console.error("[MLSM Frame Booster] status polling failed", { jobId: status.id, error, diagnostic: pythonUpscalerRuntimeDiagnostic() });
+        throw frameBoosterConnectionError("Lettura avanzamento non riuscita", error);
+      }
       if (!response.ok) { cleanup = true; throw new Error(`Impossibile leggere lo stato dell'interpolazione (HTTP ${response.status}).`); }
       status = await response.json() as FrameInterpolationJobStatus; options.onStatus?.(status);
     }
     const blob = await downloadResult(`${frameInterpolationBaseUrl}/interpolation/jobs/${encodeURIComponent(status.id)}/result`, options.signal, (loaded, total) => options.onStatus?.({ ...status!, phase: "downloading", progress: total ? loaded / total : 0, stageProgress: total ? loaded / total : null, processedBytes: loaded, totalBytes: total, indeterminate: !total }));
     status = { ...status, phase: "ready", progress: 1, stageProgress: 1, processedBytes: blob.size, totalBytes: blob.size, resultBytes: blob.size };
+    reportUpscalerDiagnostic("frame-booster-job-ready", { clientId, jobId: status.id, bytes: blob.size });
     options.onStatus?.(status); return { blob, status };
   } catch (error) {
     cleanup = cleanup || !(error instanceof DOMException && error.name === "AbortError"); throw error;

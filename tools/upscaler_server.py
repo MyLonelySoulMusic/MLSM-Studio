@@ -177,8 +177,12 @@ REMOTE_CHECKPOINT_POLICIES = frozenset(("restart", "resume"))
 MAX_CONCURRENT_VIDEO_JOBS = 1
 mlx_dlss = MlxDlssAdapter()
 
+LOCAL_APP_ORIGIN_REGEX = r"^(https?://(localhost|127\.0\.0\.1)(:\d+)?|tauri://localhost|https?://tauri\.localhost)$"
 app = FastAPI(title="MLSM Studio Upscaler", docs_url=None, redoc_url=None)
-app.add_middleware(CORSMiddleware, allow_origin_regex=r"^(https?://(localhost|127\.0\.0\.1)(:\d+)?|tauri://localhost|https://tauri\.localhost)$", allow_methods=["GET", "POST", "DELETE"], allow_headers=["*"])
+# Tauri uses ``http://tauri.localhost`` on Windows and a custom/HTTPS origin on
+# the other desktop targets. Missing the HTTP variant makes health appear
+# reachable in some contexts while browser-owned POSTs fail as "Failed to fetch".
+app.add_middleware(CORSMiddleware, allow_origin_regex=LOCAL_APP_ORIGIN_REGEX, allow_methods=["GET", "POST", "DELETE"], allow_headers=["*"])
 
 
 def log_upscaler_event(source: str, event: str, **details: object) -> None:
@@ -887,6 +891,7 @@ def health():
         "pid": os.getpid(),
         "parentPid": parent_pid,
         "ownerKind": os.environ.get("MLSM_UPSCALER_OWNER_KIND", "external"),
+        "diagnosticLogPath": os.environ.get("MLSM_UPSCALER_LOG_PATH", str(EVENT_LOG)),
         "resourceLimits": {
             "cpuThreads": UPSCALER_CPU_THREADS,
             "maxConcurrentVideoJobs": MAX_CONCURRENT_VIDEO_JOBS,
@@ -3752,12 +3757,17 @@ async def probe_interpolation_source(file: UploadFile = File(...)):
         suffix = ".mp4"
     workspace = Path(tempfile.mkdtemp(prefix="mlsm-frame-probe-"))
     source = workspace / ("source" + suffix)
+    log_upscaler_event("backend", "interpolation-probe-start", fileName=file.filename or "source.mp4", contentType=file.content_type or "")
     try:
-        await _stream_upload_limited(file, source)
-        return _interpolation_media_audit(source, count_frames=False)
+        source_bytes = await _stream_upload_limited(file, source)
+        result = _interpolation_media_audit(source, count_frames=False)
+        log_upscaler_event("backend", "interpolation-probe-ready", fileName=file.filename or "source.mp4", sourceBytes=source_bytes, fps=result.get("fps"), width=result.get("width"), height=result.get("height"))
+        return result
     except HTTPException:
+        log_upscaler_event("backend", "interpolation-probe-http-error", fileName=file.filename or "source.mp4")
         raise
     except Exception as error:
+        log_upscaler_event("backend", "interpolation-probe-error", fileName=file.filename or "source.mp4", error=str(error))
         raise HTTPException(400, str(error)) from error
     finally:
         await file.close()
@@ -3935,5 +3945,11 @@ if __name__ == "__main__":
             print(str(error), file=sys.stderr, flush=True)
             raise SystemExit(1) from error
         raise SystemExit(0)
-    start_parent_watchdog(configured_parent_pid())
+    parent_pid = configured_parent_pid()
+    log_upscaler_event(
+        "backend", "service-starting", pid=os.getpid(), parentPid=parent_pid,
+        ownerKind=os.environ.get("MLSM_UPSCALER_OWNER_KIND", "cli"),
+        platform=sys.platform, python=sys.executable, eventLog=str(EVENT_LOG),
+    )
+    start_parent_watchdog(parent_pid)
     uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("DSAS_UPSCALER_PORT", "8765")), log_level="info")

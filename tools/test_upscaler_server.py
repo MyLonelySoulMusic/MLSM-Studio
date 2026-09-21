@@ -2,6 +2,7 @@ import json
 import asyncio
 import hashlib
 import inspect
+import re
 import shutil
 import subprocess
 import tempfile
@@ -32,6 +33,12 @@ from tools.upscaler_server import (
 
 
 class FfprobeGeometryTests(unittest.TestCase):
+    def test_local_cors_accepts_windows_and_macos_tauri_origins(self) -> None:
+        allowed = upscaler_server.LOCAL_APP_ORIGIN_REGEX
+        for origin in ("http://tauri.localhost", "https://tauri.localhost", "tauri://localhost", "http://localhost:1420"):
+            self.assertIsNotNone(re.fullmatch(allowed, origin), origin)
+        self.assertIsNone(re.fullmatch(allowed, "https://example.com"))
+
     def test_remote_video_preflight_returns_partial_availability_without_upload(self) -> None:
         expected = {
             "ok": True,

@@ -2,7 +2,7 @@ use atomicwrites::{AllowOverwrite, AtomicFile};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
-    fs,
+    fs::{self, OpenOptions},
     io::{Read, Write},
     net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream},
     path::{Path, PathBuf},
@@ -147,6 +147,22 @@ struct UpscalerServiceStatus {
     running: bool,
     started: bool,
     pid: Option<u32>,
+    log_path: Option<String>,
+}
+
+fn upscaler_service_log_path(app: &tauri::AppHandle) -> Result<PathBuf, ProjectIoError> {
+    let directory = app.path().app_log_dir().map_err(|error| {
+        ProjectIoError::UpscalerRuntime(format!("cartella log non disponibile: {error}"))
+    })?;
+    fs::create_dir_all(&directory)?;
+    Ok(directory.join("upscaler-backend.log"))
+}
+
+fn append_upscaler_service_log(path: &Path, message: &str) -> Result<(), ProjectIoError> {
+    let mut output = OpenOptions::new().create(true).append(true).open(path)?;
+    writeln!(output, "{message}")?;
+    output.flush()?;
+    Ok(())
 }
 
 fn upscaler_port_is_open() -> bool {
@@ -168,7 +184,7 @@ fn ensure_autopost_service(app: tauri::AppHandle, state: tauri::State<'_, AutoPo
     let mut child = state.child.lock().map_err(|_| ProjectIoError::AutoPostRuntime("stato del processo non disponibile".into()))?;
     if let Some(process) = child.as_mut() {
         match process.try_wait() {
-            Ok(None) => return Ok(UpscalerServiceStatus { running: true, started: false, pid: Some(process.id()) }),
+            Ok(None) => return Ok(UpscalerServiceStatus { running: true, started: false, pid: Some(process.id()), log_path: None }),
             Ok(Some(_)) => { *child = None; }
             Err(error) => return Err(ProjectIoError::AutoPostRuntime(error.to_string())),
         }
@@ -176,7 +192,7 @@ fn ensure_autopost_service(app: tauri::AppHandle, state: tauri::State<'_, AutoPo
     // The Vite development plugin or the standalone legacy app may already own
     // the service. Reuse it without ever terminating a process we did not start.
     if autopost_port_is_open() {
-        return Ok(UpscalerServiceStatus { running: true, started: false, pid: None });
+        return Ok(UpscalerServiceStatus { running: true, started: false, pid: None, log_path: None });
     }
     let bundled = app.path().resource_dir().ok().map(|root| root.join("autopost/server.mjs"));
     let source = std::env::current_dir().ok().and_then(|root| autopost_server_from(&root))
@@ -186,7 +202,7 @@ fn ensure_autopost_service(app: tauri::AppHandle, state: tauri::State<'_, AutoPo
     let process = Command::new(node).arg(&server).current_dir(server.parent().unwrap_or(Path::new("."))).env("MLSM_AUTOPOST_PORT", "1430").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().map_err(|error| ProjectIoError::AutoPostRuntime(error.to_string()))?;
     let pid = process.id();
     *child = Some(process);
-    Ok(UpscalerServiceStatus { running: false, started: true, pid: Some(pid) })
+    Ok(UpscalerServiceStatus { running: false, started: true, pid: Some(pid), log_path: None })
 }
 
 fn upscaler_runtime_from(start: &Path) -> Option<(PathBuf, PathBuf, PathBuf)> {
@@ -216,17 +232,23 @@ fn find_upscaler_runtime() -> Option<(PathBuf, PathBuf, PathBuf)> {
 
 #[tauri::command]
 fn ensure_upscaler_service(
+    app: tauri::AppHandle,
     state: tauri::State<'_, UpscalerServiceState>,
 ) -> Result<UpscalerServiceStatus, ProjectIoError> {
+    let log_path = upscaler_service_log_path(&app)?;
+    let serialized_log_path = Some(log_path.to_string_lossy().to_string());
     let mut child = state.child.lock().map_err(|_| {
         ProjectIoError::UpscalerRuntime("stato del processo non disponibile".into())
     })?;
     if let Some(process) = child.as_mut() {
         match process.try_wait() {
             Ok(None) => return Ok(UpscalerServiceStatus {
-                running: false, started: false, pid: Some(process.id()),
+                running: true, started: false, pid: Some(process.id()), log_path: serialized_log_path,
             }),
-            Ok(Some(_)) => { *child = None; }
+            Ok(Some(status)) => {
+                let _ = append_upscaler_service_log(&log_path, &format!("[MLSM host] processo precedente terminato: {status}"));
+                *child = None;
+            }
             Err(error) => return Err(ProjectIoError::UpscalerRuntime(error.to_string())),
         }
     }
@@ -240,21 +262,32 @@ fn ensure_upscaler_service(
             "runtime .venv o tools/upscaler_server.py non trovati nell'installazione".into(),
         )
     })?;
+    append_upscaler_service_log(
+        &log_path,
+        &format!(
+            "\n[MLSM host] richiesta avvio · host_pid={} · root={} · python={} · server={}",
+            std::process::id(), root.display(), python.display(), server.display()
+        ),
+    )?;
+    let stdout = OpenOptions::new().create(true).append(true).open(&log_path)?;
+    let stderr = OpenOptions::new().create(true).append(true).open(&log_path)?;
     let mut command = Command::new(python);
     command.arg(server)
         .current_dir(root)
         .env("PYTHONUNBUFFERED", "1")
         .env("MLSM_UPSCALER_PARENT_PID", std::process::id().to_string())
         .env("MLSM_UPSCALER_OWNER_KIND", "tauri")
+        .env("MLSM_UPSCALER_LOG_PATH", &log_path)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr));
     configure_upscaler_command(&mut command);
     let process = command.spawn()
         .map_err(|error| ProjectIoError::UpscalerRuntime(error.to_string()))?;
     let pid = process.id();
     *child = Some(process);
-    Ok(UpscalerServiceStatus { running: false, started: true, pid: Some(pid) })
+    append_upscaler_service_log(&log_path, &format!("[MLSM host] processo avviato · pid={pid}"))?;
+    Ok(UpscalerServiceStatus { running: false, started: true, pid: Some(pid), log_path: serialized_log_path })
 }
 
 #[tauri::command]

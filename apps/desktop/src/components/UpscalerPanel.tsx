@@ -116,8 +116,14 @@ export function UpscalerPanel() {
   const setPreviewItem = useUpscalerBatchStore((state) => state.setPreviewItem);
   const [hardware, setHardware] = useState<UpscalerHardware | null>(null); const [hardwareError, setHardwareError] = useState(""); const [importError, setImportError] = useState("");
   const [mlxSetupOpen, setMlxSetupOpen] = useState(false);
-  const mlx = useMlxDlssCapabilities();
+  const mlx = useMlxDlssCapabilities(hardware?.appleSilicon === true);
   useEffect(() => { let active = true; void detectUpscalerHardware().then((result) => { if (active) setHardware(result); }).catch((error: unknown) => { if (active) setHardwareError(error instanceof Error ? error.message : String(error)); }); return () => { active = false; }; }, []);
+  useEffect(() => {
+    if (hardware && !hardware.appleSilicon && settings.provider === "mlx-dlss") {
+      setMlxSetupOpen(false);
+      update({ provider: "classic", remote: { ...settings.remote, enabled: false } });
+    }
+  }, [hardware, settings.provider, settings.remote, update]);
   const selectedModel = useMemo(() => upscalerModels.find((model) => model.id === settings.model) ?? upscalerModels[0]!, [settings.model]);
   const importSingleMedia = async (file: File, classification: SupportedUpscalerMediaFile, owner: UpscalerImportOwner): Promise<boolean> => {
     const url = URL.createObjectURL(file);
@@ -193,6 +199,7 @@ export function UpscalerPanel() {
   };
   const selectModel = (modelId: typeof settings.model | "mlx-dlss") => {
     if (modelId === "mlx-dlss") {
+      if (!hardware?.appleSilicon) return;
       const target = settings.sourceWidth && settings.sourceHeight ? resolveMlxDlssTarget(settings.sourceWidth, settings.sourceHeight, settings.mlxDlss.mode, settings.scale) : null;
       update({ provider: "mlx-dlss", remote: { ...settings.remote, enabled: false }, ...(target ? { finalWidth: target.width, finalHeight: target.height, scale: target.scale } : {}) });
       setMlxSetupOpen(true);
@@ -203,6 +210,7 @@ export function UpscalerPanel() {
     update({ model: model.id, scale: model.nativeScale, ...dimensions });
   };
   const selectMlxDlss = () => {
+    if (!hardware?.appleSilicon) return;
     const target = settings.sourceWidth && settings.sourceHeight ? resolveMlxDlssTarget(settings.sourceWidth, settings.sourceHeight, settings.mlxDlss.mode, settings.scale) : null;
     update({ provider: "mlx-dlss", remote: { ...settings.remote, enabled: false }, ...(target ? { finalWidth: target.width, finalHeight: target.height, scale: target.scale } : {}) });
     if (!mlx.capabilities?.usable) setMlxSetupOpen(true);
@@ -217,7 +225,7 @@ export function UpscalerPanel() {
     update({ adjustments: { ...current, [key]: value } });
   }, [update]);
   const effective = hardware ? effectiveUpscalerBackend(settings.backend, hardware) : null;
-  const mlxOffered = Boolean(mlx.capabilities?.supported);
+  const mlxOffered = hardware?.appleSilicon === true && Boolean(mlx.capabilities?.supported);
   const mlxModeLabel = mlx.capabilities?.usable ? "MLX-DLSS · pronto" : mlx.capabilities?.installed ? "MLX-DLSS · configura" : "MLX-DLSS · installa";
   const outputMegapixels = settings.finalWidth * settings.finalHeight / 1_000_000;
   const demandingVideoProfile = settings.sourceKind === "video" && Boolean(settings.sourceUrl) && (selectedModel.speed === "slow" || settings.tta || outputMegapixels > 8.4);
@@ -228,7 +236,7 @@ export function UpscalerPanel() {
     <h2>Modalità elaborazione</h2><div className="segmented upscaler-provider-selector" role="group" aria-label="Modalità elaborazione Upscaler"><button type="button" className={settings.provider === "classic" && !settings.remote.enabled ? "active" : ""} aria-pressed={settings.provider === "classic" && !settings.remote.enabled} onClick={() => update({ provider: "classic", remote: { ...settings.remote, enabled: false } })}>Locale</button><button type="button" className={settings.provider === "classic" && settings.remote.enabled ? "active" : ""} aria-pressed={settings.provider === "classic" && settings.remote.enabled} onClick={() => update({ provider: "classic", remote: { ...settings.remote, enabled: true } })}>Gradio / Colab</button>{mlxOffered ? <button type="button" className={settings.provider === "mlx-dlss" ? "active" : ""} aria-pressed={settings.provider === "mlx-dlss"} onClick={selectMlxDlss}>{mlxModeLabel}</button> : null}</div>
     <p className="muted">{settings.provider === "mlx-dlss" ? "Pipeline nativa Apple Silicon e Metal, eseguita esclusivamente in locale." : settings.remote.enabled ? "Elaborazione esclusivamente remota: configura almeno un endpoint attivo. I motori locali non vengono usati." : "Elaborazione esclusivamente sul computer: Canvas o modello AI locale, senza collegamenti Gradio."}</p>
     {settings.provider === "mlx-dlss" && mlx.capabilities?.usable ? <MlxDlssPanel settings={settings} update={update} capabilities={mlx.capabilities} setCapabilities={mlx.setCapabilities} /> : settings.provider === "classic" && !settings.remote.enabled ? <>
-      <h2 data-settings-accordion-key="upscaler-model">Modello locale</h2><label>Modello<select aria-label="Modello Upscaler" value={settings.model} onChange={(event) => selectModel(event.target.value as typeof settings.model | "mlx-dlss")}><option value="mlx-dlss">MLX-DLSS 5 · configura</option>{upscalerModels.map((model) => <option key={model.id} value={model.id}>{model.label} · {model.nativeScale}×</option>)}</select></label>
+      <h2 data-settings-accordion-key="upscaler-model">Modello locale</h2><label>Modello<select aria-label="Modello Upscaler" value={settings.model} onChange={(event) => selectModel(event.target.value as typeof settings.model | "mlx-dlss")}>{hardware?.appleSilicon ? <option value="mlx-dlss">MLX-DLSS 5 · configura</option> : null}{upscalerModels.map((model) => <option key={model.id} value={model.id}>{model.label} · {model.nativeScale}×</option>)}</select></label>
       <div className="upscaler-model-card"><strong>{selectedModel.label}</strong><span><b>Ideale:</b> {selectedModel.bestFor}</span><span className="model-pro"><b>Pro:</b> {selectedModel.pros}</span><span className="model-con"><b>Contro:</b> {selectedModel.cons}</span><small>{selectedModel.speed === "fast" ? "Veloce" : selectedModel.speed === "balanced" ? "Bilanciato" : "Qualità massima · più lento"}{selectedModel.videoOptimized ? " · ottimizzato video" : ""}{selectedModel.id === "canvas" ? " · nessun download" : ` · ${selectedModel.modelSizeMb} MB`}{selectedModel.id === "canvas" ? "" : selectedModel.webExecutable ? " · ONNX locale" : " · server PyTorch locale"}</small></div>
       <h2>Accelerazione locale</h2><div className="upscaler-hardware-card"><strong>{hardware ? `Rilevato: ${hardware.gpuName ?? `${hardware.platform} ${hardware.architecture}`}` : hardwareError || "Rilevamento hardware…"}</strong><span>{effective ? `Motore selezionato: ${backendLabel(effective)}` : "Scelta automatica in preparazione"}</span></div>
       <label>Motore<select aria-label="Acceleratore Upscaler" value={settings.backend} onChange={(event) => update({ backend: event.target.value as typeof settings.backend })}><option value="auto">Automatico · consigliato</option><option value="cuda">NVIDIA CUDA</option><option value="metal">Apple Silicon · Metal</option><option value="webgpu">WebGPU</option><option value="cpu">CPU · compatibilità</option></select></label>
@@ -240,6 +248,6 @@ export function UpscalerPanel() {
     {settings.sourceKind === "video" ? <><h2>Regolazioni video finali</h2><label className="teddy-dance-toggle"><span>Applica colore, nitidezza e riduzione rumore al video</span><input aria-label="Applica regolazioni video Upscaler" type="checkbox" checked={settings.applyVideoAdjustments} onChange={(event) => update({ applyVideoAdjustments: event.target.checked })} /></label>{settings.applyVideoAdjustments ? <div className="upscaler-performance-warning"><strong>Operazione lenta</strong><span>Le regolazioni richiedono una ricodifica completa del video finale. L’avanzamento e il tempo residuo saranno mostrati durante la codifica.</span></div> : <p className="muted">Disattivato: quando i segmenti Gradio hanno già la risoluzione richiesta vengono uniti senza ricodificare il video e viene ripristinato direttamente l’audio originale.</p>}</> : null}
     <h2>Regolazioni immagine</h2><div className="upscaler-adjustments">{(Object.keys(adjustmentLabels) as AdjustmentKey[]).map((key) => <UpscalerRangeControl key={key} label={adjustmentLabels[key]} ariaLabel={`${adjustmentLabels[key]} Upscaler`} {...adjustmentRanges[key]} disabled={settings.sourceKind === "video" && !settings.applyVideoAdjustments} value={settings.adjustments[key]} formatValue={(value) => formatSignedAdjustment(key, value)} onChange={(value) => updateAdjustment(key, value)} />)}</div><button type="button" disabled={settings.sourceKind === "video" && !settings.applyVideoAdjustments} onClick={() => update({ adjustments: { exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, saturation: 0, vibrance: 0, temperature: 0, tint: 0, sharpness: 0, denoise: 0 } })}>Ripristina regolazioni</button>
     </fieldset><UpscalerBatchPanel settings={settings} />
-    <MlxDlssSetupModal open={mlxSetupOpen} capabilities={mlx.capabilities} loading={Boolean(mlx.loading)} connectionError={mlx.error} selectedModel={settings.mlxDlss.neuralModel} onCapabilities={mlx.setCapabilities} onRefresh={mlx.refresh} onSelectModel={(neuralModel) => update({ mlxDlss: { ...settings.mlxDlss, neuralModel } })} onClose={() => setMlxSetupOpen(false)} />
+    <MlxDlssSetupModal open={hardware?.appleSilicon === true && mlxSetupOpen} capabilities={mlx.capabilities} loading={Boolean(mlx.loading)} connectionError={mlx.error} selectedModel={settings.mlxDlss.neuralModel} onCapabilities={mlx.setCapabilities} onRefresh={mlx.refresh} onSelectModel={(neuralModel) => update({ mlxDlss: { ...settings.mlxDlss, neuralModel } })} onClose={() => setMlxSetupOpen(false)} />
     </section>;
 }

@@ -22,8 +22,17 @@ export interface PythonUpscalerHealth {
   ownerKind?: "vite" | "tauri" | "cli" | "external";
   parentPid?: number | null;
   pid?: number;
+  diagnosticLogPath?: string;
   interpolation?: { ffmpeg?: boolean; ffmpegPath?: string };
 }
+export interface PythonUpscalerRuntimeDiagnostic {
+  phase: "idle" | "probing" | "starting" | "waiting" | "ready" | "error";
+  message: string;
+  at: string;
+  pid?: number;
+  logPath?: string;
+}
+interface NativeUpscalerServiceStatus { running: boolean; started: boolean; pid?: number | null; logPath?: string | null }
 export interface RemoteUpscalerVideoCacheInfo { jobs: number; bytes: number; activeJobs: number }
 export interface RemoteUpscalerVideoCacheClearResult { removedJobs: number; removedBytes: number }
 export interface ActiveUpscalerVideoJob { id: string; phase: string; phaseLabel: string; sourceName: string; remote: boolean; cancelRequested: boolean }
@@ -106,26 +115,67 @@ export interface PythonVideoUpscaleStatus {
 let healthPromise: Promise<PythonUpscalerHealth | null> | null = null;
 let healthCheckedAt = 0;
 let healthLifecycleRevision = pythonServiceLifecycleRevision();
+let runtimeDiagnostic: PythonUpscalerRuntimeDiagnostic = { phase: "idle", message: "Runtime non ancora richiesto.", at: new Date().toISOString() };
 
-async function probePythonUpscalerHealth(timeoutMs = 2_500): Promise<PythonUpscalerHealth | null> {
+function setRuntimeDiagnostic(phase: PythonUpscalerRuntimeDiagnostic["phase"], message: string, details: { pid?: number | null; logPath?: string | null } = {}): void {
+  runtimeDiagnostic = {
+    phase, message, at: new Date().toISOString(),
+    ...(details.pid || runtimeDiagnostic.pid ? { pid: details.pid || runtimeDiagnostic.pid } : {}),
+    ...(details.logPath || runtimeDiagnostic.logPath ? { logPath: details.logPath || runtimeDiagnostic.logPath } : {}),
+  };
+  console.info("[MLSM Python runtime]", runtimeDiagnostic);
+}
+
+export function pythonUpscalerRuntimeDiagnostic(): PythonUpscalerRuntimeDiagnostic {
+  return { ...runtimeDiagnostic };
+}
+
+async function probePythonUpscalerHealth(timeoutMs = 2_500, verbose = true): Promise<PythonUpscalerHealth | null> {
+  if (verbose) setRuntimeDiagnostic("probing", `Verifica http://127.0.0.1:8765/health · timeout ${timeoutMs} ms.`);
   try {
     const response = await fetch(`${pythonUpscalerBaseUrl}/health`, { signal: AbortSignal.timeout(timeoutMs) });
-    return response.ok ? response.json() as Promise<PythonUpscalerHealth> : null;
-  } catch { return null; }
+    if (!response.ok) {
+      if (verbose) setRuntimeDiagnostic("error", `Health check HTTP ${response.status}.`);
+      return null;
+    }
+    const health = await response.json() as PythonUpscalerHealth;
+    setRuntimeDiagnostic("ready", `Backend pronto · ${health.gpuName || health.recommendedBackend}${health.pid ? ` · PID ${health.pid}` : ""}.`, {
+      ...(health.pid ? { pid: health.pid } : {}),
+      ...(health.diagnosticLogPath ? { logPath: health.diagnosticLogPath } : {}),
+    });
+    return health;
+  } catch (error) {
+    if (verbose) setRuntimeDiagnostic("error", `Health check non raggiungibile: ${error instanceof Error ? error.message : String(error)}.`);
+    return null;
+  }
 }
 
 async function requestNativeUpscalerStart(): Promise<boolean> {
+  setRuntimeDiagnostic("starting", "Richiesta di avvio del backend Upscaler / Frame Booster.");
   if (!("__TAURI_INTERNALS__" in globalThis)) {
     try {
       const response = await fetch("/__mlsm/python/upscaler/start", { method: "POST" });
-      return response.ok;
-    } catch { return false; }
+      const payload = await response.json().catch(() => null) as { started?: boolean; running?: boolean; error?: string } | null;
+      if (!response.ok) {
+        setRuntimeDiagnostic("error", payload?.error || `Avvio backend rifiutato: HTTP ${response.status}.`);
+        return false;
+      }
+      setRuntimeDiagnostic("waiting", payload?.running ? "Backend già attivo; attendo la verifica HTTP." : "Processo Python avviato; attendo la verifica HTTP.");
+      return true;
+    } catch (error) {
+      setRuntimeDiagnostic("error", `Endpoint di avvio Vite non raggiungibile: ${error instanceof Error ? error.message : String(error)}.`);
+      return false;
+    }
   }
   try {
     const { invoke } = await import("@tauri-apps/api/core");
-    await invoke("ensure_upscaler_service");
+    const status = await invoke<NativeUpscalerServiceStatus>("ensure_upscaler_service");
+    setRuntimeDiagnostic("waiting", `${status.running ? "Backend già attivo" : status.started ? "Processo Python avviato" : "Avvio richiesto"}; attendo la verifica HTTP.`, status);
     return true;
-  } catch { return false; }
+  } catch (error) {
+    setRuntimeDiagnostic("error", `Tauri non ha avviato il backend: ${error instanceof Error ? error.message : String(error)}.`);
+    return false;
+  }
 }
 
 /**
@@ -146,9 +196,11 @@ async function probeOrStartPythonUpscaler(): Promise<PythonUpscalerHealth | null
   // shared health promise so repeated clicks cannot spawn duplicate services.
   for (let attempt = 0; attempt < 40; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 250));
-    const health = await probePythonUpscalerHealth(800);
+    const health = await probePythonUpscalerHealth(800, false);
     if (health) return health;
   }
+  const previous = pythonUpscalerRuntimeDiagnostic();
+  setRuntimeDiagnostic("error", "Il processo è stato richiesto ma /health non ha risposto entro 10 secondi. Controlla il log del backend.", previous);
   return null;
 }
 

@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const ensurePythonUpscalerService = vi.hoisted(() => vi.fn());
-vi.mock("./upscaler-python-client", () => ({ ensurePythonUpscalerService }));
+const pythonUpscalerRuntimeDiagnostic = vi.hoisted(() => vi.fn(() => ({ phase: "error", message: "backend test non disponibile", at: "2026-01-01T00:00:00.000Z" })));
+const reportUpscalerDiagnostic = vi.hoisted(() => vi.fn());
+vi.mock("./upscaler-python-client", () => ({ ensurePythonUpscalerService, pythonUpscalerRuntimeDiagnostic, reportUpscalerDiagnostic }));
 
 import { createFrameInterpolationFormData, frameInterpolationJob, normalizeFrameInterpolationMethod, probeFrameInterpolationSource, waitForFrameInterpolationHealth } from "./frame-interpolation-client";
 
-afterEach(() => { vi.restoreAllMocks(); ensurePythonUpscalerService.mockReset(); });
+afterEach(() => { vi.restoreAllMocks(); ensurePythonUpscalerService.mockReset(); reportUpscalerDiagnostic.mockReset(); });
 
 describe("Frame Booster interpolation request", () => {
   it("sends only the multiplier so the server derives FPS from ffprobe", () => {
@@ -83,7 +85,9 @@ describe("Frame Booster interpolation request", () => {
 
   it("probes source FPS immediately through the local backend", async () => {
     const metadata = { frameCount: 241, fps: 29.97002997, durationSeconds: 8.04, width: 720, height: 1280, hasAudio: true };
-    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(metadata), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const fetch = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({ interpolation: { ffmpeg: true, jobs: true } }), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(metadata), { status: 200, headers: { "Content-Type": "application/json" } }));
     const file = new File(["video"], "base.mp4", { type: "video/mp4" });
 
     await expect(probeFrameInterpolationSource(file)).resolves.toMatchObject(metadata);

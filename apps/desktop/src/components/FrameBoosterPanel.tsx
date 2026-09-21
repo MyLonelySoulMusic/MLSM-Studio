@@ -3,6 +3,7 @@ import { useProjectStore } from "../store/project-store";
 import { registerFrameBoosterSourceFile, releaseFrameBoosterSourceFile } from "../services/frame-booster-source-file";
 import { probeFrameInterpolationSource, waitForFrameInterpolationHealth, type FrameInterpolationCapabilities, type FrameInterpolationMethod } from "../services/frame-interpolation-client";
 import { shutdownAreaPythonServices } from "../services/python-service-lifecycle";
+import { pythonUpscalerRuntimeDiagnostic, type PythonUpscalerRuntimeDiagnostic } from "../services/upscaler-python-client";
 
 const methodGuidance: Record<FrameInterpolationMethod, { title: string; description: string; ideal: string; avoid: string }> = {
   motion: {
@@ -41,6 +42,7 @@ export function FrameBoosterPanel(): ReactElement {
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [importNotice, setImportNotice] = useState<string | null>(null);
+  const [runtimeDiagnostic, setRuntimeDiagnostic] = useState<PythonUpscalerRuntimeDiagnostic>(() => pythonUpscalerRuntimeDiagnostic());
   const healthOperation = useRef(0);
   const healthController = useRef<AbortController | null>(null);
   const importOperation = useRef(0);
@@ -58,7 +60,9 @@ export function FrameBoosterPanel(): ReactElement {
       const result = await waitForFrameInterpolationHealth({ timeoutMs: 15_000, signal: controller.signal });
       if (!mounted.current || healthOperation.current !== owner) return;
       setCapabilities(result);
-      setRuntimeError(result ? null : "Il backend non è partito entro 15 secondi. Riavvia MLSM Studio e premi Ricontrolla backend.");
+      const diagnostic = pythonUpscalerRuntimeDiagnostic();
+      setRuntimeDiagnostic(diagnostic);
+      setRuntimeError(result ? null : `Il backend non è partito entro 15 secondi. ${diagnostic.message}`);
     } finally {
       if (mounted.current && healthOperation.current === owner) {
         healthController.current = null;
@@ -98,7 +102,7 @@ export function FrameBoosterPanel(): ReactElement {
       // Frame Booster owns the local Python runtime while this mode is open.
       // Releasing it here makes mode changes stop the .venv process; a later
       // mount waits for this shutdown and starts a fresh owned process.
-      void shutdownAreaPythonServices();
+      void shutdownAreaPythonServices("frame-booster-unmount");
     };
   }, []);
 
@@ -177,6 +181,7 @@ export function FrameBoosterPanel(): ReactElement {
       setImportNotice(error instanceof Error ? error.message : String(error));
     }).finally(() => {
       if (probeController.current === metadataController) probeController.current = null;
+      if (mounted.current) setRuntimeDiagnostic(pythonUpscalerRuntimeDiagnostic());
     });
   };
 
@@ -219,5 +224,16 @@ export function FrameBoosterPanel(): ReactElement {
       <span>{runtimeError ?? (capabilities?.ffmpeg ? "Motion AOBMC, Motion OBMC e Frame blend sono pronti." : "Avvio automatico del servizio locale in corso.")}</span>
       <button type="button" onClick={() => void check()} disabled={checking}>Ricontrolla backend</button>
     </div>
+    <details className="frame-booster-diagnostics">
+      <summary>Diagnostica backend</summary>
+      <dl>
+        <div><dt>Endpoint</dt><dd>http://127.0.0.1:8765</dd></div>
+        <div><dt>Stato</dt><dd>{runtimeDiagnostic.phase}</dd></div>
+        <div><dt>Ultimo evento</dt><dd>{runtimeDiagnostic.message}</dd></div>
+        {runtimeDiagnostic.pid ? <div><dt>PID</dt><dd>{runtimeDiagnostic.pid}</dd></div> : null}
+        {runtimeDiagnostic.logPath ? <div><dt>Log</dt><dd><code>{runtimeDiagnostic.logPath}</code></dd></div> : null}
+        <div><dt>Ora</dt><dd>{runtimeDiagnostic.at}</dd></div>
+      </dl>
+    </details>
   </section>;
 }

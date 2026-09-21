@@ -1,12 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getMlxDlssCapabilities, type MlxDlssCapabilities } from "./mlx-dlss-client";
 
-export function useMlxDlssCapabilities() {
+export function useMlxDlssCapabilities(enabled = true) {
   const [capabilities, setCapabilities] = useState<MlxDlssCapabilities | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const request = useRef<AbortController | null>(null);
   const refresh = useCallback(async () => {
+    if (!enabled) {
+      request.current?.abort();
+      request.current = null;
+      setCapabilities(null);
+      setError("");
+      setLoading(false);
+      return;
+    }
     request.current?.abort();
     const controller = new AbortController();
     request.current = controller;
@@ -22,7 +30,7 @@ export function useMlxDlssCapabilities() {
     } finally {
       if (!controller.signal.aborted) setLoading(false);
     }
-  }, []);
+  }, [enabled]);
   useEffect(() => { void refresh(); return () => request.current?.abort(); }, [refresh]);
   return { capabilities, error, loading, refresh, setCapabilities };
 }

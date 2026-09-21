@@ -46,6 +46,10 @@ function mockDeferredImages() {
   return images;
 }
 
+function detectAppleSilicon() {
+  detectHardware.mockResolvedValue({ platform: "macos", architecture: "aarch64", appleSilicon: true, cuda: false, webgpu: true, gpuName: "Apple Silicon", recommendedBackend: "metal" });
+}
+
 describe("UpscalerPanel source picker", () => {
   beforeEach(() => {
     useProjectStore.getState().newProject();
@@ -108,6 +112,7 @@ describe("UpscalerPanel source picker", () => {
   });
 
   it("mostra MLX-DLSS sui Mac compatibili anche prima dell'installazione", async () => {
+    detectAppleSilicon();
     mlxCapabilities.mockReturnValue({
       capabilities: {
         id: "mlx-dlss", label: "MLX-DLSS · Apple Metal", platform: "Darwin", architecture: "arm64", macOSVersion: "26.1",
@@ -120,7 +125,7 @@ describe("UpscalerPanel source picker", () => {
     });
     render(<UpscalerPanel />);
     const modelPicker = screen.getByLabelText("Modello Upscaler");
-    expect(screen.getByRole("option", { name: "MLX-DLSS 5 · configura" })).toBeVisible();
+    await waitFor(() => expect(screen.getByRole("option", { name: "MLX-DLSS 5 · configura" })).toBeVisible());
     fireEvent.change(modelPicker, { target: { value: "mlx-dlss" } });
     await waitFor(() => expect(useProjectStore.getState().project.animation.upscaler.provider).toBe("mlx-dlss"));
     expect(screen.getByRole("dialog", { name: "Configura MLX-DLSS 5" })).toBeVisible();
@@ -137,6 +142,7 @@ describe("UpscalerPanel source picker", () => {
   });
 
   it("mantiene il menu modello visibile passando dal modello locale a MLX-DLSS", async () => {
+    detectAppleSilicon();
     const ready = {
       id: "mlx-dlss" as const, label: "MLX-DLSS · Apple Metal", platform: "Darwin", architecture: "arm64", macOSVersion: "26.1",
       appleSilicon: true, metal: true, memoryBytes: 16 * 1024 ** 3, supported: true, reason: "", installReady: true,
@@ -147,6 +153,7 @@ describe("UpscalerPanel source picker", () => {
     mlxCapabilities.mockReturnValue({ capabilities: ready, error: "", refresh: vi.fn(), setCapabilities: vi.fn() });
     render(<UpscalerPanel />);
 
+    await waitFor(() => expect(screen.getByRole("option", { name: "MLX-DLSS 5 · configura" })).toBeVisible());
     fireEvent.change(screen.getByLabelText("Modello Upscaler"), { target: { value: "mlx-dlss" } });
     await waitFor(() => expect(useProjectStore.getState().project.animation.upscaler.provider).toBe("mlx-dlss"));
     fireEvent.click(screen.getByRole("button", { name: "Chiudi configurazione MLX-DLSS" }));
@@ -156,6 +163,7 @@ describe("UpscalerPanel source picker", () => {
   });
 
   it("riallinea una foto Enhance a 1x quando passa da un modello locale 4x a MLX-DLSS", async () => {
+    detectAppleSilicon();
     const ready = {
       id: "mlx-dlss" as const, label: "MLX-DLSS · Apple Metal", platform: "Darwin", architecture: "arm64", macOSVersion: "26.1",
       appleSilicon: true, metal: true, memoryBytes: 16 * 1024 ** 3, supported: true, reason: "", installReady: true,
@@ -171,16 +179,19 @@ describe("UpscalerPanel source picker", () => {
     });
     render(<UpscalerPanel />);
 
+    await waitFor(() => expect(screen.getByRole("button", { name: "MLX-DLSS · pronto" })).toBeVisible());
     fireEvent.click(screen.getByRole("button", { name: "MLX-DLSS · pronto" }));
     await waitFor(() => expect(useProjectStore.getState().project.animation.upscaler).toMatchObject({
       provider: "mlx-dlss", finalWidth: 1920, finalHeight: 1080, scale: 1,
     }));
   });
 
-  it("shows readiness progress and lets the user retry a failed MLX connection", () => {
+  it("shows readiness progress and lets the user retry a failed MLX connection", async () => {
+    detectAppleSilicon();
     const refresh = vi.fn();
     mlxCapabilities.mockReturnValue({ capabilities: null, loading: true, error: "", refresh, setCapabilities: vi.fn() });
     const { rerender } = render(<UpscalerPanel />);
+    await waitFor(() => expect(screen.getByRole("option", { name: "MLX-DLSS 5 · configura" })).toBeVisible());
     fireEvent.change(screen.getByLabelText("Modello Upscaler"), { target: { value: "mlx-dlss" } });
     expect(screen.getByText("Avvio del servizio Upscaler…")).toBeVisible();
     mlxCapabilities.mockReturnValue({ capabilities: null, loading: false, error: "Servizio non raggiungibile", refresh, setCapabilities: vi.fn() });
@@ -189,6 +200,28 @@ describe("UpscalerPanel source picker", () => {
     fireEvent.click(screen.getByRole("button", { name: "Riprova connessione" }));
     // The modal refreshes once on opening, then again for the explicit retry.
     expect(refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it("non mostra MLX-DLSS su Windows e corregge una selezione persistita non supportata", async () => {
+    detectHardware.mockResolvedValue({ platform: "windows", architecture: "x86_64", appleSilicon: false, cuda: true, webgpu: true, gpuName: "NVIDIA", recommendedBackend: "cuda" });
+    mlxCapabilities.mockReturnValue({
+      capabilities: {
+        id: "mlx-dlss", label: "MLX-DLSS · Apple Metal", platform: "Windows", architecture: "x86_64", macOSVersion: "",
+        appleSilicon: false, metal: false, memoryBytes: 0, supported: true, reason: "", installReady: false,
+        missingInstallTools: [], automaticInstallTools: [], manualInstallTools: [], packageManager: null,
+        minimumMacOS: "26.0", installed: false, usable: false, healthError: "", runtimeRoot: "", logPath: "", version: "", models: [],
+        profiles: [], codecs: [], containers: [], limitations: [],
+      },
+      error: "", loading: false, refresh: vi.fn(), setCapabilities: vi.fn(),
+    });
+    useProjectStore.getState().updateUpscaler({ provider: "mlx-dlss" });
+
+    render(<UpscalerPanel />);
+
+    await waitFor(() => expect(useProjectStore.getState().project.animation.upscaler.provider).toBe("classic"));
+    expect(screen.queryByRole("option", { name: /MLX-DLSS/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /MLX-DLSS/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: /MLX-DLSS/i })).not.toBeInTheDocument();
   });
 
   it("rende uniformi i cursori e conserva l'ultimo valore durante un trascinamento rapido", () => {
