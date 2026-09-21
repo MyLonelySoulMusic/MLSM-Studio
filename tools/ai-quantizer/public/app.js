@@ -1,4 +1,4 @@
-/* global document, window, fetch, clearTimeout, setTimeout, confirm, prompt, AudioContext, devicePixelRatio, requestAnimationFrame, Blob */
+/* global document, window, fetch, clearTimeout, setTimeout, AudioContext, devicePixelRatio, requestAnimationFrame, Blob */
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 const tr = value => window.AIQ_I18N?.translate(value) || value;
@@ -8,6 +8,10 @@ let busyFocus = null;
 let unsafeWarpResolver = null;
 let unsafeWarpFocus = null;
 let unsafeWarpCloseTimer = null;
+let projectDialogResolver = null;
+let projectDialogFocus = null;
+let projectDialogCloseTimer = null;
+let projectDialogMode = 'create';
 
 async function request(url, options = {}) {
   const res = await fetch(url, options);
@@ -60,6 +64,57 @@ function confirmUnsafeWarp(warning) {
   return new Promise(resolve => {
     unsafeWarpResolver = resolve;
     requestAnimationFrame(() => $('#unsafeWarpCancel').focus());
+  });
+}
+
+function closeProjectDialog(confirmed = false) {
+  if (!projectDialogResolver) return;
+  const input = $('#projectDialogName');
+  const value = input.value.trim();
+  if (confirmed && projectDialogMode === 'create' && !value) {
+    $('#projectDialogError').classList.remove('hidden');
+    input.setAttribute('aria-invalid', 'true');
+    input.focus();
+    return;
+  }
+  const backdrop = $('#projectDialog'), resolve = projectDialogResolver, restoreFocus = projectDialogFocus;
+  projectDialogResolver = null; projectDialogFocus = null;
+  backdrop.classList.add('is-closing');
+  document.body.classList.remove('decision-modal-open');
+  $('main').inert = false; $('.sidebar').inert = false;
+  resolve(confirmed ? (projectDialogMode === 'create' ? value : true) : null);
+  projectDialogCloseTimer = setTimeout(() => {
+    backdrop.classList.add('hidden'); backdrop.classList.remove('is-closing');
+    restoreFocus?.focus(); projectDialogCloseTimer = null;
+  }, 180);
+}
+
+function openProjectDialog(mode, projectName = '') {
+  projectDialogMode = mode;
+  const creating = mode === 'create';
+  $('#projectDialogEyebrow').textContent = tr(creating ? 'NUOVO PROGETTO · MUSIC' : 'GESTIONE PROGETTO · MUSIC');
+  $('#projectDialogTitle').textContent = tr(creating ? 'Crea un nuovo progetto' : 'Eliminare questo progetto?');
+  $('#projectDialogDescription').textContent = creating
+    ? tr('Assegna un nome al brano. Potrai importare master e stem nel passaggio successivo.')
+    : `${tr('Il progetto verrà eliminato definitivamente:')} “${projectName}”.`;
+  $('#projectDialogField').classList.toggle('hidden', !creating);
+  $('#projectDialogName').value = creating ? tr('Nuovo brano') : '';
+  $('#projectDialogName').removeAttribute('aria-invalid');
+  $('#projectDialogError').classList.add('hidden');
+  $('#projectDialogConfirm').textContent = tr(creating ? 'Crea progetto' : 'Elimina progetto');
+  $('#projectDialogConfirm').classList.toggle('decision-modal-confirm', !creating);
+  const backdrop = $('#projectDialog');
+  clearTimeout(projectDialogCloseTimer); projectDialogCloseTimer = null;
+  backdrop.classList.remove('hidden', 'is-closing');
+  document.body.classList.add('decision-modal-open');
+  projectDialogFocus = document.activeElement;
+  $('main').inert = true; $('.sidebar').inert = true;
+  return new Promise(resolve => {
+    projectDialogResolver = resolve;
+    requestAnimationFrame(() => {
+      if (creating) { $('#projectDialogName').focus(); $('#projectDialogName').select(); }
+      else $('#projectDialogCancel').focus();
+    });
   });
 }
 
@@ -152,7 +207,7 @@ async function loadProjects() {
   $$('.project-item').forEach(button => button.onclick = () => openProject(button.dataset.id));
   $$('.project-trash').forEach(button => button.onclick = async event => {
     event.stopPropagation();
-    if (!confirm(tr(`Eliminare definitivamente “${button.dataset.name}”?`))) return;
+    if (!await openProjectDialog('delete', button.dataset.name)) return;
     await request(`/music/ai-quantizer/api/projects/${button.dataset.id}`, { method: 'DELETE' });
     if (state.project?.id === button.dataset.id) {
       state.project = null;
@@ -167,7 +222,7 @@ async function loadProjects() {
 function escapeHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
 async function createProject() {
-  const name = prompt(tr('Nome del progetto'), tr('Nuovo brano'));
+  const name = await openProjectDialog('create');
   if (!name) return;
   const project = await request('/music/ai-quantizer/api/projects', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name })
@@ -881,7 +936,7 @@ $$('.workflow-skip').forEach(button => button.onclick = async () => {
 });
 $$('.ab-switch button').forEach(b => b.onclick = () => setVariant(b.dataset.variant));
 $('#deleteProject').onclick = async () => {
-  if (!confirm(tr(`Eliminare definitivamente “${state.project.name}”?`))) return;
+  if (!await openProjectDialog('delete', state.project.name)) return;
   await request(`/music/ai-quantizer/api/projects/${state.project.id}`, { method: 'DELETE' }); state.project = null;
   $('#workspace').classList.add('hidden'); $('#emptyState').classList.remove('hidden'); await loadProjects();
 };
@@ -895,6 +950,27 @@ $('#unsafeWarpModal').onkeydown = event => {
   if (event.key === 'Escape') { event.preventDefault(); closeUnsafeWarpDecision(false); return; }
   if (event.key !== 'Tab') return;
   const focusable = [...$('#unsafeWarpModal').querySelectorAll('button:not(:disabled)')];
+  if (!focusable.length) return;
+  const first = focusable[0], last = focusable.at(-1);
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+};
+$('#projectDialogCancel').onclick = () => closeProjectDialog(false);
+$('#projectDialogClose').onclick = () => closeProjectDialog(false);
+$('#projectDialogConfirm').onclick = () => closeProjectDialog(true);
+$('#projectDialogName').oninput = event => {
+  if (event.currentTarget.value.trim()) { $('#projectDialogError').classList.add('hidden'); event.currentTarget.removeAttribute('aria-invalid'); }
+};
+$('#projectDialogName').onkeydown = event => {
+  if (event.key === 'Enter') { event.preventDefault(); closeProjectDialog(true); }
+};
+$('#projectDialog').onclick = event => {
+  if (event.target === event.currentTarget) closeProjectDialog(false);
+};
+$('#projectDialog').onkeydown = event => {
+  if (event.key === 'Escape') { event.preventDefault(); closeProjectDialog(false); return; }
+  if (event.key !== 'Tab') return;
+  const focusable = [...$('#projectDialog').querySelectorAll('input:not(.hidden), button:not(:disabled)')].filter(element => !element.closest('.hidden'));
   if (!focusable.length) return;
   const first = focusable[0], last = focusable.at(-1);
   if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }

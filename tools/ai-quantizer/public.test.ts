@@ -9,7 +9,7 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 function boot() {
   document.body.innerHTML = new DOMParser().parseFromString(html, 'text/html').body.innerHTML;
   const fetcher = vi.fn(async (url: string) => new Response(JSON.stringify(url.endsWith('/health') ? { ok: true } : []), { headers: { 'content-type': 'application/json' } }));
-  const app = new Function('fetch', 'requestAnimationFrame', `${script}\nreturn { state, showModule, updateWorkflow, downloadArchive, setVariant, setRestoreVariant, draw, sourceToTarget, saveAndProcess, applyAlignment, openProject, persistModuleChoice };`)(fetcher, (callback: () => void) => callback());
+  const app = new Function('fetch', 'requestAnimationFrame', `${script}\nreturn { state, showModule, updateWorkflow, downloadArchive, setVariant, setRestoreVariant, draw, sourceToTarget, saveAndProcess, applyAlignment, openProject, persistModuleChoice, createProject, openProjectDialog };`)(fetcher, (callback: () => void) => callback());
   const master = { id: 'track1', name: 'Song.wav', role: 'master', source: 'input.wav', duration: 3, output: 'output.wav', outputDuration: 3, processedAt: '2026-09-20T10:00:00Z' };
   app.state.project = { id: 'project1', name: 'Song', tracks: [master], settings: { targetBpm: 120 }, modules: { quantize: true, align: true, restoration: true, mastering: true, ai: false }, warpMap: { points: [{ source: 0, target: 0 }, { source: 1.1, target: 1 }, { source: 2.1, target: 2 }, { source: 3, target: 3 }] } };
   app.state.master = master;
@@ -107,6 +107,24 @@ describe('Music guided workflow', () => {
     expect(await processing).toBe(false);
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(document.querySelector('#toast')?.textContent).toBe('Quantizzazione annullata');
+  });
+
+  it('creates a project through the professional modal without browser prompt', async () => {
+    const { app, fetcher } = boot();
+    await tick(); fetcher.mockClear();
+    fetcher
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'new-project' }), { headers: { 'content-type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify([]), { headers: { 'content-type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'new-project', name: 'Album mix', tracks: [], settings: { targetBpm: 120 }, modules: {} }), { headers: { 'content-type': 'application/json' } }));
+    const creating = app.createProject();
+    expect(document.querySelector('#projectDialog')?.classList.contains('hidden')).toBe(false);
+    expect(document.activeElement).toBe(document.querySelector('#projectDialogName'));
+    const input = document.querySelector('#projectDialogName') as HTMLInputElement;
+    input.value = 'Album mix'; input.dispatchEvent(new Event('input', { bubbles: true }));
+    (document.querySelector('#projectDialogConfirm') as HTMLButtonElement).click();
+    await creating;
+    expect(fetcher).toHaveBeenCalledWith('/music/ai-quantizer/api/projects', expect.objectContaining({ method: 'POST', body: JSON.stringify({ name: 'Album mix' }) }));
+    expect(document.querySelector('#projectDialog')?.classList.contains('is-closing')).toBe(true);
   });
 
   it('continues the render only after explicit confirmation in the custom modal', async () => {

@@ -114,6 +114,11 @@ except Exception as rife_import_error:  # RIFE is optional; FFmpeg must still bo
     def practical_rife_interpolate_file(*_args, **_kwargs):
         raise RuntimeError(f"Runtime RIFE non disponibile: {_RIFE_IMPORT_ERROR}")
 
+try:
+    from mlx_dlss_runtime import MlxDlssAdapter, MlxDlssError
+except ModuleNotFoundError:
+    from tools.mlx_dlss_runtime import MlxDlssAdapter, MlxDlssError
+
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = Path(os.environ.get("DSAS_UPSCALER_CACHE", ROOT / ".upscaler-cache" / "pytorch"))
 CACHE.mkdir(parents=True, exist_ok=True)
@@ -127,6 +132,7 @@ CANVAS_MODEL_ID = "canvas"
 CANVAS_VIDEO_PROCESSING_MODE = "canvas-direct-ffmpeg"
 LOCAL_AI_VIDEO_PROCESSING_MODE = "local-ai-png-frames"
 REMOTE_VIDEO_PROCESSING_MODE = "remote-mp4-segments"
+MLX_DLSS_VIDEO_PROCESSING_MODE = "mlx-dlss-native-metal"
 MODELS = {
     "RealESRGAN_x4plus": (4, 23, "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth"),
     "RealESRGAN_x2plus": (2, 23, "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth"),
@@ -169,6 +175,7 @@ INTERPOLATION_DURATION_TOLERANCE_SECONDS = .05
 REMOTE_VIDEO_TERMINAL_PHASES = frozenset(("ready", "error", "cancelled"))
 REMOTE_CHECKPOINT_POLICIES = frozenset(("restart", "resume"))
 MAX_CONCURRENT_VIDEO_JOBS = 1
+mlx_dlss = MlxDlssAdapter()
 
 app = FastAPI(title="MLSM Studio Upscaler", docs_url=None, redoc_url=None)
 app.add_middleware(CORSMiddleware, allow_origin_regex=r"^(https?://(localhost|127\.0\.0\.1)(:\d+)?|tauri://localhost|https://tauri\.localhost)$", allow_methods=["GET", "POST", "DELETE"], allow_headers=["*"])
@@ -772,6 +779,98 @@ def interpolation_capabilities() -> dict[str, object]:
     }
 
 
+@app.get("/upscale/providers/mlx-dlss")
+def mlx_dlss_capabilities():
+    return mlx_dlss.capabilities()
+
+
+@app.post("/upscale/providers/mlx-dlss/install")
+def install_mlx_dlss():
+    try:
+        return mlx_dlss.start_install()
+    except MlxDlssError as error:
+        raise HTTPException(409, str(error)) from error
+
+
+@app.get("/upscale/providers/mlx-dlss/install")
+def mlx_dlss_install_status():
+    return mlx_dlss.install_status()
+
+
+@app.delete("/upscale/providers/mlx-dlss")
+def uninstall_mlx_dlss():
+    try:
+        mlx_dlss.uninstall()
+        return {"ok": True}
+    except MlxDlssError as error:
+        raise HTTPException(409, str(error)) from error
+
+
+@app.post("/upscale/providers/mlx-dlss/models")
+async def import_mlx_dlss_model(file: UploadFile = File(...), kind: str = Form(...)):
+    try:
+        item = mlx_dlss.import_model(file.file, file.filename or "model", kind)
+        return {"ok": True, "model": item, "models": mlx_dlss.list_models()}
+    except MlxDlssError as error:
+        raise HTTPException(400, str(error)) from error
+    finally:
+        await file.close()
+
+
+@app.post("/upscale/providers/mlx-dlss/models/extract-neural")
+async def extract_mlx_dlss_neural_model(file: UploadFile = File(...)):
+    try:
+        item = mlx_dlss.extract_neural_model(file.file, file.filename or "nvngx_dlssnr.dll")
+        return {"ok": True, "model": item, "models": mlx_dlss.list_models()}
+    except MlxDlssError as error:
+        raise HTTPException(400, str(error)) from error
+    finally:
+        await file.close()
+
+
+@app.delete("/upscale/providers/mlx-dlss/models/{model_id}")
+def remove_mlx_dlss_model(model_id: str):
+    try:
+        mlx_dlss.remove_model(model_id)
+        return {"ok": True, "models": mlx_dlss.list_models()}
+    except MlxDlssError as error:
+        raise HTTPException(400, str(error)) from error
+
+
+@app.post("/upscale/providers/mlx-dlss/image")
+async def upscale_mlx_dlss_image(
+    file: UploadFile = File(...), options: str = Form("{}"), width: int = Form(...), height: int = Form(...),
+):
+    if not 64 <= width <= 16384 or not 64 <= height <= 16384:
+        raise HTTPException(400, "Risoluzione finale fuori dai limiti")
+    try:
+        configuration = json.loads(options)
+        if not isinstance(configuration, dict): raise ValueError
+    except (ValueError, TypeError, json.JSONDecodeError) as error:
+        raise HTTPException(400, "Configurazione MLX-DLSS non valida") from error
+    with tempfile.TemporaryDirectory(prefix="mlsm-mlx-dlss-image-") as directory:
+        workspace = Path(directory)
+        suffix = Path(file.filename or "source.png").suffix.lower()
+        if suffix not in {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"}: suffix = ".png"
+        source = workspace / f"source{suffix}"
+        output = workspace / "native.png"
+        source.write_bytes(await file.read())
+        await file.close()
+        try:
+            mlx_dlss.process_image(source, output, configuration)
+            image = cv2.imread(str(output), cv2.IMREAD_UNCHANGED)
+            if image is None: raise MlxDlssError("Output immagine MLX-DLSS illeggibile")
+            if image.shape[1] != width or image.shape[0] != height:
+                image = cv2.resize(image, (width, height), interpolation=cv2.INTER_LANCZOS4)
+            ok, encoded = cv2.imencode(".png", image, [cv2.IMWRITE_PNG_COMPRESSION, 2])
+            if not ok: raise MlxDlssError("Codifica PNG MLX-DLSS fallita")
+            return Response(encoded.tobytes(), media_type="image/png", headers={"X-Upscaler-Backend": "mlx-dlss-metal"})
+        except InterruptedError as error:
+            raise HTTPException(499, str(error)) from error
+        except MlxDlssError as error:
+            raise HTTPException(503, str(error)) from error
+
+
 @app.get("/health")
 def health():
     parent_pid = configured_parent_pid()
@@ -781,7 +880,7 @@ def health():
             "remoteVideoCheckpointPolicy": True, "remoteVideoCache": True,
             "remoteVideoPartialEndpointPreflight": True,
             "canvasVideoStreaming": True,
-            "interpolationJobs": True,
+            "interpolationJobs": True, "mlxDlssProvider": True,
         },
         **hardware(), "interpolation": interpolation_capabilities(), "videoTempDirectory": str(VIDEO_TEMP_ROOT),
         "remoteVideoDirectory": str(REMOTE_VIDEO_ROOT),
@@ -1624,11 +1723,92 @@ def canonical_local_video_model(value: object) -> str:
 
 
 def video_processing_mode(job: dict[str, object]) -> str:
+    if job.get("provider") == "mlx-dlss":
+        return MLX_DLSS_VIDEO_PROCESSING_MODE
     if video_job_is_remote(job):
         return REMOTE_VIDEO_PROCESSING_MODE
     if canonical_local_video_model(job.get("model", "")) == CANVAS_MODEL_ID:
         return CANVAS_VIDEO_PROCESSING_MODE
     return LOCAL_AI_VIDEO_PROCESSING_MODE
+
+
+def process_mlx_dlss_video_job(
+    job_id: str, job: dict[str, object], source: Path, result_path: Path, binary: str, started: float,
+) -> None:
+    """Run the upstream native AVFoundation/Metal pipeline as one cancellable job."""
+    total, source_fps, expected_duration = probe_video_timeline(source)
+    configuration = dict(job.get("providerConfig", {}))
+    start_seconds = max(0.0, float(job.get("sourceStartSeconds", 0) or 0))
+    preview_seconds = max(0.0, float(job.get("sourceDurationSeconds", 0) or 0))
+    if start_seconds or preview_seconds:
+        start_frame = min(max(0, total - 1), int(round(start_seconds * source_fps)))
+        selected_frames = min(total - start_frame, max(1, int(round(preview_seconds * source_fps)))) if preview_seconds else total - start_frame
+        configuration.update(startFrame=start_frame, frames=selected_frames)
+        total = selected_frames
+        expected_duration = selected_frames / source_fps
+    configuration["audioPolicy"] = str(configuration.get("audioPolicy", "preserve"))
+    codec = str(configuration.get("codec", "h264"))
+    native_path = result_path.with_suffix(".mov" if codec == "prores" else ".native.mp4")
+    update_video_job(job_id, phase="upscaling", phaseLabel="MLX-DLSS · elaborazione Metal nativa", progress=.03, totalFrames=total)
+
+    def report(item: dict[str, object]) -> None:
+        native_progress = float(item.get("progress", 0) or 0)
+        current = int(item.get("currentFrame", round(native_progress * total)) or 0)
+        elapsed = float(item.get("elapsedSeconds", 0) or 0) or (time.monotonic() - started)
+        remaining = (elapsed / current * (total - current)) if current > 0 and total > current else (0 if current >= total else None)
+        update_video_job(
+            job_id, phase="upscaling", phaseLabel="MLX-DLSS · elaborazione Metal",
+            progress=max(.01, min(.95, native_progress)), currentFrame=min(total, current), totalFrames=total,
+            elapsedSeconds=elapsed, estimatedRemainingSeconds=remaining,
+        )
+
+    mlx_dlss.process_video(source, native_path, configuration, cancelled=lambda: video_job_cancelled(job_id), progress=report)
+    if video_job_cancelled(job_id): raise InterruptedError("Job MLX-DLSS annullato")
+    target_width, target_height = int(job["width"]), int(job["height"])
+    geometry = probe_video_geometry(native_path)
+    needs_resize = int(geometry["width"]) != target_width or int(geometry["height"]) != target_height
+    replace_audio = configuration["audioPolicy"] == "replace"
+    if needs_resize or replace_audio:
+        update_video_job(job_id, phase="encoding", phaseLabel="Finalizzazione risoluzione e audio", progress=.93)
+        video_codec = "prores_ks" if codec == "prores" else "hevc_videotoolbox" if codec == "hevc" else "h264_videotoolbox"
+        command = [*upscaler_ffmpeg_prefix(binary), *upscaler_ffmpeg_codec_threads(), "-i", str(native_path)]
+        replacement_path = Path(str(job.get("replacementAudioPath", "")))
+        if replace_audio:
+            if not replacement_path.is_file(): raise RuntimeError("Traccia audio sostitutiva non disponibile")
+            command += ["-i", str(replacement_path), "-map", "0:v:0", "-map", "1:a:0"]
+        if needs_resize:
+            command += ["-vf", f"scale={target_width}:{target_height}:flags=lanczos,setsar=1", "-c:v", video_codec]
+            if codec != "prores": command += ["-b:v", str(configuration.get("bitrate", "20000000"))]
+        else:
+            command += ["-c:v", "copy"]
+        command += ["-c:a", "aac" if replace_audio else "copy"]
+        if replace_audio: command += ["-shortest"]
+        command += ["-movflags", "+faststart", *upscaler_ffmpeg_codec_threads(), str(result_path)]
+        run_checked(command, cancelled=lambda: video_job_cancelled(job_id))
+        native_path.unlink(missing_ok=True)
+    else:
+        native_path.replace(result_path)
+    encoded_geometry = probe_video_geometry(result_path)
+    encoded_frames = encoded_video_frame_count(result_path)
+    encoded_duration = encoded_video_duration(result_path)
+    source_audio_packets = audio_packet_count(source)
+    output_audio_packets = audio_packet_count(result_path)
+    if configuration["audioPolicy"] == "preserve" and source_audio_packets and not output_audio_packets:
+        raise RuntimeError("MLX-DLSS non ha conservato la traccia audio originale")
+    update_video_job(
+        job_id, phase="ready", phaseLabel="MLX-DLSS completato", error=None, progress=1,
+        currentFrame=total, totalFrames=total, resultPath=str(result_path), resultBytes=result_path.stat().st_size,
+        encodedFrameCount=encoded_frames, durationSeconds=encoded_duration,
+        effectiveWidth=int(encoded_geometry["width"]), effectiveHeight=int(encoded_geometry["height"]),
+        sampleAspectRatio=encoded_geometry["sample_aspect_ratio"], rotation=encoded_geometry["rotation"],
+        elapsedSeconds=time.monotonic() - started, sourceAudioPackets=source_audio_packets,
+        audioPacketCount=output_audio_packets,
+        audioRestored=configuration["audioPolicy"] == "mute" or source_audio_packets == 0 or output_audio_packets > 0,
+        sourceFps=source_fps, outputFps=encoded_frames / max(encoded_duration, .001), processingMode=MLX_DLSS_VIDEO_PROCESSING_MODE,
+        container="mov" if codec == "prores" else "mp4", codec=codec,
+    )
+    log_upscaler_event("mlx-dlss", "job-ready", jobId=job_id, totalFrames=total, resultBytes=result_path.stat().st_size, elapsedSeconds=time.monotonic() - started)
+    schedule_video_job_cleanup(job_id, READY_JOB_RETENTION_SECONDS, "ready-expired")
 
 
 def process_canvas_video_job(
@@ -1842,7 +2022,8 @@ def process_video_upscale_job(job_id: str) -> None:
     originals = workspace / "original-frames"
     enhanced = workspace / "upscaled-frames"
     rendered = workspace / "rendered-frames"
-    result_path = workspace / "upscaled-video.mp4"
+    provider_configuration = job.get("providerConfig", {}) if isinstance(job.get("providerConfig"), dict) else {}
+    result_path = workspace / ("upscaled-video.mov" if job.get("provider") == "mlx-dlss" and provider_configuration.get("codec") == "prores" else "upscaled-video.mp4")
     remote_job = video_job_is_remote(job)
     model_name = (
         str(job.get("model", "")).strip()
@@ -1861,6 +2042,9 @@ def process_video_upscale_job(job_id: str) -> None:
         binary = ffmpeg_binary()
         if not binary:
             raise RuntimeError("ffmpeg non trovato nel PATH. Installalo con `brew install ffmpeg` e riavvia il servizio.")
+        if processing_mode == MLX_DLSS_VIDEO_PROCESSING_MODE:
+            process_mlx_dlss_video_job(job_id, job, source, result_path, binary, started)
+            return
         if processing_mode == CANVAS_VIDEO_PROCESSING_MODE:
             process_canvas_video_job(job_id, job, source, result_path, binary, started)
             return
@@ -2430,10 +2614,28 @@ async def create_video_upscale_job(
     file: UploadFile = File(...), model: str = Form(...), backend: str = Form("auto"),
     tile: int = Form(256), width: int = Form(...), height: int = Form(...),
     tta: bool = Form(False), quality: str = Form("maximum"), client_id: str = Form(""), preserve_aspect_ratio: bool = Form(True),
-    remote_config: str = Form(""), adjustments: str = Form("{}"),
-    apply_video_adjustments: bool = Form(False),
+    remote_config: str = Form(""), provider: str = Form("classic"), provider_config: str = Form("{}"), adjustments: str = Form("{}"),
+    apply_video_adjustments: bool = Form(False), replacement_audio: UploadFile | None = File(None),
+    source_start_seconds: float = Form(0), source_duration_seconds: float = Form(0),
     checkpoint_policy: str = Form("restart"),
 ):
+    # Unit/in-process callers invoke the FastAPI function directly and therefore
+    # see ``Form`` descriptors instead of HTTP-decoded defaults. Preserve the
+    # pre-provider contract for those callers and for older desktop builds.
+    if not isinstance(provider, str): provider = "classic"
+    if not isinstance(provider_config, str): provider_config = "{}"
+    if not isinstance(replacement_audio, UploadFile): replacement_audio = None
+    if not isinstance(source_start_seconds, (int, float)): source_start_seconds = 0
+    if not isinstance(source_duration_seconds, (int, float)): source_duration_seconds = 0
+    if provider not in {"classic", "mlx-dlss"}:
+        raise HTTPException(400, "Provider Upscaler non riconosciuto")
+    try:
+        parsed_provider_config = json.loads(provider_config)
+        if not isinstance(parsed_provider_config, dict): raise ValueError
+    except (ValueError, TypeError, json.JSONDecodeError) as error:
+        raise HTTPException(400, "Configurazione provider Upscaler non valida") from error
+    if provider == "mlx-dlss" and not mlx_dlss.capabilities().get("usable"):
+        raise HTTPException(503, "MLX-DLSS non è installato, compatibile e verificato")
     try:
         checkpoint_policy = normalize_remote_checkpoint_policy(checkpoint_policy)
     except ValueError as error:
@@ -2444,7 +2646,7 @@ async def create_video_upscale_job(
         raise HTTPException(400, str(error)) from error
     adjustments_key = json.dumps(parsed_adjustments, sort_keys=True, separators=(",", ":"))
     remote: dict[str, object] | None = None
-    if remote_config:
+    if remote_config and provider == "classic":
         try:
             value = json.loads(remote_config)
             endpoints = value.get("endpoints") if isinstance(value, dict) else None
@@ -2465,12 +2667,12 @@ async def create_video_upscale_job(
                 raise ValueError
         except (ValueError, TypeError, json.JSONDecodeError, RemoteUpscalerError) as error:
             raise HTTPException(400, "Configurazione Upscaler remoto non valida") from error
-    if remote is None:
+    if remote is None and provider == "classic":
         model = canonical_local_video_model(model)
     log_upscaler_event("backend", "upload-received", fileName=file.filename, model=model, backend=backend, target=f"{width}x{height}", quality=quality, preserveAspectRatio=preserve_aspect_ratio, checkpointPolicy=checkpoint_policy)
-    if remote is None and model != CANVAS_MODEL_ID and model not in MODELS:
+    if provider == "classic" and remote is None and model != CANVAS_MODEL_ID and model not in MODELS:
         raise HTTPException(400, "Modello video sconosciuto")
-    if remote is None and model != CANVAS_MODEL_ID and not target(model).exists():
+    if provider == "classic" and remote is None and model != CANVAS_MODEL_ID and not target(model).exists():
         raise HTTPException(409, "Modello non ancora scaricato")
     if not ffmpeg_binary():
         raise HTTPException(503, "ffmpeg non disponibile nel servizio locale")
@@ -2540,6 +2742,22 @@ async def create_video_upscale_job(
             else:
                 shutil.rmtree(workspace, ignore_errors=True)
             raise
+    replacement_audio_path: Path | None = None
+    if provider == "mlx-dlss" and parsed_provider_config.get("audioPolicy") == "replace":
+        if replacement_audio is None:
+            shutil.rmtree(workspace, ignore_errors=True)
+            raise HTTPException(400, "Seleziona una traccia audio sostitutiva")
+        audio_suffix = Path(replacement_audio.filename or "replacement.m4a").suffix.lower()
+        if audio_suffix not in {".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg"}: audio_suffix = ".m4a"
+        replacement_audio_path = workspace / f"replacement-audio{audio_suffix}"
+        try:
+            with replacement_audio_path.open("wb") as output:
+                while chunk := await replacement_audio.read(1024 * 1024): output.write(chunk)
+        finally:
+            await replacement_audio.close()
+        if replacement_audio_path.stat().st_size <= 0:
+            shutil.rmtree(workspace, ignore_errors=True)
+            raise HTTPException(400, "Traccia audio sostitutiva vuota")
     try:
         source_geometry = probe_video_geometry(source)
         effective_width, effective_height = resolve_video_dimensions(width, height, source_geometry, preserve_aspect_ratio)
@@ -2630,14 +2848,14 @@ async def create_video_upscale_job(
                 threading.Thread(target=process_video_upscale_job, args=(str(snapshot["id"]),), daemon=True).start()
             log_upscaler_event("backend", "remote-job-reused", jobId=snapshot["id"], sourceHash=digest, completedFrames=snapshot.get("currentFrame", 0))
             return snapshot
-    record_processing_mode = (
+    record_processing_mode = (MLX_DLSS_VIDEO_PROCESSING_MODE if provider == "mlx-dlss" else
         REMOTE_VIDEO_PROCESSING_MODE
         if remote
         else CANVAS_VIDEO_PROCESSING_MODE if model == CANVAS_MODEL_ID else LOCAL_AI_VIDEO_PROCESSING_MODE
     )
-    stores_png_frames = record_processing_mode != CANVAS_VIDEO_PROCESSING_MODE
+    stores_png_frames = record_processing_mode not in {CANVAS_VIDEO_PROCESSING_MODE, MLX_DLSS_VIDEO_PROCESSING_MODE}
     frame_storage_mode = (
-        "none" if record_processing_mode == CANVAS_VIDEO_PROCESSING_MODE
+        "none" if record_processing_mode in {CANVAS_VIDEO_PROCESSING_MODE, MLX_DLSS_VIDEO_PROCESSING_MODE}
         else "mp4-segments" if record_processing_mode == REMOTE_VIDEO_PROCESSING_MODE
         else "png-checkpoints"
     )
@@ -2649,6 +2867,9 @@ async def create_video_upscale_job(
         "originalFramesDirectory": str(workspace / "original-frames") if stores_png_frames else "",
         "upscaledFramesDirectory": str(workspace / "upscaled-frames") if stores_png_frames else "",
         "sourcePath": str(source), "model": str(remote["model"]) if remote else model, "backend": backend, "tile": tile,
+        "provider": provider, "providerConfig": parsed_provider_config,
+        "replacementAudioPath": str(replacement_audio_path) if replacement_audio_path else "",
+        "sourceStartSeconds": max(0.0, float(source_start_seconds)), "sourceDurationSeconds": max(0.0, float(source_duration_seconds)),
         "sourceName": file.filename or "source.mp4", "sourceBytes": source.stat().st_size, "sourceHash": digest,
         "requestedWidth": width, "requestedHeight": height,
         "width": effective_width, "height": effective_height, "preserveAspectRatio": preserve_aspect_ratio,
@@ -2925,7 +3146,8 @@ def video_upscale_job_result(job_id: str):
     # The frontend adopts this artifact for preview and desktop save. Deleting
     # the workspace at response completion races the native atomic copy, so the
     # READY_JOB_RETENTION_SECONDS timer scheduled at finalization owns cleanup.
-    return FileResponse(path, media_type="video/mp4", filename="mlsm-upscaled-video.mp4")
+    is_mov = path.suffix.lower() == ".mov"
+    return FileResponse(path, media_type="video/quicktime" if is_mov else "video/mp4", filename="mlsm-upscaled-video.mov" if is_mov else "mlsm-upscaled-video.mp4")
 
 
 def minterpolate_filter(target_fps: float, method: str) -> str:

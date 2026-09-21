@@ -5,6 +5,7 @@ import { upscalerModels } from "./upscaler-runtime";
 import { generatePythonUpscale, pythonUpscalerHealth, shouldUsePythonUpscaler } from "./upscaler-python-client";
 import { canvasImageSourceSize } from "./canvas-image-source";
 import { generateRemoteUpscale, usesRemoteUpscaler } from "./remote-upscaler-client";
+import { generateMlxDlssImage } from "./mlx-dlss-client";
 
 type Settings = RhythmBallProject["animation"]["upscaler"];
 export interface ModelLoadProgress { phase: "cache" | "download" | "initializing" | "inference" | "ready"; progress: number; loadedBytes?: number; totalBytes?: number }
@@ -46,6 +47,7 @@ async function sessionFor(settings: Settings, onProgress: (status: ModelLoadProg
 }
 
 export async function generateAiUpscalerPreview(source: CanvasImageSource, settings: Settings, onProgress: (status: ModelLoadProgress) => void, signal?: AbortSignal): Promise<HTMLCanvasElement> {
+  if (settings.provider === "mlx-dlss") return generateMlxDlssImage(source, settings, onProgress, signal);
   if (usesRemoteUpscaler(settings)) return generateRemoteUpscale(source, settings, onProgress, signal);
   const model = definition(settings.model); if (!model || model.id === "canvas") throw new Error("Canvas Enhanced non richiede un modello AI.");
   const python = await pythonUpscalerHealth(); const preferPython = shouldUsePythonUpscaler(model.webExecutable, settings.backend, python);

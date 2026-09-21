@@ -81,6 +81,7 @@ export function SoundSettingsAccordion({ children, resetKey }: SoundSettingsAcco
 
     const collectGroups = () => {
       const previousActive = active;
+      const previousActiveKey = previousActive?.dataset.settingsAccordionKey;
       clearGroups();
       groups = Array.from(root.querySelectorAll<HTMLElement>(GROUP_HEADING_SELECTOR))
         .filter(isEligibleHeading)
@@ -92,7 +93,11 @@ export function SoundSettingsAccordion({ children, resetKey }: SoundSettingsAcco
         heading.setAttribute("role", "button");
         heading.setAttribute("tabindex", "0");
       });
-      active = previousActive && groups.some(({ heading }) => heading === previousActive) ? previousActive : null;
+      active = previousActive && groups.some(({ heading }) => heading === previousActive)
+        ? previousActive
+        : previousActiveKey
+          ? groups.find(({ heading }) => heading.dataset.settingsAccordionKey === previousActiveKey)?.heading ?? null
+          : null;
       renderState();
     };
 

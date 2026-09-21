@@ -1,0 +1,73 @@
+import { useMemo, useState, type ChangeEvent } from "react";
+import type { RhythmBallProject } from "@rbs/project-schema";
+import { extractMlxDlssNeuralModel, importMlxDlssModel, installMlxDlss, removeMlxDlssModel, uninstallMlxDlss, type MlxDlssCapabilities, type MlxDlssInstallStatus, type MlxDlssModel } from "../services/mlx-dlss-client";
+import { registerMlxDlssReplacementAudio, releaseMlxDlssReplacementAudio } from "../services/mlx-dlss-audio-file";
+import { resolveMlxDlssTarget } from "../services/upscaler-renderer";
+
+type Settings = RhythmBallProject["animation"]["upscaler"];
+type Update = (patch: Partial<Settings>) => void;
+
+export function MlxDlssInstaller({ capabilities, error, refresh }: { capabilities: MlxDlssCapabilities; error: string; refresh: () => Promise<void> }) {
+  const [status, setStatus] = useState<MlxDlssInstallStatus | null>(null); const [actionError, setActionError] = useState("");
+  const install = async () => { setActionError(""); try { await installMlxDlss(undefined, setStatus); await refresh(); } catch (reason) { setActionError(reason instanceof Error ? reason.message : String(reason)); } };
+  if (!capabilities.supported || capabilities.usable) return null;
+  return <div className="mlx-dlss-install-card">
+    <div><strong>{capabilities.installed ? "MLX-DLSS richiede una riparazione" : "MLX-DLSS disponibile per questo Mac"}</strong><span>Al primo utilizzo MLSM installa dipendenze, Python 3.11, sorgenti e backend Metal in una cartella isolata fuori dal progetto.</span></div>
+    {capabilities.healthError ? <p className="upscaler-preview-error">{capabilities.healthError}</p> : null}
+    {capabilities.automaticInstallTools.length ? <p>Installazione automatica prevista: {capabilities.automaticInstallTools.join(", ")}.</p> : null}
+    {capabilities.installReady ? <button type="button" disabled={Boolean(status && !["idle", "ready", "error"].includes(status.phase))} onClick={() => void install()}>{status && !["idle", "ready", "error"].includes(status.phase) ? `${status.message} · ${Math.round(status.progress * 100)}%` : capabilities.installed ? "Ripara / aggiorna MLX-DLSS" : "Installa MLX-DLSS"}</button> : <p className="upscaler-preview-error">Richiesto manualmente: {capabilities.manualInstallTools.join(", ")}. Per Metal installa Xcode completo e selezionalo con xcode-select; {capabilities.automaticInstallTools.length ? `${capabilities.automaticInstallTools.join(", ")} verrà installato automaticamente.` : "le altre dipendenze sono già disponibili."}</p>}
+    {status && !["idle", "ready", "error"].includes(status.phase) ? <progress max="1" value={status.progress} /> : null}
+    {actionError || error ? <p className="upscaler-preview-error">{actionError || error}</p> : null}
+  </div>;
+}
+
+function ModelPicker({ label, hint, kind, value, models, onChange, onCapabilities, onImported }: { label: string; hint: string; kind: Exclude<MlxDlssModel["kind"], "unknown">; value: string | null; models: MlxDlssModel[]; onChange: (value: string | null) => void; onCapabilities: (capabilities: MlxDlssCapabilities) => void; onImported: (capabilities: MlxDlssCapabilities, item: MlxDlssModel) => void }) {
+  const [error, setError] = useState(""); const available = models.filter((item) => item.kind === kind);
+  const importFile = async (event: ChangeEvent<HTMLInputElement>) => { const file = event.target.files?.[0]; event.target.value = ""; if (!file) return; setError(""); try { const capabilities = kind === "neural-rendering" && file.name.toLowerCase() === "nvngx_dlssnr.dll" ? await extractMlxDlssNeuralModel(file) : await importMlxDlssModel(file, kind); const item = capabilities.models.filter((model) => model.kind === kind).at(-1); if (item) onImported(capabilities, item); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); } };
+  const remove = async () => { if (!value) return; setError(""); try { const capabilities = await removeMlxDlssModel(value); onChange(null); onCapabilities(capabilities); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); } };
+  const importLabel = kind === "neural-rendering" ? "Importa modello / DLL" : "Importa modello 2×";
+  return <section className="mlx-dlss-model-picker">
+    <header><div><strong>{label}</strong><span>{hint}</span></div><span className={value ? "is-ready" : "is-missing"}>{value ? "Configurato" : "Da configurare"}</span></header>
+    <label className="mlx-dlss-model-select"><span>Modello locale</span><select aria-label={`${label} · modello locale`} value={value ?? ""} onChange={(event) => onChange(event.target.value || null)}><option value="">Non selezionato</option>{available.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+    <div className="mlx-dlss-model-actions"><label className="mlx-dlss-import">{importLabel}<input type="file" accept={kind === "neural-rendering" ? ".dlssmodel,.dll" : kind === "video-sr" ? ".srmodel" : ".safetensors"} onChange={(event) => void importFile(event)} /></label>{value ? <button type="button" className="danger" onClick={() => void remove()}>Rimuovi</button> : null}</div>
+    {error ? <p className="upscaler-preview-error">{error}</p> : null}
+  </section>;
+}
+
+export function MlxDlssPanel({ settings, update, capabilities, setCapabilities }: { settings: Settings; update: Update; capabilities: MlxDlssCapabilities; setCapabilities: (value: MlxDlssCapabilities) => void }) {
+  const [advanced, setAdvanced] = useState(false); const [error, setError] = useState(""); const [updateStatus, setUpdateStatus] = useState<MlxDlssInstallStatus | null>(null);
+  const models = capabilities.models; const config = settings.mlxDlss;
+  const patch = (value: Partial<typeof config>) => update({ mlxDlss: { ...config, ...value } });
+  const setMode = (mode: typeof config.mode) => {
+    const target = settings.sourceWidth && settings.sourceHeight ? resolveMlxDlssTarget(settings.sourceWidth, settings.sourceHeight, mode, settings.scale) : null;
+    const dimensions = target ? { finalWidth: target.width, finalHeight: target.height, scale: target.scale } : {};
+    update({ mlxDlss: { ...config, mode }, ...dimensions });
+  };
+  const memory = capabilities.memoryBytes ? `${Math.round(capabilities.memoryBytes / 1024 ** 3)} GB memoria unificata` : "Memoria non rilevata";
+  const missingRequired = useMemo(() => !config.neuralModel || (config.mode !== "enhance" && !(settings.sourceKind === "video" ? config.videoSrModel : config.imageSrModel)), [config, settings.sourceKind]);
+  const importReplacementAudio = (event: ChangeEvent<HTMLInputElement>) => { const file = event.target.files?.[0]; event.target.value = ""; if (!file) return; const previous = config.replacementAudioUrl; const url = URL.createObjectURL(file); registerMlxDlssReplacementAudio(url, file); patch({ replacementAudioUrl: url, replacementAudioName: file.name }); releaseMlxDlssReplacementAudio(previous); };
+  return <div className="mlx-dlss-panel">
+    <h2 data-settings-accordion-key="upscaler-model">Modello MLX-DLSS</h2>
+    <div className="upscaler-hardware-card"><strong>{capabilities.label}</strong><span>{capabilities.architecture} · macOS {capabilities.macOSVersion} · {memory}</span><span>Runtime {capabilities.version ? capabilities.version.slice(0, 12) : "verificato"} · Metal attivo</span></div>
+    <div className="mlx-dlss-source-capability"><strong>{settings.sourceKind === "image" ? "Foto · DLSS 5 attivo" : "Video · DLSS 5 attivo"}</strong><span>{settings.sourceKind === "image" ? "Neural Rendering elabora direttamente PNG, JPEG e TIFF. Per ingrandire davvero a 2× usa anche RTX VSR." : "Neural Rendering usa la pipeline temporale Metal. Il 2× video richiede il modello DLSS SR dedicato."}</span></div>
+    <label className="mlx-dlss-field"><span>Modalità</span><select aria-label="Modalità MLX-DLSS" value={config.mode} onChange={(event) => setMode(event.target.value as typeof config.mode)}><option value="enhance">DLSS 5 Enhance · stessa risoluzione</option><option value="native-2x">DLSS 5 + Super Resolution · 2×</option><option value="custom">DLSS 5 · risoluzione personalizzata</option></select></label>
+    <ModelPicker label="DLSS 5 · Neural Rendering" hint="Carica NeuralRendering.dlssmodel oppure nvngx_dlssnr.dll 310.8.0.0." kind="neural-rendering" value={config.neuralModel} models={models} onChange={(neuralModel) => patch({ neuralModel })} onCapabilities={setCapabilities} onImported={(value, item) => { setCapabilities(value); patch({ neuralModel: item.id }); }} />
+    {config.mode !== "enhance" && settings.sourceKind === "image" ? <ModelPicker label="RTX VSR · immagini 2×" hint="Richiede vsr.safetensors estratto da libnvidia-ngx-vsr.so.1.8.2." kind="image-vsr" value={config.imageSrModel} models={models} onChange={(imageSrModel) => patch({ imageSrModel })} onCapabilities={setCapabilities} onImported={(value, item) => { setCapabilities(value); patch({ imageSrModel: item.id }); }} /> : null}
+    {config.mode !== "enhance" && settings.sourceKind === "video" ? <ModelPicker label="DLSS SR · video 2×" hint="Richiede dlss-sr.srmodel preparato dalla libreria DLSS SR e dalla capture CUDA." kind="video-sr" value={config.videoSrModel} models={models} onChange={(videoSrModel) => patch({ videoSrModel })} onCapabilities={setCapabilities} onImported={(value, item) => { setCapabilities(value); patch({ videoSrModel: item.id }); }} /> : null}
+    {missingRequired ? <p className="upscaler-performance-warning"><strong>Modello richiesto mancante</strong><span>La release pubblica NVIDIA Streamline non contiene il runtime Neural Rendering richiesto. Importa una copia autorizzata e MLSM conserverà il modello soltanto nel runtime locale, fuori dal repository.</span></p> : null}
+    <div className="mlx-dlss-control-grid"><label className="mlx-dlss-field"><span>Profilo</span><select value={config.profile} onChange={(event) => patch({ profile: event.target.value as typeof config.profile })}><option value="standard">Standard</option><option value="natural">Natural</option><option value="cinematic">Cinematic</option><option value="neutral">Neutral</option></select></label>
+    <label className="mlx-dlss-field"><span>Qualità</span><select value={config.qualityPreset} onChange={(event) => patch({ qualityPreset: event.target.value as typeof config.qualityPreset })}><option value="auto">Auto · memoria disponibile</option><option value="preview">Preview · veloce</option><option value="balanced">Bilanciata</option><option value="high">Qualità massima</option><option value="custom">Personalizzata</option></select></label></div>
+    <button type="button" className="mlx-dlss-advanced-toggle" aria-expanded={advanced} onClick={() => setAdvanced((value) => !value)}>{advanced ? "Nascondi impostazioni avanzate" : "Mostra impostazioni avanzate"}</button>
+    {advanced ? <div className="mlx-dlss-advanced">
+      {config.qualityPreset === "custom" ? <label>Processing scale<input type="range" min="1" max="4" step="1" value={config.processingScale} onChange={(event) => patch({ processingScale: Number(event.target.value) })} /><output>{config.processingScale}</output></label> : null}
+      <label>Dettaglio<input type="range" min="0" max="8" step=".1" value={config.detailStrength} onChange={(event) => patch({ detailStrength: Number(event.target.value) })} /><output>{config.detailStrength.toFixed(1)}</output></label>
+      <label>Colore<input type="range" min="0" max="4" step=".1" value={config.colourStrength} onChange={(event) => patch({ colourStrength: Number(event.target.value) })} /><output>{config.colourStrength.toFixed(1)}</output></label>
+      <label>Intensità<input type="range" min="0" max="1" step=".05" value={config.intensity} onChange={(event) => patch({ intensity: Number(event.target.value) })} /><output>{Math.round(config.intensity * 100)}%</output></label>
+      {settings.sourceKind === "video" ? <><label className="teddy-dance-toggle"><span>Elaborazione temporale</span><input type="checkbox" checked={config.temporal} onChange={(event) => patch({ temporal: event.target.checked })} /></label><label>Motion backend<select value={config.motion} onChange={(event) => patch({ motion: event.target.value as typeof config.motion })}><option value="automatic">Automatico</option><option value="videotoolbox">VideoToolbox</option><option value="vision">Vision</option><option value="zero">Zero motion</option></select></label><label>Scene cut<input type="range" min="0" max="1" step=".05" value={config.sceneCutThreshold} onChange={(event) => patch({ sceneCutThreshold: Number(event.target.value) })} /><output>{config.sceneCutThreshold.toFixed(2)}</output></label><label>Codec<select value={config.codec} onChange={(event) => patch({ codec: event.target.value as typeof config.codec })}><option value="h264">H.264 · MP4</option><option value="hevc">HEVC · MP4</option><option value="prores">ProRes · MOV</option></select></label><label>Bitrate<input type="number" min="100000" max="500000000" step="100000" value={config.bitrate} onChange={(event) => patch({ bitrate: Number(event.target.value) })} /></label><label>Audio<select value={config.audioPolicy} onChange={(event) => patch({ audioPolicy: event.target.value as typeof config.audioPolicy })}><option value="preserve">Mantieni originale</option><option value="mute">Rimuovi audio</option><option value="replace">Sostituisci traccia</option></select></label>{config.audioPolicy === "replace" ? <label className="mlx-dlss-import">{config.replacementAudioName || "Scegli audio sostitutivo"}<input type="file" accept="audio/*,.wav,.mp3,.m4a,.aac,.flac" onChange={importReplacementAudio} /></label> : null}</> : null}
+    </div> : null}
+    <div className="mlx-dlss-limitations"><strong>Limiti dichiarati</strong>{capabilities.limitations.map((item) => <span key={item}>{item}</span>)}</div>
+    <button type="button" disabled={Boolean(updateStatus && !["ready", "error"].includes(updateStatus.phase))} onClick={() => void installMlxDlss(undefined, setUpdateStatus).then(setCapabilities).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)))}>{updateStatus && !["ready", "error"].includes(updateStatus.phase) ? `${updateStatus.message} · ${Math.round(updateStatus.progress * 100)}%` : "Verifica e aggiorna backend"}</button>
+    <button type="button" className="danger" onClick={() => void uninstallMlxDlss().then(() => location.reload()).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)))}>Disinstalla backend MLX-DLSS</button>
+    {error ? <p className="upscaler-preview-error">{error}</p> : null}
+  </div>;
+}

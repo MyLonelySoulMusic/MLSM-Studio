@@ -89,8 +89,24 @@ async function click(selector) {
 
 try {
   await command("Page.enable"); await command("Runtime.enable"); await delay(2_000);
+  // Headless Chrome can throttle requestAnimationFrame. Freeze the branded
+  // presentation and apply its documented settled pose before the first shot.
+  await click(".intro-motion"); await delay(150);
+  await evaluate(`(() => {
+    const root = document.querySelector(".welcome-splash--3d");
+    if (!root) return false;
+    root.dataset.copyReady = "true"; root.dataset.intro = "settled";
+    const values = {
+      "--intro-copy": "1", "--intro-copy-y": "0px", "--intro-reveal": "0%",
+      "--intro-logo-opacity": "1", "--intro-wave": "0", "--intro-wave-dash": "0",
+      "--intro-wave-y": "0px", "--intro-flight-x": "0px", "--intro-flight-y": "0px",
+      "--intro-flight-scale": "1", "--intro-shadow": "1"
+    };
+    Object.entries(values).forEach(([name, value]) => root.style.setProperty(name, value));
+    return true;
+  })()`);
   await screenshot("01-welcome");
-  await click(".welcome-splash__enter");
+  await click(".intro-enter");
   await screenshot("02-home-areas");
   if (memoryOnly) {
     await click(".memory-button"); await screenshot("07-memory");

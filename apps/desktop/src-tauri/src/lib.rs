@@ -327,7 +327,8 @@ fn detect_upscaler_hardware() -> UpscalerHardwareStatus {
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(str::to_owned)
-        });
+        })
+        .or_else(|| apple_silicon.then(|| "Apple Silicon · Metal".to_owned()));
     UpscalerHardwareStatus {
         platform: std::env::consts::OS.to_owned(),
         architecture,
@@ -464,12 +465,13 @@ fn write_upscaler_batch_image(directory_path: String, filename: String, payload:
 }
 
 fn validate_upscaler_video_path(path: &Path, must_exist: bool) -> Result<PathBuf, ProjectIoError> {
-    if !path.is_absolute() || path.extension().and_then(|value| value.to_str()).is_none_or(|value| !value.eq_ignore_ascii_case("mp4")) {
+    let extension = path.extension().and_then(|value| value.to_str()).map(str::to_ascii_lowercase);
+    if !path.is_absolute() || !matches!(extension.as_deref(), Some("mp4" | "mov")) {
         return Err(ProjectIoError::InvalidUpscalerVideoPath);
     }
     if must_exist {
         let canonical = fs::canonicalize(path).map_err(|_| ProjectIoError::InvalidUpscalerVideoPath)?;
-        if !canonical.is_file() || canonical.file_name().and_then(|value| value.to_str()) != Some("upscaled-video.mp4") {
+        if !canonical.is_file() || !matches!(canonical.file_name().and_then(|value| value.to_str()), Some("upscaled-video.mp4" | "upscaled-video.mov")) {
             return Err(ProjectIoError::InvalidUpscalerVideoPath);
         }
         Ok(canonical)

@@ -110,6 +110,12 @@ body.decision-modal-open { overflow: hidden; }
 .decision-modal-actions button { min-width: 170px; }
 .decision-modal-confirm { background: var(--red); border-color: var(--red); color: #fff; box-shadow: 0 9px 22px color-mix(in srgb, var(--red) 22%, transparent); }
 .decision-modal-confirm:hover { background: color-mix(in srgb, var(--red) 88%, white); }
+.project-dialog-icon { color: #211b1f; background: #ff4f9a; box-shadow: 0 10px 24px #ff4f9a40; }
+.project-dialog-field { display: grid; gap: 8px; margin-top: 18px; color: var(--muted); font-size: 11px; font-weight: 750; letter-spacing: .05em; text-transform: uppercase; }
+.project-dialog-field input { width: 100%; padding: 14px 16px; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 11px; font: 650 16px/1.2 inherit; letter-spacing: normal; text-transform: none; }
+.project-dialog-field input:focus { border-color: var(--lime); box-shadow: 0 0 0 3px color-mix(in srgb, var(--lime) 16%, transparent); outline: 0; }
+.project-dialog-field input[aria-invalid="true"] { border-color: var(--red); }
+.project-dialog-error { margin: 8px 2px 0; color: var(--red); font-size: 11px; }
 @keyframes decisionBackdropIn { from { opacity: 0; } }
 @keyframes decisionBackdropOut { to { opacity: 0; } }
 @keyframes decisionModalIn { from { opacity: 0; transform: translateY(18px) scale(.965); } to { opacity: 1; transform: none; } }

@@ -38,9 +38,27 @@ export async function detectUpscalerHardware(): Promise<UpscalerHardware> {
   const gpu = typeof navigator === "undefined" ? undefined : (navigator as Navigator & { gpu?: { requestAdapter: () => Promise<{ info?: { vendor?: string; description?: string; device?: string } } | null> } }).gpu;
   let adapter: { info?: { vendor?: string; description?: string; device?: string } } | null = null;
   if (gpu) try { adapter = await gpu.requestAdapter(); } catch { adapter = null; }
-  let python: PythonHardwareResult | null = null; try { const response = await fetch("http://127.0.0.1:8765/health", { signal: AbortSignal.timeout(800) }); if (response.ok) python = await response.json() as PythonHardwareResult; } catch { python = null; }
+  let python: PythonHardwareResult | null = null;
+  const browserPlatform = typeof navigator === "undefined" ? "" : navigator.platform || "";
+  const likelyMac = native?.platform === "macos" || /mac/i.test(browserPlatform);
+  try { const response = await fetch("http://127.0.0.1:8765/health", { signal: AbortSignal.timeout(800) }); if (response.ok) python = await response.json() as PythonHardwareResult; } catch { python = null; }
+  // In Vite/browser development there is no Tauri command. On Apple Silicon,
+  // Chromium still exposes `MacIntel`, so WebGPU is not a reliable architecture
+  // detector. Start the area-owned local service and let PyTorch MPS report the
+  // actual Metal capability before selecting a backend.
+  if (!native && !python && likelyMac) {
+    try {
+      const { ensurePythonUpscalerService } = await import("./upscaler-python-client");
+      if (await ensurePythonUpscalerService()) {
+        for (let attempt = 0; attempt < 24 && !python; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          try { const response = await fetch("http://127.0.0.1:8765/health", { signal: AbortSignal.timeout(800) }); if (response.ok) python = await response.json() as PythonHardwareResult; } catch { /* Service is still importing Torch. */ }
+        }
+      }
+    } catch { /* The UI remains usable with browser capabilities only. */ }
+  }
   const gpuName = native?.gpuName ?? python?.gpuName ?? adapter?.info?.description ?? adapter?.info?.device ?? adapter?.info?.vendor ?? null;
-  const platform = native?.platform ?? (typeof navigator === "undefined" ? "unknown" : navigator.platform || "browser");
+  const platform = native?.platform ?? (browserPlatform || "browser");
   const architecture = native?.architecture ?? "browser";
   const appleSilicon = native?.appleSilicon ?? Boolean(python?.mps || (/mac/i.test(platform) && /apple/i.test(gpuName ?? "")));
   const cuda = native?.cuda ?? Boolean(python?.cuda || /nvidia/i.test(gpuName ?? ""));

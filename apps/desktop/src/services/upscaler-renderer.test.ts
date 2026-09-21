@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createProject } from "@rbs/project-schema";
-import { fitUpscalerPreset, formatUpscalerViewportFooter, resolveUpscalerPreviewSize, resolveUpscalerTarget, resolvedUpscalerDimensions, upscalerFilter } from "./upscaler-renderer";
+import { fitUpscalerFrameToStage, fitUpscalerPreset, fitUpscalerPreviewToViewport, formatUpscalerViewportFooter, resolveMlxDlssTarget, resolveUpscalerPreviewSize, resolveUpscalerTarget, resolvedUpscalerDimensions, upscalerFilter } from "./upscaler-renderer";
 
 describe("upscaler renderer", () => {
   it("mantiene il rapporto quando cambia la risoluzione finale", () => {
@@ -32,5 +32,20 @@ describe("upscaler renderer", () => {
   it.each([[4, 3], [9, 16], [1, 1], [21, 9]])("mantiene il rapporto intrinseco del canvas per %s:%s", (width, height) => {
     const preview = resolveUpscalerPreviewSize(width, height);
     expect(preview.width / preview.height).toBeCloseTo(width / height, 2);
+  });
+  it("adatta interamente le anteprime orizzontali e verticali al viewport", () => {
+    expect(fitUpscalerPreviewToViewport(1400, 700, 900, 500)).toEqual({ width: 900, height: 450 });
+    expect(fitUpscalerPreviewToViewport(700, 1400, 900, 500)).toEqual({ width: 250, height: 500 });
+    expect(fitUpscalerPreviewToViewport(640, 360, 1200, 800)).toEqual({ width: 640, height: 360 });
+  });
+  it("dimensiona il frame esterno usando entrambi gli assi dello stage", () => {
+    expect(fitUpscalerFrameToStage(1320, 850, 1254, 1254)).toEqual({ width: 850, height: 850 });
+    expect(fitUpscalerFrameToStage(1320, 850, 1920, 1080)).toEqual({ width: 1320, height: 742 });
+    expect(fitUpscalerFrameToStage(900, 850, 1080, 1920)).toEqual({ width: 478, height: 850 });
+  });
+  it("normalizza la geometria MLX-DLSS senza ereditare la scala del modello classico", () => {
+    expect(resolveMlxDlssTarget(1920, 1080, "enhance", 4)).toEqual({ width: 1920, height: 1080, scale: 1 });
+    expect(resolveMlxDlssTarget(1920, 1080, "native-2x", 1)).toEqual({ width: 3840, height: 2160, scale: 2 });
+    expect(resolveMlxDlssTarget(1920, 1080, "custom", 4)).toEqual({ width: 3840, height: 2160, scale: 2 });
   });
 });

@@ -3,6 +3,7 @@ import type { ModelLoadProgress } from "./upscaler-ai";
 import { canvasImageSourceSize } from "./canvas-image-source";
 import { activeRemoteUpscalerEndpoints, normalizeRemoteUpscalerEndpoint, usesRemoteUpscaler } from "./remote-upscaler-client";
 import { pythonServiceLifecycleRevision, waitForAreaPythonServicesShutdown } from "./python-service-lifecycle";
+import { getMlxDlssReplacementAudio } from "./mlx-dlss-audio-file";
 
 type Settings = RhythmBallProject["animation"]["upscaler"];
 export type RemoteVideoCheckpointPolicy = "resume" | "restart";
@@ -97,6 +98,8 @@ export interface PythonVideoUpscaleStatus {
   remoteProcessingKey?: string;
   resultPath?: string;
   resultBytes?: number;
+  container?: "mp4" | "mov";
+  codec?: "h264" | "hevc" | "prores";
   activeEndpoints?: string[];
   endpointActivity?: RemoteUpscalerEndpointActivity[];
 }
@@ -249,6 +252,13 @@ export function settingsWithReachableRemoteEndpoints(
 export function buildUpscalerVideoForm(source: Blob, sourceName: string, settings: Settings, quality: "draft" | "high" | "maximum", clientId: string, checkpointPolicy: RemoteVideoCheckpointPolicy = "restart"): FormData {
   const form = new FormData();
   form.set("file", source, sourceName || "source.mp4");
+  form.set("provider", settings.provider);
+  form.set("provider_config", JSON.stringify(settings.mlxDlss));
+  if (settings.provider === "mlx-dlss" && settings.mlxDlss.audioPolicy === "replace") {
+    const replacement = getMlxDlssReplacementAudio(settings.mlxDlss.replacementAudioUrl);
+    if (!replacement) throw new Error("La traccia audio sostitutiva non è più disponibile: selezionala di nuovo.");
+    form.set("replacement_audio", replacement, replacement.name);
+  }
   form.set("model", settings.model);
   form.set("backend", settings.backend);
   form.set("tile", String(settings.tileSize));
@@ -335,6 +345,14 @@ export async function generatePythonUpscaledVideo(options: {
 }): Promise<{ blob: Blob; status: PythonVideoUpscaleStatus }> {
   const throwIfAborted = () => { if (options.signal.aborted) throw new DOMException("Operazione annullata", "AbortError"); };
   throwIfAborted();
+  if (options.settings.provider === "mlx-dlss") {
+    const config = options.settings.mlxDlss;
+    if (!config.neuralModel) throw new Error("Importa e seleziona il modello Neural Rendering MLX-DLSS.");
+    if (config.mode !== "enhance" && !config.videoSrModel) throw new Error("Importa e seleziona il modello DLSS SR 2× per il video.");
+    if (config.mode === "enhance" && (options.settings.finalWidth !== options.settings.sourceWidth || options.settings.finalHeight !== options.settings.sourceHeight)) throw new Error("Enhance Only deve mantenere la risoluzione originale.");
+    if (config.mode === "native-2x" && (options.settings.finalWidth !== options.settings.sourceWidth * 2 || options.settings.finalHeight !== options.settings.sourceHeight * 2)) throw new Error("Upscale nativo 2× richiede esattamente il doppio della risoluzione originale.");
+    if (config.mode === "custom" && (options.settings.finalWidth > options.settings.sourceWidth * 2 || options.settings.finalHeight > options.settings.sourceHeight * 2)) throw new Error("La risoluzione personalizzata non può superare l’output MLX-DLSS 2×.");
+  }
   const clientId = globalThis.crypto?.randomUUID?.() ?? `upscaler-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   reportUpscalerDiagnostic("video-export-start", { sourceName: options.sourceName, model: options.settings.model, backend: options.settings.backend, target: `${options.settings.finalWidth}x${options.settings.finalHeight}`, directFile: Boolean(options.sourceBlob), checkpointPolicy: options.checkpointPolicy ?? "restart" });
   const health = await pythonUpscalerHealth(true);

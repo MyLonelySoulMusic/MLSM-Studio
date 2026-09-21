@@ -78,6 +78,30 @@ describe("UpscalerPreview video export", () => {
     act(() => finish());
   });
 
+  it("mostra per MLX-DLSS la percentuale coerente con i fotogrammi elaborati", async () => {
+    vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
+    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
+    let finish!: () => void;
+    exportUpscaledVideo.mockImplementationOnce((_options, _signal, onProgress: (progress: unknown) => void) => {
+      onProgress({
+        phase: "upscaling", phaseLabel: "MLX-DLSS · elaborazione Metal", progress: .03,
+        currentFrame: 250, totalFrames: 320, elapsedMs: 55_400, estimatedRemainingMs: 15_512,
+      });
+      return new Promise<void>((resolve) => { finish = resolve; });
+    });
+    const defaults = createProject().animation.upscaler;
+    const settings = { ...defaults, provider: "mlx-dlss" as const, sourceUrl: "blob:mlx-video", sourceName: "mlx.mp4", sourceKind: "video" as const, sourceWidth: 720, sourceHeight: 1280, durationSeconds: 12 };
+    const { container } = render(<UpscalerPreview settings={settings} />);
+    fireEvent.loadedData(container.querySelector("video")!);
+    fireEvent.click(screen.getByRole("button", { name: "Avvia upscaling video completo" }));
+
+    expect(await screen.findByLabelText("Avanzamento 78%")).toHaveTextContent("Avanzamento 78%");
+    expect(screen.getByRole("progressbar", { name: "Progresso video complessivo" })).toHaveValue(250 / 320);
+    expect(screen.getByText("250 / 320")).toBeVisible();
+    expect(screen.getByText("Fotogrammi elaborati")).toBeVisible();
+    act(() => finish());
+  });
+
   it("non ripiega sui motori locali se Gradio è selezionato senza endpoint attivi", async () => {
     vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
     vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
@@ -241,7 +265,7 @@ describe("UpscalerPreview video export", () => {
     expect(useProjectStore.getState().project.animation.upscaler.finalHeight).toBe(second.finalHeight);
   });
 
-  it("espone badge e stile preview con dimensioni intrinseche senza stiramento", () => {
+  it("espone badge e dimensioni preview esplicite senza stiramento", () => {
     vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
     const settings = { ...createProject().animation.upscaler, sourceUrl: "blob:badge-video", sourceName: "badge.mp4", sourceKind: "video" as const, sourceWidth: 1440, sourceHeight: 1080, finalWidth: 1920, finalHeight: 1440 };
     const { container } = render(<UpscalerPreview settings={settings} />);
@@ -250,10 +274,11 @@ describe("UpscalerPreview video export", () => {
     expect(screen.getByText("Originale 1440 × 1080")).toBeInTheDocument();
     expect(screen.getByText("Output 1920 × 1440")).toBeInTheDocument();
     const canvas = container.querySelector("canvas")!;
-    expect(canvas.style.width).toBe("auto");
-    expect(canvas.style.height).toBe("auto");
-    expect(canvas.style.maxWidth).toBe("100%");
-    expect(canvas.style.maxHeight).toBe("100%");
+    expect(canvas.style.width).toBe("1400px");
+    expect(canvas.style.height).toBe("1050px");
+    expect(Number.parseFloat(canvas.style.width) / Number.parseFloat(canvas.style.height)).toBeCloseTo(4 / 3, 3);
+    expect(canvas.style.maxWidth).toBe("none");
+    expect(canvas.style.maxHeight).toBe("none");
   });
 
   it("clears stale canvas pixels and source errors immediately when the source changes", async () => {

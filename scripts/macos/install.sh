@@ -31,7 +31,7 @@ if ! need brew; then
 fi
 
 run brew update
-for formula in node@22 python@3.11 ffmpeg rubberband rust; do
+for formula in node@22 python@3.11 ffmpeg rubberband rust cmake ninja; do
   if ! brew list --versions "$formula" >/dev/null 2>&1; then run brew install "$formula"; fi
 done
 if [[ -d /opt/homebrew/opt/node@22/bin ]]; then export PATH="/opt/homebrew/opt/node@22/bin:$PATH"; fi

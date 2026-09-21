@@ -14,6 +14,29 @@ export function resolveUpscalerPreviewSize(width: number, height: number, maxDim
     : { width: Math.max(2, Math.round(edge * ratio)), height: edge };
 }
 
+/** Fits the preview inside its real viewport while preserving its aspect ratio. */
+export function fitUpscalerPreviewToViewport(
+  previewWidth: number, previewHeight: number, viewportWidth: number, viewportHeight: number,
+): { width: number; height: number } {
+  const width = safePositive(previewWidth, 1); const height = safePositive(previewHeight, 1);
+  const availableWidth = safePositive(viewportWidth, width); const availableHeight = safePositive(viewportHeight, height);
+  const scale = Math.min(1, availableWidth / width, availableHeight / height);
+  return { width: Math.max(1, Math.floor(width * scale)), height: Math.max(1, Math.floor(height * scale)) };
+}
+
+/** Resolves the outer preview frame against both available stage axes. */
+export function fitUpscalerFrameToStage(
+  stageWidth: number, stageHeight: number, outputWidth: number, outputHeight: number,
+): { width: number; height: number } {
+  const availableWidth = Math.max(1, safePositive(stageWidth, 1));
+  const availableHeight = Math.max(1, safePositive(stageHeight, 1));
+  const aspect = safePositive(outputWidth, 1) / safePositive(outputHeight, 1);
+  if (availableWidth / availableHeight > aspect) {
+    return { width: Math.max(1, Math.floor(availableHeight * aspect)), height: Math.floor(availableHeight) };
+  }
+  return { width: Math.floor(availableWidth), height: Math.max(1, Math.floor(availableWidth / aspect)) };
+}
+
 function clamp(value: number, minimum: number, maximum: number): number { return Math.max(minimum, Math.min(maximum, value)); }
 
 export const UPSCALER_MIN_DIMENSION = 64;
@@ -43,6 +66,19 @@ export function resolveUpscalerTarget(sourceWidth: number, sourceHeight: number,
   // impossibly. In that case the maximum bound wins and preserves the ratio.
   const resolvedScale = maximumScale < minimumScale ? maximumScale : clamp(requestedScale, minimumScale, maximumScale);
   return { width: encoderDimension(width * resolvedScale), height: encoderDimension(height * resolvedScale) };
+}
+
+/**
+ * Keeps MLX-DLSS output geometry coherent when a source is imported or the
+ * provider changes. Enhance is always 1x, native SR is 2x and custom is
+ * constrained to the range the native image pipeline can actually produce.
+ */
+export function resolveMlxDlssTarget(
+  sourceWidth: number, sourceHeight: number, mode: UpscalerSettings["mlxDlss"]["mode"], requestedScale = 1,
+): { width: number; height: number; scale: number } {
+  const scale = mode === "enhance" ? 1 : mode === "native-2x" ? 2 : clamp(safePositive(requestedScale, 1), 1, 2);
+  const target = resolveUpscalerTarget(sourceWidth, sourceHeight, scale);
+  return { ...target, scale: sourceWidth > 0 ? target.width / sourceWidth : scale };
 }
 
 export function resolvedUpscalerDimensions(settings: Pick<UpscalerSettings, "sourceWidth" | "sourceHeight" | "finalWidth" | "finalHeight" | "lockAspectRatio"> & Partial<Pick<UpscalerSettings, "scale">>, changed: "width" | "height" = "width"): { width: number; height: number } {

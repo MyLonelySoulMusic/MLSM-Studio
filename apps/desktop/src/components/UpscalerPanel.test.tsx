@@ -5,6 +5,7 @@ import { useUpscalerBatchStore } from "../store/upscaler-batch-store";
 
 const createItems = vi.hoisted(() => vi.fn());
 const detectHardware = vi.hoisted(() => vi.fn());
+const mlxCapabilities = vi.hoisted(() => vi.fn());
 vi.mock("../services/upscaler-batch", async () => {
   const actual = await vi.importActual<typeof import("../services/upscaler-batch")>("../services/upscaler-batch");
   return { ...actual, createUpscalerBatchItems: createItems };
@@ -13,6 +14,7 @@ vi.mock("../services/upscaler-runtime", async () => {
   const actual = await vi.importActual<typeof import("../services/upscaler-runtime")>("../services/upscaler-runtime");
   return { ...actual, detectUpscalerHardware: detectHardware };
 });
+vi.mock("../services/use-mlx-dlss-capabilities", () => ({ useMlxDlssCapabilities: mlxCapabilities }));
 
 import { UpscalerPanel } from "./UpscalerPanel";
 
@@ -49,6 +51,7 @@ describe("UpscalerPanel source picker", () => {
     useProjectStore.getState().newProject();
     useUpscalerBatchStore.getState().clear();
     detectHardware.mockResolvedValue({ platform: "test", architecture: "test", appleSilicon: false, cuda: false, webgpu: false, gpuName: null, recommendedBackend: "cpu" });
+    mlxCapabilities.mockReturnValue({ capabilities: null, error: "", refresh: vi.fn(), setCapabilities: vi.fn() });
     createItems.mockImplementation(async (files: readonly File[]) => ({
       items: files.map((file, index) => ({
         id: `${file.name}-${index}`, file, url: `blob:${file.name}`, name: file.name,
@@ -102,6 +105,90 @@ describe("UpscalerPanel source picker", () => {
     await waitFor(() => expect(useProjectStore.getState().project.animation.upscaler.remote.enabled).toBe(false));
     expect(screen.getByLabelText("Modello Upscaler")).toBeInTheDocument();
     expect(screen.queryByLabelText("URL endpoint Upscaler remoto")).not.toBeInTheDocument();
+  });
+
+  it("mostra MLX-DLSS sui Mac compatibili anche prima dell'installazione", async () => {
+    mlxCapabilities.mockReturnValue({
+      capabilities: {
+        id: "mlx-dlss", label: "MLX-DLSS · Apple Metal", platform: "Darwin", architecture: "arm64", macOSVersion: "26.1",
+        appleSilicon: true, metal: true, memoryBytes: 16 * 1024 ** 3, supported: true, reason: "", installReady: true,
+        missingInstallTools: ["ninja"], automaticInstallTools: ["ninja"], manualInstallTools: [], packageManager: "homebrew",
+        minimumMacOS: "26.0", installed: false, usable: false, healthError: "", runtimeRoot: "/tmp/runtime", logPath: "/tmp/log", version: "", models: [],
+        profiles: ["standard"], codecs: ["h264"], containers: ["mp4"], limitations: [],
+      },
+      error: "", refresh: vi.fn(), setCapabilities: vi.fn(),
+    });
+    render(<UpscalerPanel />);
+    const modelPicker = screen.getByLabelText("Modello Upscaler");
+    expect(screen.getByRole("option", { name: "MLX-DLSS 5 · configura" })).toBeVisible();
+    fireEvent.change(modelPicker, { target: { value: "mlx-dlss" } });
+    await waitFor(() => expect(useProjectStore.getState().project.animation.upscaler.provider).toBe("mlx-dlss"));
+    expect(screen.getByRole("dialog", { name: "Configura MLX-DLSS 5" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Installa MLX-DLSS" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Scegli nvngx_dlssnr.dll" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Chiudi configurazione MLX-DLSS" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Locale" }));
+    const button = screen.getByRole("button", { name: "MLX-DLSS · installa" });
+    expect(button).toBeVisible();
+    fireEvent.click(button);
+    await waitFor(() => expect(useProjectStore.getState().project.animation.upscaler.provider).toBe("mlx-dlss"));
+    expect(screen.getByRole("dialog", { name: "Configura MLX-DLSS 5" })).toBeVisible();
+  });
+
+  it("mantiene il menu modello visibile passando dal modello locale a MLX-DLSS", async () => {
+    const ready = {
+      id: "mlx-dlss" as const, label: "MLX-DLSS · Apple Metal", platform: "Darwin", architecture: "arm64", macOSVersion: "26.1",
+      appleSilicon: true, metal: true, memoryBytes: 16 * 1024 ** 3, supported: true, reason: "", installReady: true,
+      missingInstallTools: [], automaticInstallTools: [], manualInstallTools: [], packageManager: "homebrew" as const,
+      minimumMacOS: "26.0", installed: true, usable: true, healthError: "", runtimeRoot: "/tmp/runtime", logPath: "/tmp/log", version: "abc", models: [],
+      profiles: ["standard"], codecs: ["h264"], containers: ["mp4"], limitations: [],
+    };
+    mlxCapabilities.mockReturnValue({ capabilities: ready, error: "", refresh: vi.fn(), setCapabilities: vi.fn() });
+    render(<UpscalerPanel />);
+
+    fireEvent.change(screen.getByLabelText("Modello Upscaler"), { target: { value: "mlx-dlss" } });
+    await waitFor(() => expect(useProjectStore.getState().project.animation.upscaler.provider).toBe("mlx-dlss"));
+    fireEvent.click(screen.getByRole("button", { name: "Chiudi configurazione MLX-DLSS" }));
+
+    expect(screen.getByText("Modello MLX-DLSS")).toBeInTheDocument();
+    expect(screen.getByText("MLX-DLSS · Apple Metal")).toBeInTheDocument();
+  });
+
+  it("riallinea una foto Enhance a 1x quando passa da un modello locale 4x a MLX-DLSS", async () => {
+    const ready = {
+      id: "mlx-dlss" as const, label: "MLX-DLSS · Apple Metal", platform: "Darwin", architecture: "arm64", macOSVersion: "26.1",
+      appleSilicon: true, metal: true, memoryBytes: 16 * 1024 ** 3, supported: true, reason: "", installReady: true,
+      missingInstallTools: [], automaticInstallTools: [], manualInstallTools: [], packageManager: "homebrew" as const,
+      minimumMacOS: "26.0", installed: true, usable: true, healthError: "", runtimeRoot: "/tmp/runtime", logPath: "/tmp/log", version: "abc", models: [],
+      profiles: ["standard"], codecs: ["h264"], containers: ["mp4"], limitations: [],
+    };
+    mlxCapabilities.mockReturnValue({ capabilities: ready, error: "", refresh: vi.fn(), setCapabilities: vi.fn() });
+    useProjectStore.getState().updateUpscaler({
+      sourceUrl: "blob:landscape", sourceName: "landscape.png", sourceKind: "image",
+      sourceWidth: 1920, sourceHeight: 1080, finalWidth: 7680, finalHeight: 4320, scale: 4,
+      mlxDlss: { ...useProjectStore.getState().project.animation.upscaler.mlxDlss, mode: "enhance", neuralModel: "nr.dlssmodel" },
+    });
+    render(<UpscalerPanel />);
+
+    fireEvent.click(screen.getByRole("button", { name: "MLX-DLSS · pronto" }));
+    await waitFor(() => expect(useProjectStore.getState().project.animation.upscaler).toMatchObject({
+      provider: "mlx-dlss", finalWidth: 1920, finalHeight: 1080, scale: 1,
+    }));
+  });
+
+  it("shows readiness progress and lets the user retry a failed MLX connection", () => {
+    const refresh = vi.fn();
+    mlxCapabilities.mockReturnValue({ capabilities: null, loading: true, error: "", refresh, setCapabilities: vi.fn() });
+    const { rerender } = render(<UpscalerPanel />);
+    fireEvent.change(screen.getByLabelText("Modello Upscaler"), { target: { value: "mlx-dlss" } });
+    expect(screen.getByText("Avvio del servizio Upscaler…")).toBeVisible();
+    mlxCapabilities.mockReturnValue({ capabilities: null, loading: false, error: "Servizio non raggiungibile", refresh, setCapabilities: vi.fn() });
+    rerender(<UpscalerPanel />);
+    expect(screen.queryByText("Avvio del servizio Upscaler…")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Riprova connessione" }));
+    // The modal refreshes once on opening, then again for the explicit retry.
+    expect(refresh).toHaveBeenCalledTimes(2);
   });
 
   it("rende uniformi i cursori e conserva l'ultimo valore durante un trascinamento rapido", () => {

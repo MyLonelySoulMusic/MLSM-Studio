@@ -20,10 +20,12 @@ function isAbortError(error: unknown): boolean {
  * activation. The returned target can safely be committed after a long job.
  */
 export async function chooseUpscalerVideoSaveTarget(fileName: string): Promise<UpscalerVideoSaveTarget | null> {
+  const mov = fileName.toLowerCase().endsWith(".mov");
+  const filter = mov ? { name: "Video QuickTime · ProRes", extensions: ["mov"] } : { name: "Video MP4 · H.264/HEVC", extensions: ["mp4"] };
   if (isTauri()) {
     const path = await save({
       defaultPath: fileName,
-      filters: [{ name: "Video MP4 · H.264/AAC", extensions: ["mp4"] }]
+      filters: [filter]
     });
     return typeof path === "string" ? { kind: "tauri", path } : null;
   }
@@ -31,7 +33,7 @@ export async function chooseUpscalerVideoSaveTarget(fileName: string): Promise<U
     try {
       const handle = await window.showSaveFilePicker({
         suggestedName: fileName,
-        types: [{ description: "Video MP4 · H.264/AAC", accept: { "video/mp4": [".mp4"] } }]
+        types: mov ? [{ description: "Video QuickTime · ProRes", accept: { "video/quicktime": [".mov"] } }] : [{ description: "Video MP4 · H.264/HEVC", accept: { "video/mp4": [".mp4"] } }]
       });
       return { kind: "file-system-access", handle };
     } catch (error) {

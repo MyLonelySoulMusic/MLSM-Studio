@@ -25,7 +25,7 @@ import { createWalkingCubeScene, updateWalkingCubeScene } from "../services/walk
 import { renderProSubtitleCompositionFrame } from "../services/pro-subtitles";
 import { subtitleFontWeight } from "../services/subtitle-fonts";
 import { clearPixelsSubTextLayoutCache, pixelsSubFontWeight, renderPixelsSubFrame } from "../services/pixels-sub-renderer";
-import { formatUpscalerViewportFooter } from "../services/upscaler-renderer";
+import { fitUpscalerFrameToStage, formatUpscalerViewportFooter } from "../services/upscaler-renderer";
 import { useFullscreenPreview } from "../services/use-fullscreen-preview";
 import { StaticWatermarkPreview } from "./StaticWatermarkPreview";
 import { UpscalerPreview } from "./UpscalerPreview";
@@ -950,6 +950,8 @@ function createStereoUnfoldScene(settings: StereoUnfoldSettings): THREE.Group {
 
 export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, ballVelocity, activeObjectIndex, aspectRatio, animationModeId, newYorkSettings, coverSphereSettings, stereoUnfoldSettings, walkingCubeSettings, teddyWalkSettings, teddySingSettings, proSubtitlesSettings, pixelsSubSettings, staticWatermarkSettings, upscalerSettings, pixelsSubRhythmHits, teddyLipSync, subtitles, spectrumBands, stereoLeftBands, stereoRightBands, stereoWidth, stereoLeftPulse, stereoRightPulse, audioPulse, rhythmPulse, globalBpm, trajectorySegments, projectSeed, motionKinds, impactResponses, onRendererReady, onSelectObject, onPlayPause, onStop, onSeek }: { timeSeconds: number; durationSeconds: number; playing: boolean; ballPosition: Vector3Data | undefined; ballVelocity: Vector3Data | undefined; activeObjectIndex: number; aspectRatio: string; animationModeId: string; newYorkSettings: NewYorkSettings; coverSphereSettings: CoverSphereSettings; stereoUnfoldSettings: StereoUnfoldSettings; walkingCubeSettings: WalkingCubeSettings; teddyWalkSettings: TeddyWalkSettings; teddySingSettings: TeddySingSettings; proSubtitlesSettings: ProSubtitlesSettings; pixelsSubSettings: PixelsSubSettings; staticWatermarkSettings: StaticWatermarkSettings; upscalerSettings: UpscalerSettings; pixelsSubRhythmHits: readonly { timeSeconds: number; strength: number; type: "kick" | "snare" }[]; teddyLipSync: TeddyLipSyncPose; subtitles: RhythmBallProject["subtitles"]; spectrumBands: readonly number[]; stereoLeftBands: readonly number[]; stereoRightBands: readonly number[]; stereoWidth: number; stereoLeftPulse: number; stereoRightPulse: number; audioPulse: number; rhythmPulse: number; globalBpm: number; trajectorySegments: readonly TrajectorySegment[]; projectSeed: number; motionKinds: readonly MotionKind[]; impactResponses: readonly { timeSeconds: number; strength: number }[]; onRendererReady: (renderer: SharedViewportRenderer | null) => void; onSelectObject: (id: string | null) => void; onPlayPause?: () => void; onStop?: () => void; onSeek?: (seconds: number) => void }) {
   const host = useRef<HTMLDivElement>(null);
+  const stageHost = useRef<HTMLDivElement>(null);
+  const upscalerFrame = useRef<HTMLDivElement>(null);
   const backgroundVideo = useRef<HTMLVideoElement>(null);
   const [teddyMocap, setTeddyMocap] = useState<TeddyMocapLibrary | null>(null);
   const [subtitleFontRevision, setSubtitleFontRevision] = useState(0);
@@ -1746,6 +1748,33 @@ export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, 
   const pixelsSubMode = animationModeId === "pixelsSub";
   const staticWatermarkMode = animationModeId === "staticWatermark";
   const upscalerMode = animationModeId === "upscaler";
+  useLayoutEffect(() => {
+    if (!upscalerMode) return;
+    const stage = stageHost.current; const frame = upscalerFrame.current;
+    if (!stage || !frame) return;
+    let resizeFrame = 0;
+    const resize = () => {
+      cancelAnimationFrame(resizeFrame);
+      resizeFrame = requestAnimationFrame(() => {
+        const style = getComputedStyle(stage);
+        const horizontalPadding = Number.parseFloat(style.paddingLeft) + Number.parseFloat(style.paddingRight);
+        const verticalPadding = Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom);
+        const fitted = fitUpscalerFrameToStage(
+          stage.clientWidth - (Number.isFinite(horizontalPadding) ? horizontalPadding : 0),
+          stage.clientHeight - (Number.isFinite(verticalPadding) ? verticalPadding : 0),
+          upscalerSettings.finalWidth, upscalerSettings.finalHeight,
+        );
+        frame.style.width = `${fitted.width}px`; frame.style.height = `${fitted.height}px`;
+      });
+    };
+    resize();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(resize);
+    observer?.observe(stage); window.addEventListener("resize", resize);
+    return () => {
+      observer?.disconnect(); window.removeEventListener("resize", resize); cancelAnimationFrame(resizeFrame);
+      frame.style.removeProperty("width"); frame.style.removeProperty("height");
+    };
+  }, [upscalerMode, upscalerSettings.finalHeight, upscalerSettings.finalWidth]);
   const subtitleVideoMode = proSubtitleMode;
   const walkingCubeMode = animationModeId === "walkingCube";
   const activeVideoUrl = proSubtitleMode ? proSubtitlesSettings.videoUrl : background.mediaType === "video" ? background.imageUrl : null;
@@ -1764,7 +1793,8 @@ export function Viewport({ timeSeconds, durationSeconds, playing, ballPosition, 
   const fullscreenTransport = fullscreenPreview && !upscalerMode && onPlayPause && onStop && onSeek;
   return <main className={`viewport${fullscreenPreview ? " viewport-fullscreen" : ""}${fullscreenTransport ? " has-fullscreen-transport" : ""}`} aria-label="Viewport scena">
     <div className="viewport-tools"><button className="active-control">{viewportLabel}</button>{standaloneGpuMode ? null : <><button disabled>Sposta</button><button disabled>Ruota</button><button disabled>Scala</button></>}<span /><span className="viewport-quality">{qualityLabel}</span><button type="button" className="viewport-fullscreen-toggle" aria-label={fullscreenPreview ? "Esci da tutto schermo" : "Animazione a tutto schermo"} aria-pressed={fullscreenPreview} title={fullscreenPreview ? "Torna all’editor (Esc)" : "Mostra soltanto l’animazione"} onClick={toggleFullscreenPreview}>{fullscreenPreview ? "↙ Torna all’editor" : "⛶ Tutto schermo"}</button></div>
-    <div className="three-stage"><div
+    <div ref={stageHost} className="three-stage"><div
+      ref={upscalerFrame}
       className={`preview-frame${upscalerMode ? " upscaler-frame" : ""} ${(upscalerMode ? upscalerSettings.finalWidth >= upscalerSettings.finalHeight : aspectRatio === "16:9") ? "ratio-landscape" : "ratio-portrait"}`}
       style={upscalerMode ? { aspectRatio: `${Math.max(1, upscalerSettings.finalWidth)} / ${Math.max(1, upscalerSettings.finalHeight)}` } : undefined}
     >

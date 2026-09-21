@@ -221,6 +221,22 @@
       </div>
     </section>
   </div>
+  <div id="projectDialog" class="decision-modal-backdrop hidden" role="presentation">
+    <section class="decision-modal project-decision-modal" role="dialog" aria-modal="true" aria-labelledby="projectDialogTitle" aria-describedby="projectDialogDescription" tabindex="-1">
+      <button id="projectDialogClose" class="decision-modal-close" type="button" aria-label="Chiudi finestra">×</button>
+      <div class="decision-modal-heading">
+        <span class="decision-modal-icon project-dialog-icon" aria-hidden="true">＋</span>
+        <div><p id="projectDialogEyebrow" class="eyebrow">NUOVO PROGETTO · MUSIC</p><h2 id="projectDialogTitle">Crea un nuovo progetto</h2></div>
+      </div>
+      <p id="projectDialogDescription" class="decision-modal-lead">Assegna un nome al brano. Potrai importare master e stem nel passaggio successivo.</p>
+      <label id="projectDialogField" class="project-dialog-field"><span>Nome del progetto</span><input id="projectDialogName" type="text" maxlength="160" autocomplete="off" value="Nuovo brano" aria-describedby="projectDialogError"></label>
+      <p id="projectDialogError" class="project-dialog-error hidden" role="alert">Inserisci un nome per continuare.</p>
+      <div class="decision-modal-actions">
+        <button id="projectDialogCancel" class="secondary" type="button">Annulla</button>
+        <button id="projectDialogConfirm" class="primary" type="button">Crea progetto</button>
+      </div>
+    </section>
+  </div>
   <div id="busy" class="busy hidden" role="status" aria-live="polite" tabindex="-1"><div class="spinner"></div><strong id="busyTitle">Elaborazione audio</strong><span id="busyText">Questa operazione può richiedere qualche minuto.</span><div id="zipProgressArea" class="busy-progress hidden"><progress id="zipProgress" max="100" value="0"></progress><span id="zipProgressText">Preparazione archivio…</span></div></div>
   <script src="./i18n.js"></script>
   <script>document.documentElement.dataset.theme=new URLSearchParams(location.search).get("theme")||parent.documentElement.dataset.theme||"day";</script>

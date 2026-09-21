@@ -123,7 +123,8 @@ export async function exportUpscaledVideo(
   }
   const effectiveWidth = result.status.effectiveWidth ?? width;
   const effectiveHeight = result.status.effectiveHeight ?? height;
-  const fileName = `${safeName(settings.projectName)}-upscaled-${effectiveWidth}x${effectiveHeight}.mp4`;
+  const extension = result.status.container === "mov" ? "mov" : "mp4";
+  const fileName = `${safeName(settings.projectName)}-upscaled-${effectiveWidth}x${effectiveHeight}.${extension}`;
   if (!settings.suppressDownload) downloadVideoBlob(result.blob, fileName);
   return {
     fileName,

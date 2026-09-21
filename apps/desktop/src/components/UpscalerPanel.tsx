@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { useProjectStore } from "../store/project-store";
 import { backendLabel, detectUpscalerHardware, effectiveUpscalerBackend, upscalerModels, type UpscalerHardware } from "../services/upscaler-runtime";
-import { fitUpscalerPreset, resolveUpscalerTarget, resolvedUpscalerDimensions } from "../services/upscaler-renderer";
+import { fitUpscalerPreset, resolveMlxDlssTarget, resolveUpscalerTarget, resolvedUpscalerDimensions } from "../services/upscaler-renderer";
 import { registerUpscalerSourceFile } from "../services/upscaler-source-file";
 import { classifyUpscalerMediaFile, readUpscalerMediaMetadata, type SupportedUpscalerMediaFile } from "../services/upscaler-media-file";
 import { UpscalerBatchPanel } from "./UpscalerBatchPanel";
 import { useUpscalerBatchStore, type UpscalerImportOwner } from "../store/upscaler-batch-store";
 import { RemoteUpscalerPanel } from "./RemoteUpscalerPanel";
+import { MlxDlssPanel } from "./MlxDlssPanel";
+import { MlxDlssSetupModal } from "./MlxDlssSetupModal";
+import { useMlxDlssCapabilities } from "../services/use-mlx-dlss-capabilities";
 
 const adjustmentLabels = { exposure: "Esposizione", contrast: "Contrasto", highlights: "Luci", shadows: "Ombre", whites: "Bianchi", blacks: "Neri", saturation: "Saturazione", vibrance: "Vividezza", temperature: "Temperatura", tint: "Tinta", sharpness: "Nitidezza", denoise: "Riduzione rumore" } as const;
 type AdjustmentKey = keyof typeof adjustmentLabels;
@@ -112,6 +115,8 @@ export function UpscalerPanel() {
   const addBatchFiles = useUpscalerBatchStore((state) => state.addFiles);
   const setPreviewItem = useUpscalerBatchStore((state) => state.setPreviewItem);
   const [hardware, setHardware] = useState<UpscalerHardware | null>(null); const [hardwareError, setHardwareError] = useState(""); const [importError, setImportError] = useState("");
+  const [mlxSetupOpen, setMlxSetupOpen] = useState(false);
+  const mlx = useMlxDlssCapabilities();
   useEffect(() => { let active = true; void detectUpscalerHardware().then((result) => { if (active) setHardware(result); }).catch((error: unknown) => { if (active) setHardwareError(error instanceof Error ? error.message : String(error)); }); return () => { active = false; }; }, []);
   const selectedModel = useMemo(() => upscalerModels.find((model) => model.id === settings.model) ?? upscalerModels[0]!, [settings.model]);
   const importSingleMedia = async (file: File, classification: SupportedUpscalerMediaFile, owner: UpscalerImportOwner): Promise<boolean> => {
@@ -123,9 +128,10 @@ export function UpscalerPanel() {
       // In remote mode the selected Gradio catalog model owns the scale.  Do
       // not let the hidden local model reset an x4 remote target while a new
       // source is being imported.
-      const scale = settings.remote.enabled ? settings.scale : selectedModel.nativeScale;
-      const dimensions = resolveUpscalerTarget(metadata.width, metadata.height, scale);
-      const { width, height } = dimensions;
+      const target = settings.provider === "mlx-dlss"
+        ? resolveMlxDlssTarget(metadata.width, metadata.height, settings.mlxDlss.mode, settings.scale)
+        : (() => { const scale = settings.remote.enabled ? settings.scale : selectedModel.nativeScale; return { ...resolveUpscalerTarget(metadata.width, metadata.height, scale), scale }; })();
+      const { width, height, scale } = target;
       const previousUrl = useProjectStore.getState().project.animation.upscaler.sourceUrl;
       registerUpscalerSourceFile(url, file);
       update({ sourceUrl: url, sourceName: file.name, sourceKind: metadata.kind, sourceWidth: metadata.width, sourceHeight: metadata.height, durationSeconds: metadata.duration, scale, finalWidth: width, finalHeight: height });
@@ -185,10 +191,21 @@ export function UpscalerPanel() {
     const dimensions = resolvedUpscalerDimensions({ ...settings, finalWidth: key === "width" ? value : settings.finalWidth, finalHeight: key === "height" ? value : settings.finalHeight }, key);
     update({ finalWidth: dimensions.width, finalHeight: dimensions.height, scale: settings.sourceWidth ? dimensions.width / settings.sourceWidth : settings.scale });
   };
-  const selectModel = (modelId: typeof settings.model) => {
+  const selectModel = (modelId: typeof settings.model | "mlx-dlss") => {
+    if (modelId === "mlx-dlss") {
+      const target = settings.sourceWidth && settings.sourceHeight ? resolveMlxDlssTarget(settings.sourceWidth, settings.sourceHeight, settings.mlxDlss.mode, settings.scale) : null;
+      update({ provider: "mlx-dlss", remote: { ...settings.remote, enabled: false }, ...(target ? { finalWidth: target.width, finalHeight: target.height, scale: target.scale } : {}) });
+      setMlxSetupOpen(true);
+      return;
+    }
     const model = upscalerModels.find((item) => item.id === modelId) ?? selectedModel;
     const dimensions = settings.sourceWidth && settings.sourceHeight ? (() => { const target = resolveUpscalerTarget(settings.sourceWidth, settings.sourceHeight, model.nativeScale); return { finalWidth: target.width, finalHeight: target.height }; })() : {};
     update({ model: model.id, scale: model.nativeScale, ...dimensions });
+  };
+  const selectMlxDlss = () => {
+    const target = settings.sourceWidth && settings.sourceHeight ? resolveMlxDlssTarget(settings.sourceWidth, settings.sourceHeight, settings.mlxDlss.mode, settings.scale) : null;
+    update({ provider: "mlx-dlss", remote: { ...settings.remote, enabled: false }, ...(target ? { finalWidth: target.width, finalHeight: target.height, scale: target.scale } : {}) });
+    if (!mlx.capabilities?.usable) setMlxSetupOpen(true);
   };
   const selectPreset = (landscapeWidth: number, landscapeHeight: number) => {
     const dimensions = fitUpscalerPreset(settings.sourceWidth || landscapeWidth, settings.sourceHeight || landscapeHeight, landscapeWidth, landscapeHeight);
@@ -200,25 +217,29 @@ export function UpscalerPanel() {
     update({ adjustments: { ...current, [key]: value } });
   }, [update]);
   const effective = hardware ? effectiveUpscalerBackend(settings.backend, hardware) : null;
+  const mlxOffered = Boolean(mlx.capabilities?.supported);
+  const mlxModeLabel = mlx.capabilities?.usable ? "MLX-DLSS · pronto" : mlx.capabilities?.installed ? "MLX-DLSS · configura" : "MLX-DLSS · installa";
   const outputMegapixels = settings.finalWidth * settings.finalHeight / 1_000_000;
   const demandingVideoProfile = settings.sourceKind === "video" && Boolean(settings.sourceUrl) && (selectedModel.speed === "slow" || settings.tta || outputMegapixels > 8.4);
   return <section className="upscaler-settings">
     <h2>Sorgente</h2><label className="flyer-upload">Carica foto o video<input aria-label="Carica sorgente Upscaler" type="file" accept="image/png,image/jpeg,image/webp,image/avif,video/mp4,video/webm,video/quicktime,.m4v" multiple disabled={batchRunning} onClick={(event) => { event.currentTarget.value = ""; }} onChange={(event) => void importMedia(event)} /></label>{importError ? <p className="upscaler-preview-error">{importError}</p> : null}
     {settings.sourceUrl ? <div className="subtitle-video-loaded"><strong>{settings.sourceName}</strong><span>{settings.sourceWidth} × {settings.sourceHeight}{settings.sourceKind === "video" ? ` · ${settings.durationSeconds.toFixed(1)} s` : " · immagine"}</span></div> : <p className="muted">Foto e video condividono la stessa pipeline, la stessa correzione colore e la stessa risoluzione finale.</p>}
     <fieldset className="upscaler-global-settings" disabled={batchRunning || batchImporting}>
-    <h2>Modalità elaborazione</h2><div className="segmented" role="group" aria-label="Modalità elaborazione Upscaler"><button type="button" className={!settings.remote.enabled ? "active" : ""} aria-pressed={!settings.remote.enabled} onClick={() => update({ remote: { ...settings.remote, enabled: false } })}>Locale</button><button type="button" className={settings.remote.enabled ? "active" : ""} aria-pressed={settings.remote.enabled} onClick={() => update({ remote: { ...settings.remote, enabled: true } })}>Gradio / Colab</button></div>
-    <p className="muted">{settings.remote.enabled ? "Elaborazione esclusivamente remota: configura almeno un endpoint attivo. I motori locali non vengono usati." : "Elaborazione esclusivamente sul computer: Canvas o modello AI locale, senza collegamenti Gradio."}</p>
-    {!settings.remote.enabled ? <>
-      <h2>Modello locale</h2><label>Modello<select aria-label="Modello Upscaler" value={settings.model} onChange={(event) => selectModel(event.target.value as typeof settings.model)}>{upscalerModels.map((model) => <option key={model.id} value={model.id}>{model.label} · {model.nativeScale}×</option>)}</select></label>
+    <h2>Modalità elaborazione</h2><div className="segmented upscaler-provider-selector" role="group" aria-label="Modalità elaborazione Upscaler"><button type="button" className={settings.provider === "classic" && !settings.remote.enabled ? "active" : ""} aria-pressed={settings.provider === "classic" && !settings.remote.enabled} onClick={() => update({ provider: "classic", remote: { ...settings.remote, enabled: false } })}>Locale</button><button type="button" className={settings.provider === "classic" && settings.remote.enabled ? "active" : ""} aria-pressed={settings.provider === "classic" && settings.remote.enabled} onClick={() => update({ provider: "classic", remote: { ...settings.remote, enabled: true } })}>Gradio / Colab</button>{mlxOffered ? <button type="button" className={settings.provider === "mlx-dlss" ? "active" : ""} aria-pressed={settings.provider === "mlx-dlss"} onClick={selectMlxDlss}>{mlxModeLabel}</button> : null}</div>
+    <p className="muted">{settings.provider === "mlx-dlss" ? "Pipeline nativa Apple Silicon e Metal, eseguita esclusivamente in locale." : settings.remote.enabled ? "Elaborazione esclusivamente remota: configura almeno un endpoint attivo. I motori locali non vengono usati." : "Elaborazione esclusivamente sul computer: Canvas o modello AI locale, senza collegamenti Gradio."}</p>
+    {settings.provider === "mlx-dlss" && mlx.capabilities?.usable ? <MlxDlssPanel settings={settings} update={update} capabilities={mlx.capabilities} setCapabilities={mlx.setCapabilities} /> : settings.provider === "classic" && !settings.remote.enabled ? <>
+      <h2 data-settings-accordion-key="upscaler-model">Modello locale</h2><label>Modello<select aria-label="Modello Upscaler" value={settings.model} onChange={(event) => selectModel(event.target.value as typeof settings.model | "mlx-dlss")}><option value="mlx-dlss">MLX-DLSS 5 · configura</option>{upscalerModels.map((model) => <option key={model.id} value={model.id}>{model.label} · {model.nativeScale}×</option>)}</select></label>
       <div className="upscaler-model-card"><strong>{selectedModel.label}</strong><span><b>Ideale:</b> {selectedModel.bestFor}</span><span className="model-pro"><b>Pro:</b> {selectedModel.pros}</span><span className="model-con"><b>Contro:</b> {selectedModel.cons}</span><small>{selectedModel.speed === "fast" ? "Veloce" : selectedModel.speed === "balanced" ? "Bilanciato" : "Qualità massima · più lento"}{selectedModel.videoOptimized ? " · ottimizzato video" : ""}{selectedModel.id === "canvas" ? " · nessun download" : ` · ${selectedModel.modelSizeMb} MB`}{selectedModel.id === "canvas" ? "" : selectedModel.webExecutable ? " · ONNX locale" : " · server PyTorch locale"}</small></div>
       <h2>Accelerazione locale</h2><div className="upscaler-hardware-card"><strong>{hardware ? `Rilevato: ${hardware.gpuName ?? `${hardware.platform} ${hardware.architecture}`}` : hardwareError || "Rilevamento hardware…"}</strong><span>{effective ? `Motore selezionato: ${backendLabel(effective)}` : "Scelta automatica in preparazione"}</span></div>
       <label>Motore<select aria-label="Acceleratore Upscaler" value={settings.backend} onChange={(event) => update({ backend: event.target.value as typeof settings.backend })}><option value="auto">Automatico · consigliato</option><option value="cuda">NVIDIA CUDA</option><option value="metal">Apple Silicon · Metal</option><option value="webgpu">WebGPU</option><option value="cpu">CPU · compatibilità</option></select></label>
       <div className="upscaler-optimization-grid"><label>Tile<select aria-label="Dimensione tile Upscaler" value={settings.tileSize} onChange={(event) => update({ tileSize: Number(event.target.value) })}><option value="128">128 · poca memoria</option><option value="256">256 · automatico</option><option value="512">512 · GPU potente</option><option value="1024">1024 · memoria elevata</option></select></label><label className="teddy-dance-toggle"><span>TTA · qualità massima</span><input aria-label="TTA Upscaler" type="checkbox" checked={settings.tta} onChange={(event) => update({ tta: event.target.checked })} /></label></div>
       {demandingVideoProfile ? <div className="upscaler-performance-warning"><strong>Elaborazione video molto pesante</strong><span>{selectedModel.label} · {outputMegapixels.toFixed(1)} MP per frame{settings.tta ? " · doppio passaggio TTA" : ""}. Su video reali può richiedere decine di secondi per fotogramma. L’avanzamento mostrerà una stima attendibile dopo il primo frame.</span><button type="button" onClick={() => { const model = upscalerModels.find((item) => item.id === "realesr-general-x4v3")!; update({ model: model.id, scale: model.nativeScale, tta: false, tileSize: 256 }); }}>Usa profilo video veloce · General x4v3 senza TTA</button></div> : null}
-    </> : <RemoteUpscalerPanel settings={settings} update={update} />}
+    </> : settings.provider === "classic" ? <RemoteUpscalerPanel settings={settings} update={update} /> : <div className="upscaler-performance-warning"><strong>Completa la configurazione MLX-DLSS</strong><span>Installa il backend e importa `nvngx_dlssnr.dll` dalla procedura guidata.</span><button type="button" onClick={() => setMlxSetupOpen(true)}>Apri configurazione MLX-DLSS</button></div>}
     <h2>Risoluzione finale</h2><label className="teddy-dance-toggle"><span>Mantieni proporzioni</span><input aria-label="Mantieni proporzioni Upscaler" type="checkbox" checked={settings.lockAspectRatio} onChange={(event) => update({ lockAspectRatio: event.target.checked })} /></label><div className="upscaler-resolution"><label>Larghezza<input aria-label="Larghezza finale Upscaler" type="number" min="64" max="16384" value={settings.finalWidth} onChange={(event) => setResolution("width", Number(event.target.value))} /></label><span>×</span><label>Altezza<input aria-label="Altezza finale Upscaler" type="number" min="64" max="16384" value={settings.finalHeight} onChange={(event) => setResolution("height", Number(event.target.value))} /></label></div><div className="upscaler-presets">{[[1920,1080,"Full HD"],[2560,1440,"QHD"],[3840,2160,"4K"],[7680,4320,"8K"]].map(([width,height,label]) => <button type="button" key={label} onClick={() => selectPreset(width as number, height as number)}>{label}</button>)}</div><p className="muted">I preset ruotano automaticamente per sorgenti verticali e adattano i lati senza deformare o tagliare l’immagine.</p>
     <h2>Confronto e fusione</h2><label>Vista<select aria-label="Modalità confronto Upscaler" value={settings.comparisonMode} onChange={(event) => update({ comparisonMode: event.target.value as typeof settings.comparisonMode })}><option value="split">Prima / dopo</option><option value="enhanced">Solo migliorato</option><option value="original">Solo originale</option><option value="blend">Fusione</option></select></label><div className="upscaler-comparison-ranges">{settings.comparisonMode === "split" ? <UpscalerRangeControl label="Separatore" ariaLabel="Separatore confronto Upscaler" min={0} max={1} step={0.01} value={settings.comparisonPosition} formatValue={(value) => `${Math.round(value * 100)}%`} onChange={(value) => update({ comparisonPosition: value })} /> : null}<UpscalerRangeControl label="Originale sovrapposto" ariaLabel="Fusione originale Upscaler" min={0} max={1} step={0.01} value={settings.originalBlend} formatValue={(value) => `${Math.round(value * 100)}%`} onChange={(value) => update({ originalBlend: value })} /></div>
     {settings.sourceKind === "video" ? <><h2>Regolazioni video finali</h2><label className="teddy-dance-toggle"><span>Applica colore, nitidezza e riduzione rumore al video</span><input aria-label="Applica regolazioni video Upscaler" type="checkbox" checked={settings.applyVideoAdjustments} onChange={(event) => update({ applyVideoAdjustments: event.target.checked })} /></label>{settings.applyVideoAdjustments ? <div className="upscaler-performance-warning"><strong>Operazione lenta</strong><span>Le regolazioni richiedono una ricodifica completa del video finale. L’avanzamento e il tempo residuo saranno mostrati durante la codifica.</span></div> : <p className="muted">Disattivato: quando i segmenti Gradio hanno già la risoluzione richiesta vengono uniti senza ricodificare il video e viene ripristinato direttamente l’audio originale.</p>}</> : null}
     <h2>Regolazioni immagine</h2><div className="upscaler-adjustments">{(Object.keys(adjustmentLabels) as AdjustmentKey[]).map((key) => <UpscalerRangeControl key={key} label={adjustmentLabels[key]} ariaLabel={`${adjustmentLabels[key]} Upscaler`} {...adjustmentRanges[key]} disabled={settings.sourceKind === "video" && !settings.applyVideoAdjustments} value={settings.adjustments[key]} formatValue={(value) => formatSignedAdjustment(key, value)} onChange={(value) => updateAdjustment(key, value)} />)}</div><button type="button" disabled={settings.sourceKind === "video" && !settings.applyVideoAdjustments} onClick={() => update({ adjustments: { exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, saturation: 0, vibrance: 0, temperature: 0, tint: 0, sharpness: 0, denoise: 0 } })}>Ripristina regolazioni</button>
-    </fieldset><UpscalerBatchPanel settings={settings} /></section>;
+    </fieldset><UpscalerBatchPanel settings={settings} />
+    <MlxDlssSetupModal open={mlxSetupOpen} capabilities={mlx.capabilities} loading={Boolean(mlx.loading)} connectionError={mlx.error} selectedModel={settings.mlxDlss.neuralModel} onCapabilities={mlx.setCapabilities} onRefresh={mlx.refresh} onSelectModel={(neuralModel) => update({ mlxDlss: { ...settings.mlxDlss, neuralModel } })} onClose={() => setMlxSetupOpen(false)} />
+    </section>;
 }

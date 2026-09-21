@@ -31,11 +31,11 @@ export function usesRemoteUpscaler(settings: Settings): boolean {
   // Enabling the remote coordinator is an explicit routing decision. A missing
   // model must surface as a configuration error; it must never silently fall
   // through to the local Canvas/PyTorch video path.
-  return settings.remote.enabled && activeRemoteUpscalerEndpoints(settings).length > 0;
+  return settings.provider === "classic" && settings.remote.enabled && activeRemoteUpscalerEndpoints(settings).length > 0;
 }
 
 export function shouldGenerateUpscalerAi(settings: Settings): boolean {
-  return usesRemoteUpscaler(settings) || settings.model !== "canvas";
+  return settings.provider === "mlx-dlss" || usesRemoteUpscaler(settings) || settings.model !== "canvas";
 }
 
 async function errorMessage(response: Response, fallback: string): Promise<string> {

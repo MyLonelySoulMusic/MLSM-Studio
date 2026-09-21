@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { SoundSettingsAccordion } from "./SoundSettingsAccordion";
 import { readFileSync } from "node:fs";
@@ -65,6 +65,21 @@ describe("SoundSettingsAccordion", () => {
     expect(screen.getByRole("button", { name: "Colori" })).toHaveAttribute("aria-expanded", "true");
     rerender(<SoundSettingsAccordion resetKey="second"><section><h2>Colori</h2><input aria-label="Colore" /></section></SoundSettingsAccordion>);
     expect(screen.getByRole("button", { name: "Colori" })).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("keeps a dynamic settings group open when its provider replaces the heading", async () => {
+    const { rerender } = render(<SoundSettingsAccordion resetKey="upscaler">
+      <section key="local"><h2 data-settings-accordion-key="upscaler-model">Modello locale</h2><select aria-label="Modello locale"><option>Canvas</option></select></section>
+    </SoundSettingsAccordion>);
+    fireEvent.click(screen.getByRole("button", { name: "Modello locale" }));
+    expect(screen.getByLabelText("Modello locale")).toBeVisible();
+
+    rerender(<SoundSettingsAccordion resetKey="upscaler">
+      <section key="mlx"><h2 data-settings-accordion-key="upscaler-model">Modello MLX-DLSS</h2><select aria-label="Modello MLX"><option>Neural Rendering</option></select></section>
+    </SoundSettingsAccordion>);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Modello MLX-DLSS" })).toHaveAttribute("aria-expanded", "true"));
+    expect(screen.getByLabelText("Modello MLX")).toBeVisible();
   });
 
   it("splits the Song Player h3 subsections into independent groups", () => {
