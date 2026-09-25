@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   getLlmSettings,
+  DEFAULT_PROVIDER_LIMITS,
+  type ProviderLimits,
   llmModelCatalog,
   providerCatalogUrls,
   providerLabels,
@@ -161,6 +163,7 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [activeProvider, setActiveProvider] = useState<LlmProvider | "local">("nvidia");
   const [model, setModel] = useState(llmModelCatalog.nvidia[0]!.id);
   const [enabled, setEnabled] = useState(true);
+  const [limits, setLimits] = useState<ProviderLimits>(DEFAULT_PROVIDER_LIMITS);
   const [key, setKey] = useState("");
   const [message, setMessage] = useState("");
   const [messageKind, setMessageKind] = useState<"success" | "error">("success");
@@ -188,6 +191,7 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
     setKey("");
     setModel(settings?.providers[id].model ?? llmModelCatalog[id][0]!.id);
     setEnabled(settings?.providers[id].enabled ?? true);
+    setLimits({ ...DEFAULT_PROVIDER_LIMITS, ...settings?.providers[id].limits });
     setMessage("");
     setConnectionCheck(null);
   };
@@ -200,6 +204,7 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
       setActiveProvider(value.activeProvider);
       setModel(value.providers.nvidia.model);
       setEnabled(value.providers.nvidia.enabled);
+      setLimits({ ...DEFAULT_PROVIDER_LIMITS, ...value.providers.nvidia.limits });
     }).catch((error) => {
       if (live) { setMessageKind("error"); setMessage(String(error)); }
     });
@@ -301,8 +306,18 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
                 <label className="settings-field">{t.model}<select aria-label={t.model} value={model} disabled={busy} onChange={(event) => { setModel(event.target.value); setConnectionCheck(null); }}>{!currentModelIsListed ? <option value={model}>{model} · current</option> : null}{catalog.map((item) => <option key={item.id} value={item.id} disabled={item.disabled}>{item.label}{item.note ? ` · ${item.note}` : ""}</option>)}</select><code>{model}</code></label>
                 <label className="settings-field">{t.key}<input type="password" value={key} autoComplete="new-password" onChange={(event) => setKey(event.target.value)} placeholder="••••••••••••" /></label>
                 {connectionCheck?.provider === provider ? <div className={`settings-connection-status is-${connectionCheck.kind}`} role="status" aria-live="polite"><i aria-hidden="true" /><span><strong>{providerLabels[connectionCheck.provider]} · {connectionCheck.model}</strong><small>{connectionCheck.detail}</small></span></div> : null}
+                <fieldset className="settings-field" data-ui-copy>
+                  <legend>{language === "it" ? "Limiti API del provider" : "Provider API limits"}</legend>
+                  <label><input type="checkbox" checked={limits.enabled} onChange={event => setLimits({ ...limits, enabled: event.target.checked })} />{language === "it" ? "Applica limiti e accoda le richieste in ordine" : "Apply limits and queue requests in order"}</label>
+                  {limits.enabled && <>
+                    <label>{language === "it" ? "Richieste massime" : "Maximum requests"}<input type="number" min={1} max={100000} value={limits.requests} onChange={event => setLimits({ ...limits, requests: Math.max(1, Number(event.target.value)) })} /></label>
+                    <label>{language === "it" ? "Ogni (secondi): 1 = al secondo, 60 = al minuto" : "Per (seconds): 1 = per second, 60 = per minute"}<input type="number" min={1} max={3600} value={limits.windowSeconds} onChange={event => setLimits({ ...limits, windowSeconds: Math.max(1, Number(event.target.value)) })} /></label>
+                    <label>{language === "it" ? "Contesto massimo in token (0 = nessun limite configurato)" : "Maximum context tokens (0 = no configured limit)"}<input type="number" min={0} max={2000000} value={limits.contextTokens} onChange={event => setLimits({ ...limits, contextTokens: Math.max(0, Number(event.target.value)) })} /></label>
+                    <small>{language === "it" ? "Il contesto include richiesta e risposta. Reports riduce i campioni con una stima prudenziale; non altera i dati originali." : "Context includes input and output. Reports reduces samples using a conservative estimate; source data stays intact."}</small>
+                  </>}
+                </fieldset>
                 <div className="settings-actions settings-provider-actions">
-                  <button className="is-primary" disabled={busy || !model.trim()} onClick={() => void run(async () => { const next = await saveLlmSettings({ provider, activeProvider, model: model.trim(), enabled, ...(key.trim() ? { apiKey: key.trim() } : {}) }); setSettings(next); setKey(""); succeed(t.saved); })}>{t.save}</button>
+                  <button className="is-primary" disabled={busy || !model.trim()} onClick={() => void run(async () => { const next = await saveLlmSettings({ provider, activeProvider, model: model.trim(), enabled, limits, ...(key.trim() ? { apiKey: key.trim() } : {}) }); setSettings(next); setKey(""); succeed(t.saved); })}>{t.save}</button>
                   <button disabled={busy || !config?.configured || !model.trim()} onClick={() => void testConnection()}>{t.test}</button>
                   <button disabled={busy || config?.keySource !== "settings"} onClick={() => void run(async () => { setSettings(await saveLlmSettings({ provider, activeProvider, model, enabled, apiKey: "" })); setKey(""); succeed(t.saved); })}>{t.reset}</button>
                   <button className="is-danger" disabled={busy || !config?.configured} onClick={() => void run(async () => { setSettings(await saveLlmSettings({ provider, model, enabled, removeKey: true })); setKey(""); succeed(t.saved); })}>{language === "it" ? "Rimuovi chiave" : "Remove key"}</button>

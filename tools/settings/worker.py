@@ -76,7 +76,7 @@ def configuration(root, data, provider=None):
     model = stored.get("model") or env.get(provider.upper() + "_MODEL", definition["model"])
     if provider == "nvidia":
         model = NVIDIA_MODEL_MIGRATIONS.get(model, model)
-    return {"apiKey": key, "enabled": stored.get("enabled", True),
+    return {"apiKey": key, "enabled": stored.get("enabled", True), "limits": stored.get("limits", {}),
             "provider": provider, "endpoint": definition["endpoint"],
             "model": model,
             "keySource": "settings" if stored.get("apiKey") else "environment" if key else "none"}
@@ -84,7 +84,7 @@ def configuration(root, data, provider=None):
 
 def public_configuration(config):
     return {"configured": bool(config["apiKey"]), "keySource": config["keySource"],
-            "enabled": config["enabled"], "model": config["model"], "endpoint": config["endpoint"], "provider": config["provider"]}
+            "enabled": config["enabled"], "model": config["model"], "endpoint": config["endpoint"], "provider": config["provider"], "limits": config.get("limits", {})}
 
 
 def public_settings(root, data):
@@ -101,6 +101,11 @@ def complete(config, messages, max_tokens=1024):
         raise ValueError("Invalid messages")
     if sum(len(m["content"]) for m in messages) > 1_800_000:
         raise ValueError("Conversation too large")
+    limits = config.get("limits", {})
+    # UTF-8 bytes provide a conservative tokenizer-independent upper bound.
+    estimated = sum(len(m["content"].encode("utf-8")) + 16 for m in messages) + max_tokens
+    if limits.get("enabled") and limits.get("contextTokens", 0) and estimated > limits["contextTokens"]:
+        raise ValueError(f'Context budget exceeded: conservative estimate {estimated}, limit {limits["contextTokens"]}. Reduce the input or increase the configured context limit.')
     payload = {"model": config["model"], "messages": messages, "stream": False}
     payload["max_completion_tokens" if config["provider"] == "openai" else "max_tokens"] = max_tokens
     request = urllib.request.Request(config["endpoint"], data=json.dumps(payload).encode(), headers={
@@ -110,7 +115,7 @@ def complete(config, messages, max_tokens=1024):
         def redirect_request(self, *args, **kwargs):
             return None
     try:
-        with urllib.request.build_opener(NoRedirect).open(request, timeout=45) as response:
+        with urllib.request.build_opener(NoRedirect).open(request, timeout=180) as response:
             result = json.loads(response.read(2_000_000))
         content = result["choices"][0]["message"].get("content")
         if not isinstance(content, str) or not content.strip():
@@ -235,6 +240,17 @@ def dispatch(request, root, data, native=None):
             if not isinstance(request["enabled"], bool):
                 raise ValueError("Invalid enabled value")
             stored["enabled"] = request["enabled"]
+        if "limits" in request:
+            limits = request["limits"]
+            if not isinstance(limits, dict) or not isinstance(limits.get("enabled"), bool):
+                raise ValueError("Invalid provider limits")
+            validated = {"enabled": limits["enabled"]}
+            for name, lower, upper in (("requests", 1, 100000), ("windowSeconds", 1, 3600), ("contextTokens", 0, 2000000)):
+                value = limits.get(name, 0)
+                if not isinstance(value, int) or isinstance(value, bool) or not lower <= value <= upper:
+                    raise ValueError("Invalid limit: " + name)
+                validated[name] = value
+            stored["limits"] = validated
         if "apiKey" in request:
             key = request["apiKey"]
             if not isinstance(key, str) or len(key) > 4096 or any(c.isspace() for c in key):

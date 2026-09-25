@@ -2,6 +2,7 @@ import type { CSSProperties } from "react";
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import type { WorkBook, WorkSheet, CellObject, BookType } from "xlsx";
 import type { CellValue, ReportDataset, ReplicateXlsConfig, ReplicateXlsRegion } from "./types";
+import { prepareReplicateRegion } from "./replicate-query";
 
 export const REPLICATE_XLS_MAX_TEMPLATE_BYTES = 15 * 1024 * 1024;
 export const REPLICATE_XLS_FORMATS = ["xlsx", "xls", "xlsm", "xlsb", "ods"] as const;
@@ -141,9 +142,10 @@ function workbookSummary(XLSX: typeof import("xlsx"), workbook: WorkBook, fileNa
       if (sheet) {
         for (const address of Object.keys(sheet)) {
           if (address.startsWith("!")) continue;
+          const cell = sheet[address] as CellObject;
+          if ((cell.v === undefined || cell.v === null || cell.v === "") && !cell.f) continue;
           populatedCells += 1;
           if (sampleCells.length < 240) {
-            const cell = sheet[address] as CellObject;
             sampleCells.push({ address, value: XLSX.utils.format_cell(cell), ...(cell.f ? { formula: cell.f } : {}), ...(cell.z ? { numberFormat: String(cell.z) } : {}) });
           }
         }
@@ -155,7 +157,14 @@ function workbookSummary(XLSX: typeof import("xlsx"), workbook: WorkBook, fileNa
 
 async function readWorkbook(bytes: Uint8Array): Promise<WorkBook> {
   const XLSX = await import("xlsx");
-  try { return XLSX.read(bytes, { type: "array", cellDates: true, cellStyles: true, cellFormula: true, cellHTML: false, bookVBA: true }); }
+  try {
+    const workbook = XLSX.read(bytes, { type: "array", cellDates: true, cellStyles: true, cellFormula: true, cellHTML: false, bookVBA: true, sheetStubs: true });
+    if (bytes[0] === 80 && bytes[1] === 75) {
+      const files = unzipSync(bytes);
+      if (files["xl/styles.xml"]) applyOriginalStyles(workbook, files);
+    }
+    return workbook;
+  }
   catch { throw new Error("Impossibile leggere il template. Verifica che il file non sia protetto da password o danneggiato."); }
 }
 
@@ -186,7 +195,7 @@ export async function createReplicateXlsGrid(workbook: WorkBook, sheetName: stri
   const cells = Array.from({ length: rowCount }, (_, rowOffset) => Array.from({ length: columnCount }, (_, columnOffset) => {
     const row = decoded.s.r + rowOffset; const column = decoded.s.c + columnOffset; const address = XLSX.utils.encode_cell({ r: row, c: column });
     const cell = sheet[address] as StyledCell | undefined;
-    return { address, row, column, display: cell ? XLSX.utils.format_cell(cell) : "", formula: cell?.f ?? "", style: previewStyle(cell) };
+    return { address, row, column, display: cell ? XLSX.utils.format_cell(cell) : "", formula: cell?.f ?? "", style: originalStyles.get(workbook)?.get(`${sheetName}!${address}`) ?? previewStyle(cell) };
   }));
   const columns = sheet["!cols"] ?? [];
   const rows = sheet["!rows"] ?? [];
@@ -221,6 +230,7 @@ function extendSheetReference(XLSX: typeof import("xlsx"), sheet: WorkSheet, row
 
 function applyRegion(XLSX: typeof import("xlsx"), workbook: WorkBook, dataset: ReportDataset, region: ReplicateXlsRegion): void {
   if (region.mode === "static") return;
+  ({ dataset, region } = prepareReplicateRegion(dataset, region));
   const sheet = workbook.Sheets[region.sheetName];
   if (!sheet) return;
   const { start, end } = rangeCoordinates(region.range);
@@ -231,6 +241,7 @@ function applyRegion(XLSX: typeof import("xlsx"), workbook: WorkBook, dataset: R
     extendSheetReference(XLSX, sheet, row, column);
   };
   if (region.mode === "singleCell") {
+    if (region.query && region.includeHeaders) { fields.forEach((field, offset) => write(start.row, start.column + offset, field.name, 0, offset)); return; }
     write(start.row, start.column, dataset.rows[0]?.[fields[0]!.id] ?? null, 0, 0);
     return;
   }
@@ -254,6 +265,70 @@ async function buildReplicatedWorkbookWithSheetJs(config: ReplicateXlsConfig, da
 
 const OOXML_MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 const OOXML_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+const originalStyles = new WeakMap<WorkBook, Map<string, CSSProperties>>();
+
+// SheetJS CE does not expose the complete font/fill/border records. Read the
+// original OOXML styles for preview, while export retains the original ZIP parts.
+function applyOriginalStyles(workbook: WorkBook, files: Record<string, Uint8Array>): void {
+  const styles = parseXml(strFromU8(files["xl/styles.xml"]!), "styles.xml");
+  const theme = files["xl/theme/theme1.xml"] ? parseXml(strFromU8(files["xl/theme/theme1.xml"]!), "theme") : null;
+  const scheme = theme && firstXmlElement(theme, "clrScheme");
+  const themeNames = ["lt1", "dk1", "lt2", "dk2", "accent1", "accent2", "accent3", "accent4", "accent5", "accent6", "hlink", "folHlink"];
+  const indexed = ["000000", "FFFFFF", "FF0000", "00FF00", "0000FF", "FFFF00", "FF00FF", "00FFFF"];
+  const cssColor = (element: Element | null): string | undefined => {
+    if (!element) return undefined;
+    let rgb = element.getAttribute("rgb");
+    if (!rgb && element.hasAttribute("theme") && scheme) {
+      const entry = firstXmlElement(scheme, themeNames[Number(element.getAttribute("theme"))] ?? "dk1")?.firstElementChild;
+      rgb = entry?.getAttribute("lastClr") ?? entry?.getAttribute("val") ?? null;
+    }
+    if (!rgb && element.hasAttribute("indexed")) rgb = indexed[Number(element.getAttribute("indexed")) % 8] ?? null;
+    if (!rgb && element.getAttribute("auto") === "1") rgb = "000000";
+    const hex = color(rgb?.slice(-6));
+    if (!hex) return undefined;
+    const tint = Number(element.getAttribute("tint") ?? 0);
+    if (!tint) return hex;
+    return `#${[1, 3, 5].map(offset => { const n = parseInt(hex.slice(offset, offset + 2), 16); return Math.round(tint < 0 ? n * (1 + tint) : n + (255 - n) * tint).toString(16).padStart(2, "0"); }).join("")}`;
+  };
+  const records = (name: string, child: string) => { const element = firstXmlElement(styles, name); return element ? directChildren(element, child) : []; };
+  const fonts = records("fonts", "font"), fills = records("fills", "fill"), borders = records("borders", "border");
+  const formats = records("cellXfs", "xf").map(xf => {
+    const result: CSSProperties = { color: "#000000", backgroundColor: "#FFFFFF" };
+    const font = fonts[Number(xf.getAttribute("fontId") ?? 0)];
+    if (font) {
+      result.color = cssColor(firstXmlElement(font, "color")) ?? "#000000";
+      result.fontFamily = firstXmlElement(font, "name")?.getAttribute("val") ?? "Arial";
+      result.fontSize = `${Number(firstXmlElement(font, "sz")?.getAttribute("val") ?? 10) * 4 / 3}px`;
+      if (firstXmlElement(font, "b") && firstXmlElement(font, "b")?.getAttribute("val") !== "0") result.fontWeight = 700;
+      if (firstXmlElement(font, "i") && firstXmlElement(font, "i")?.getAttribute("val") !== "0") result.fontStyle = "italic";
+      if (firstXmlElement(font, "u")) result.textDecoration = "underline";
+    }
+    const fill = fills[Number(xf.getAttribute("fillId") ?? 0)];
+    if (fill) result.backgroundColor = cssColor(firstXmlElement(fill, "fgColor")) ?? "#FFFFFF";
+    const alignment = firstXmlElement(xf, "alignment");
+    const horizontal = alignment?.getAttribute("horizontal");
+    if (horizontal && ["left", "right", "center", "justify"].includes(horizontal)) result.textAlign = horizontal as CSSProperties["textAlign"];
+    const vertical = alignment?.getAttribute("vertical");
+    if (vertical) result.verticalAlign = vertical === "center" ? "middle" : vertical as CSSProperties["verticalAlign"];
+    if (alignment?.getAttribute("wrapText") === "1") result.whiteSpace = "normal";
+    const border = borders[Number(xf.getAttribute("borderId") ?? 0)];
+    for (const side of ["Top", "Right", "Bottom", "Left"] as const) {
+      const edge = border && firstXmlElement(border, side.toLowerCase());
+      const kind = edge?.getAttribute("style");
+      if (kind) result[`border${side}`] = `${kind === "thick" ? 3 : kind === "medium" ? 2 : 1}px ${kind === "double" ? "double" : kind.includes("dash") ? "dashed" : kind === "dotted" ? "dotted" : "solid"} ${cssColor(firstXmlElement(edge!, "color")) ?? "#000000"}`;
+    }
+    return result;
+  });
+  const map = new Map<string, CSSProperties>();
+  for (const [name, path] of worksheetPaths(files)) {
+    if (!files[path]) continue;
+    const doc = parseXml(strFromU8(files[path]!), path);
+    for (const cell of xmlElements(doc, "c")) {
+      map.set(`${name}!${cell.getAttribute("r")}`, formats[Number(cell.getAttribute("s") ?? 0)] ?? {});
+    }
+  }
+  originalStyles.set(workbook, map);
+}
 
 function parseXml(xml: string, label: string): XMLDocument {
   const document = new DOMParser().parseFromString(xml, "application/xml");
@@ -263,6 +338,15 @@ function parseXml(xml: string, label: string): XMLDocument {
 
 function firstXmlElement(parent: Document | Element, localName: string): Element | null {
   return parent.getElementsByTagNameNS("*", localName)[0] ?? null;
+}
+
+function xmlElements(parent: Document | Element, name: string): Element[] {
+  const document = parent.nodeType === 9 ? parent as Document : parent.ownerDocument!;
+  const walker = document.createTreeWalker(parent, 1);
+  const result: Element[] = [];
+  let next: Node | null;
+  while ((next = walker.nextNode())) if ((next as Element).localName === name) result.push(next as Element);
+  return result;
 }
 
 function directChildren(parent: Element, localName: string): Element[] {
@@ -373,7 +457,7 @@ function extendOoxmlDimension(document: XMLDocument): void {
   const sheetData = firstXmlElement(document, "sheetData");
   if (!sheetData) return;
   let minRow = Number.POSITIVE_INFINITY; let minColumn = Number.POSITIVE_INFINITY; let maxRow = 0; let maxColumn = 0;
-  for (const cell of Array.from(sheetData.getElementsByTagNameNS("*", "c"))) {
+  for (const cell of xmlElements(sheetData, "c")) {
     const coordinate = cellCoordinate(cell.getAttribute("r") ?? "");
     if (!coordinate) continue;
     minRow = Math.min(minRow, coordinate.row); minColumn = Math.min(minColumn, coordinate.column);
@@ -395,22 +479,31 @@ function extendOoxmlDimension(document: XMLDocument): void {
 
 function applyOoxmlRegion(document: XMLDocument, dataset: ReportDataset, region: ReplicateXlsRegion): void {
   if (region.mode === "static") return;
+  ({ dataset, region } = prepareReplicateRegion(dataset, region));
   const sheetData = firstXmlElement(document, "sheetData");
   if (!sheetData) throw new Error(`Il foglio “${region.sheetName}” non contiene dati modificabili.`);
   const { start, end } = rangeCoordinates(region.range);
   const fields = region.fieldIds.map(fieldId => dataset.fields.find(field => field.id === fieldId)).filter((field): field is ReportDataset["fields"][number] => Boolean(field));
   if (!fields.length) return;
+  const sourceFormats = sheetData.cloneNode(true) as Element;
+  // Remove the old data in the mapped area, including surplus template rows.
+  // Keep the original styled cells for extending the new output.
+  if (region.mode !== "singleCell") for (const cell of xmlElements(sheetData, "c")) {
+    const coordinate = cellCoordinate(cell.getAttribute("r") ?? "");
+    if (coordinate && coordinate.row >= start.row && coordinate.row <= end.row && coordinate.column >= start.column && coordinate.column <= end.column) writeOoxmlCell(document, cell, null);
+  }
   const write = (row: number, column: number, value: CellValue, styleRow: number, styleColumn: number) => {
     const templateRowIndex = Math.min(end.row, start.row + styleRow);
     const templateColumnIndex = Math.min(end.column, start.column + styleColumn);
-    const templateRow = findRow(sheetData, templateRowIndex);
-    const templateCell = findCell(sheetData, templateRowIndex, templateColumnIndex);
+    const templateRow = findRow(sourceFormats, templateRowIndex);
+    const templateCell = findCell(sourceFormats, templateRowIndex, templateColumnIndex);
     const rowElement = ensureRow(document, sheetData, row, templateRow);
     const cell = ensureCell(document, rowElement, row, column, templateCell);
     if (templateCell && !cell.hasAttribute("s") && templateCell.hasAttribute("s")) cell.setAttribute("s", templateCell.getAttribute("s")!);
     writeOoxmlCell(document, cell, value);
   };
   if (region.mode === "singleCell") {
+    if (region.query && region.includeHeaders) { fields.forEach((field, offset) => write(start.row, start.column + offset, field.name, 0, offset)); return; }
     write(start.row, start.column, dataset.rows[0]?.[fields[0]!.id] ?? null, 0, 0);
     return;
   }

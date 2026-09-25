@@ -2,6 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { isReportDate, REPORT_LIMITS } from "./data";
 import { DEFAULT_MAP_BACKGROUND, reportId, type CellValue, type ReportDashboard, type ReportDataset, type ReportDatasetSource, type ReportField, type ReportFilter, type ReportLayoutRow, type ReportTab, type ReportWidget } from "./types";
 import { materializeCalculatedFields } from "./calculated-fields";
+import { validateReplicateQuery } from "./replicate-query";
 
 const DATABASE_NAME = "mlsm-studio-reports";
 const STORE_NAME = "dashboards";
@@ -341,13 +342,13 @@ export function validateDashboard(value: unknown): ReportDashboard {
       const templateBase64 = string(config.templateBase64, "template Replica Excel", 21_000_000);
       if (!/^[A-Za-z0-9+/]*={0,2}$/.test(templateBase64)) invalid("il template Replica Excel non è codificato correttamente.");
       const regions = array(config.regions, 100, "aree Replica Excel").map((value, index) => {
-        const region = object(value, ["id", "sheetName", "range", "label", "description", "mode", "fieldIds", "includeHeaders"], `area Replica Excel ${index + 1}`);
+        const region = object(value, ["id", "sheetName", "range", "label", "description", "mode", "fieldIds", "includeHeaders", "query"], `area Replica Excel ${index + 1}`, ["query"]);
         const fieldIds = array(region.fieldIds, REPORT_LIMITS.fields, "campi area Replica Excel").map((value, fieldIndex) => id(value, `campo ${fieldIndex + 1} dell’area`));
         if (fieldIds.some(fieldId => !source.fields.some(field => field.id === fieldId))) invalid("un’area Replica Excel fa riferimento a un campo inesistente.");
         if (typeof region.includeHeaders !== "boolean") invalid("l’opzione intestazioni di Replica Excel deve essere booleana.");
         const range = string(region.range, "intervallo area Replica Excel", 50);
         if (!/^[A-Z]+[1-9]\d*:[A-Z]+[1-9]\d*$/i.test(range)) invalid("un intervallo Replica Excel non usa la notazione A1 valida.");
-        return { id: id(region.id, "ID area Replica Excel"), sheetName: string(region.sheetName, "foglio area Replica Excel", 300), range: range.toUpperCase(), label: string(region.label, "nome area Replica Excel", 120, true), description: string(region.description, "descrizione area Replica Excel", 1200, true), mode: choice(region.mode, ["static", "singleCell", "tableRows", "tableColumns"] as const, "modalità area Replica Excel"), fieldIds, includeHeaders: region.includeHeaders };
+        return { id: id(region.id, "ID area Replica Excel"), sheetName: string(region.sheetName, "foglio area Replica Excel", 300), range: range.toUpperCase(), label: string(region.label, "nome area Replica Excel", 120, true), description: string(region.description, "descrizione area Replica Excel", 1200, true), mode: choice(region.mode, ["static", "singleCell", "tableRows", "tableColumns"] as const, "modalità area Replica Excel"), fieldIds, includeHeaders: region.includeHeaders, ...(region.query ? { query: validateReplicateQuery(region.query, source) } : {}) };
       });
       unique(regions.map(region => region.id), "aree Replica Excel");
       replicateXls = {

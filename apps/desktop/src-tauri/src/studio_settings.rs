@@ -28,7 +28,7 @@ pub async fn studio_settings(app: tauri::AppHandle, request: Value) -> Result<Va
         let start = Instant::now();
         loop {
             if child.try_wait().map_err(|e| e.to_string())?.is_some() { break; }
-            if start.elapsed() > Duration::from_secs(60) { let _ = child.kill(); let _ = child.wait(); let _ = reader.join(); return Err("Settings / NVIDIA timeout".into()); }
+            if start.elapsed() > Duration::from_secs(195) { let _ = child.kill(); let _ = child.wait(); let _ = reader.join(); return Err("AI provider timeout (195 s)".into()); }
             std::thread::sleep(Duration::from_millis(30));
         }
         let text = reader.join().map_err(|_| "Settings output failed")?.map_err(|e| e.to_string())?;

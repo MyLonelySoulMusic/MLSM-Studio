@@ -5,6 +5,8 @@ import type { AppState, ArticleInput, BlogConnection, LibraryMedia, QueueItem, Q
 import { getAutoPostAiStatus, mapAutoPostCategories, type AutoPostAiStatus } from "./category-ai";
 import { CATEGORY_VECTOR_MODEL_LABEL, CATEGORY_VECTOR_THRESHOLD, mapAutoPostCategoriesWithVectorDb, readCategoryAssociationMode, readCategorySelectionMode, readCategoryVectorThreshold, writeCategoryAssociationMode, writeCategorySelectionMode, writeCategoryVectorThreshold, type CategoryAssociationMode, type CategorySelectionMode } from "./category-vector";
 import { useUiPreferences } from "../services/ui-preferences";
+import { articleImageUrl } from "./article-preview";
+import { ArticlePreviewModal } from "./ArticlePreviewModal";
 import "./autopost.css";
 
 type Tab = "import" | "queue" | "library" | "stats" | "settings";
@@ -94,6 +96,14 @@ function MediaBadge({ media, language }: { media: RecognizedMedia; language: Lan
   return <span className={`autopost-media-badge autopost-is-${media.provider}`}><b>{media.provider === "youtube" ? "▶" : "●"}</b>{label}</span>;
 }
 
+function ArticleCover({ article }: { article: ArticleInput }) {
+  const [failed, setFailed] = useState(false);
+  const imageUrl = articleImageUrl(article);
+  return imageUrl && !failed
+    ? <img className="autopost-article-cover" src={imageUrl} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(true)} />
+    : <div className="autopost-article-cover autopost-article-cover-empty" aria-hidden="true">MLSM</div>;
+}
+
 function Empty({ children }: { children: string }) { return <div className="autopost-empty"><span>◇</span><p>{children}</p></div>; }
 
 function profileUrl(value: string) {
@@ -109,6 +119,7 @@ export function AutoPostApp({ onHome }: { onHome: () => void }) {
   const [state, setState] = useState<AppState | null>(null);
   const [articleDocument, setArticleDocument] = useState<unknown>(null);
   const [preview, setPreview] = useState<ArticleInput[]>([]);
+  const [previewArticle, setPreviewArticle] = useState<ArticleInput | null>(null);
   const [articleBlogIds, setArticleBlogIds] = useState<string[][]>([]);
   const [articleCategories, setArticleCategories] = useState<Array<Record<string, number[]>>>([]);
   const [sourceBlogId, setSourceBlogId] = useState("");
@@ -166,7 +177,7 @@ export function AutoPostApp({ onHome }: { onHome: () => void }) {
   const loadDocument = (value: unknown, name: string) => {
     const parsed = parseArticleDocument(value);
     const onlyBlog = state?.blogs.length === 1 ? state.blogs[0] : undefined;
-    setArticleDocument(value); setPreview(parsed.articles); setFileName(name);
+    setArticleDocument(value); setPreview(parsed.articles); setPreviewArticle(null); setFileName(name);
     setSourceBlogId(onlyBlog?.id || "");
     setArticleBlogIds(parsed.articles.map(() => onlyBlog ? [onlyBlog.id] : []));
     setArticleCategories(parsed.articles.map((article) => onlyBlog ? { [onlyBlog.id]: article.categories } : {}));
@@ -415,7 +426,15 @@ export function AutoPostApp({ onHome }: { onHome: () => void }) {
           </div>
           {sourceBlogId && <div className="autopost-bulk-mapping"><span>{language === "it" ? "Associa un blog a tutti gli articoli" : "Map one blog across all articles"}</span>{state?.blogs.filter(blog => blog.id !== sourceBlogId).map(blog => <button key={blog.id} disabled={associationBusy} onClick={() => void mapTargetBlogForAllArticles(blog.id)}>{language === "it" ? `Associa tutti · ${blog.name}` : `Map all · ${blog.name}`}</button>)}</div>}
           {associationProgress && <div className={`autopost-association-progress ${associationProgress.complete ? "autopost-is-complete" : ""}`} role="status" aria-live="polite"><div className="autopost-association-orbit"><i /><i /><i /></div><div><strong>{categoryAssociationMode === "vector" ? "Vector DB locale" : "LLM"} · {associationProgress.done}/{associationProgress.total}</strong><span>{associationProgress.label}</span><div className="autopost-association-track"><i style={{ width: `${Math.round((associationProgress.done / Math.max(1, associationProgress.total)) * 100)}%` }} /></div></div><b>{Math.round((associationProgress.done / Math.max(1, associationProgress.total)) * 100)}%</b></div>}
-          <div className="autopost-article-preview-grid">{preview.map((article, index) => <article key={`${article.title}-${index}`}><small>#{String(index + 1).padStart(2, "0")}</small><h3>{article.title}</h3><p>{article.content.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").slice(0, 150)}</p><div>{article.media.length ? article.media.map(media => <MediaBadge key={`${media.provider}-${media.id}`} media={media} language={language} />) : <span className="autopost-muted">{t.noEmbed}</span>}</div><div className="autopost-article-targets"><strong>{language === "it" ? "Pubblica su" : "Publish to"}</strong><div className="autopost-target-blog-list">{state?.blogs.map(blog => { const mapping = categoryMapping[`${index}:${blog.id}`]; return <label key={blog.id} className={mapping?.state === "loading" ? "autopost-is-mapping" : ""}><input type="checkbox" disabled={!sourceBlogId || associationBusy || mapping?.state === "loading"} checked={articleBlogIds[index]?.includes(blog.id) || false} onChange={() => void toggleArticleBlog(index, blog.id)} />{blog.name}{blog.id === sourceBlogId ? <em>{language === "it" ? "origine" : "source"}</em> : mapping?.state === "loading" ? <em>{categoryAssociationMode === "vector" ? "VECTOR…" : "AI…"}</em> : null}</label>; })}</div>{articleBlogIds[index]?.map(blogId => { const blog = state?.blogs.find(entry => entry.id === blogId); const mapping = categoryMapping[`${index}:${blogId}`]; return blog ? <label className="autopost-category-picker" key={blogId}><span>{blog.name} · {language === "it" ? "categorie" : "categories"}{mapping?.label ? <em className={`autopost-mapping-result autopost-is-${mapping?.state}`}>{mapping?.label}</em> : null}{mapping?.feedback?.ranking?.length ? <VectorRanking ranking={mapping?.feedback.ranking} language={language} /> : null}</span><select multiple disabled={associationBusy || mapping?.state === "loading"} value={(articleCategories[index]?.[blogId] || []).map(String)} onChange={event => setCategoriesForArticle(index, blogId, Array.from(event.currentTarget.selectedOptions, option => Number(option.value)))}>{blog.categories.map(category => <option key={category.id} value={category.id}>{category.name} (#{category.id})</option>)}</select></label> : null; })}</div></article>)}</div>
+          <div className="autopost-article-preview-grid">{preview.map((article, index) => {
+            return <article key={`${article.title}-${index}`}>
+              <ArticleCover article={article} />
+              <div className="autopost-article-card-body"><small>#{String(index + 1).padStart(2, "0")}</small><h3>{article.title}</h3><p>{article.content.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").slice(0, 150)}</p>
+                <div className="autopost-article-card-toolbar"><div>{article.media.length ? article.media.map(media => <MediaBadge key={`${media.provider}-${media.id}`} media={media} language={language} />) : <span className="autopost-muted">{t.noEmbed}</span>}</div><button type="button" onClick={() => setPreviewArticle(article)}>{language === "it" ? "Anteprima" : "Preview"}</button></div>
+                <div className="autopost-article-targets"><strong>{language === "it" ? "Pubblica su" : "Publish to"}</strong><div className="autopost-target-blog-list">{state?.blogs.map(blog => { const mapping = categoryMapping[`${index}:${blog.id}`]; return <label key={blog.id} className={mapping?.state === "loading" ? "autopost-is-mapping" : ""}><input type="checkbox" disabled={!sourceBlogId || associationBusy || mapping?.state === "loading"} checked={articleBlogIds[index]?.includes(blog.id) || false} onChange={() => void toggleArticleBlog(index, blog.id)} />{blog.name}{blog.id === sourceBlogId ? <em>{language === "it" ? "origine" : "source"}</em> : mapping?.state === "loading" ? <em>{categoryAssociationMode === "vector" ? "VECTOR…" : "AI…"}</em> : null}</label>; })}</div>{articleBlogIds[index]?.map(blogId => { const blog = state?.blogs.find(entry => entry.id === blogId); const mapping = categoryMapping[`${index}:${blogId}`]; return blog ? <label className="autopost-category-picker" key={blogId}><span>{blog.name} · {language === "it" ? "categorie" : "categories"}{mapping?.label ? <em className={`autopost-mapping-result autopost-is-${mapping?.state}`}>{mapping?.label}</em> : null}{mapping?.feedback?.ranking?.length ? <VectorRanking ranking={mapping?.feedback.ranking} language={language} /> : null}</span><select multiple disabled={associationBusy || mapping?.state === "loading"} value={(articleCategories[index]?.[blogId] || []).map(String)} onChange={event => setCategoriesForArticle(index, blogId, Array.from(event.currentTarget.selectedOptions, option => Number(option.value)))}>{blog.categories.map(category => <option key={category.id} value={category.id}>{category.name} (#{category.id})</option>)}</select></label> : null; })}</div>
+              </div>
+            </article>;
+          })}</div>
         </section>}
       </section>}
       {tab === "queue" && <section className="autopost-page autopost-queue-page">
@@ -449,6 +468,7 @@ export function AutoPostApp({ onHome }: { onHome: () => void }) {
         <div className="autopost-security-note"><svg viewBox="0 0 24 24"><path d="M6 10V7a6 6 0 0 1 12 0v3M5 10h14v11H5Z" /></svg><div><strong>{t.credentialTitle}</strong><p>{t.credentialText}</p><small>{t.localData}: {state?.dataDirectory || "—"}</small></div></div>
       </section>}
     </main>
+    {previewArticle && <ArticlePreviewModal article={previewArticle} language={language} blogName={state?.blogs.find(blog => blog.id === sourceBlogId)?.name} onClose={() => setPreviewArticle(null)} />}
     {notice && <div className={`autopost-toast autopost-is-${notice.kind}`} role="status"><span>{notice.kind === "ok" ? "✓" : "!"}</span><p>{notice.text}</p><button aria-label={t.close} onClick={() => setNotice(null)}>×</button></div>}
     {busy && <div className="autopost-busy-line" />}
   </div>;

@@ -1,6 +1,6 @@
 import type { Aggregation, CellValue, FieldType, ReportDataset, ReportField } from "./types";
 
-export const MLSM_FORMULA_GUIDE = `MLSM Formula is the calculated-field language used by MLSM Reports. Its syntax is inspired by Tableau calculated fields and spreadsheet formulas.
+export const MLSM_FORMULA_GUIDE = `MLSM Formula is the calculated-field language used by MLSM Reports. Use it to calculate values for individual rows or aggregated groups.
 
 FIELDS AND LITERALS
 - Reference a dataset field with square brackets: [Revenue], [Units sold], [Country].
@@ -36,7 +36,7 @@ EXAMPLES
 - Conditional aggregate: SUM(IF([Status] = 'Paid', [Revenue], 0))
 - Friendly label: IF([Revenue] >= 1000, 'High', 'Standard')`;
 
-export const MLSM_FORMULA_GUIDE_IT = `MLSM Formula è il linguaggio dei campi calcolati di MLSM Reports. La sintassi è ispirata ai campi calcolati di Tableau e alle formule dei fogli di calcolo.
+export const MLSM_FORMULA_GUIDE_IT = `MLSM Formula è il linguaggio dei campi calcolati di MLSM Reports. Permette di calcolare valori per singole righe o gruppi aggregati.
 
 CAMPI E VALORI
 - Racchiudi il nome di un campo tra parentesi quadre: [Ricavi], [Unità vendute], [Paese].

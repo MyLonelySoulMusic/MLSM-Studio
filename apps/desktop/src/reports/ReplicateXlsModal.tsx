@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type MouseEvent } from "react";
 import type { WorkBook } from "xlsx";
+import { ReportsModelSelector } from "./ReportsModelSelector";
 import { ReportIcon } from "./ReportIcon";
 import { suggestReplicateXlsModel } from "./reports-ai";
 import {
@@ -46,6 +47,18 @@ export function ReplicateXlsModal({ widget, dataset, language, onSave, onClose }
   const [busy, setBusy] = useState<"upload" | "ai" | "test" | "export" | null>(null);
   const [error, setError] = useState("");
   const [testReady, setTestReady] = useState(false);
+  const [aiProgress, setAiProgress] = useState("");
+  const [elapsed, setElapsed] = useState(0);
+  const aiController = useRef<AbortController | null>(null);
+  const askAiRef = useRef(askAi);
+  useEffect(() => { askAiRef.current = askAi; });
+  useEffect(() => () => { aiController.current?.abort(); }, []);
+  useEffect(() => {
+    if (busy !== "ai") return;
+    const started = Date.now();
+    const timer = window.setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000);
+    return () => clearInterval(timer);
+  }, [busy]);
 
   async function showGrid(source: WorkBook, sheetName: string) {
     const next = await createReplicateXlsGrid(source, sheetName);
@@ -65,17 +78,29 @@ export function ReplicateXlsModal({ widget, dataset, language, onSave, onClose }
       if (!active) return;
       setGrid(next);
       setDraft(current => ({ ...current, sheetName, range: current.sheetName === sheetName ? current.range : `${next.cells[0]?.[0]?.address ?? "A1"}:${next.cells[0]?.[0]?.address ?? "A1"}` }));
+      if (!storedConfig.regions.length) void askAiRef.current(storedConfig, result.summary);
     }).catch(reason => { if (active) setError(reason instanceof Error ? reason.message : String(reason)); });
     return () => { active = false; };
   }, [widget.replicateXls]);
 
   async function askAi(nextConfig: ReplicateXlsConfig, nextSummary: ReplicateXlsTemplateSummary, feedback = "") {
-    setBusy("ai"); setError("");
+    aiController.current?.abort();
+    const controller = new AbortController();
+    aiController.current = controller;
+    setBusy("ai"); setError(""); setTestReady(false); setElapsed(0);
+    setAiProgress(language === "en" ? "Preparing template analysis…" : "Preparazione analisi del template…");
     try {
-      const suggestion = await suggestReplicateXlsModel(nextSummary, dataset, language, nextConfig.templateBase64 ? nextConfig : null, feedback);
-      setConfig(current => ({ ...current, regions: suggestion.regions, aiSummary: suggestion.summary, aiProvider: suggestion.provider, aiModel: suggestion.model, correctionNotes: "" }));
-    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
-    finally { setBusy(null); }
+      const suggestion = await suggestReplicateXlsModel(nextSummary, dataset, language, nextConfig.templateBase64 ? nextConfig : null, feedback, controller.signal, setAiProgress);
+      controller.signal.throwIfAborted();
+      const generated = { ...nextConfig, regions: suggestion.regions, aiSummary: suggestion.summary, aiProvider: suggestion.provider, aiModel: suggestion.model, correctionNotes: "" };
+      setConfig(generated);
+      setAiProgress(language === "en" ? "Testing the model against the dataset…" : "Verifica del modello sui dati…");
+      const result = await buildReplicatedWorkbook(generated, dataset);
+      controller.signal.throwIfAborted();
+      setWorkbook(result); await showGrid(result, generated.sheetName);
+      setConfig({ ...generated, lastTestedAt: new Date().toISOString() }); setTestReady(true);
+    } catch (reason) { if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { if (aiController.current === controller) { aiController.current = null; setBusy(null); } }
   }
 
   async function upload(file: File) {
@@ -101,9 +126,11 @@ export function ReplicateXlsModal({ widget, dataset, language, onSave, onClose }
   }
 
   function addRegion() {
+    if (busy) return;
     if (!draft.sheetName || !draft.range || !draft.description.trim()) { setError(language === "en" ? "Describe what happens in the selected region." : "Spiega cosa avviene nell’area selezionata."); return; }
     if (draft.mode !== "static" && !draft.fieldIds.length) { setError(language === "en" ? "Select at least one dataset field." : "Seleziona almeno un campo del dataset."); return; }
     setConfig(current => ({ ...current, regions: [...current.regions, { ...draft, id: reportId(), label: draft.label.trim() || `Area ${current.regions.length + 1}` }] }));
+    setTestReady(false);
     setDraft(current => ({ ...current, label: "", description: "" })); setError("");
   }
 
@@ -124,7 +151,7 @@ export function ReplicateXlsModal({ widget, dataset, language, onSave, onClose }
   };
   const regionAt = (row: number, column: number) => config.regions.find(region => region.sheetName === config.sheetName && rangeContains(region.range, row, column));
   const busyLabel = busy === "ai"
-    ? (language === "en" ? "AI is analyzing the workbook structure…" : "L’AI sta analizzando la struttura del workbook…")
+    ? `${aiProgress} · ${elapsed} s`
     : busy === "upload"
       ? (language === "en" ? "Reading the original template…" : "Lettura del template originale…")
       : busy === "test"
@@ -133,27 +160,29 @@ export function ReplicateXlsModal({ widget, dataset, language, onSave, onClose }
           ? (language === "en" ? "Generating the report without altering its design…" : "Generazione del report senza alterarne il design…")
           : "";
 
-  return <div className="rpt-modal-backdrop rpt-replicate-backdrop" onMouseUp={() => setDragStart(null)}>
+  return <div className="rpt-modal-backdrop rpt-replicate-backdrop" data-ui-copy onMouseUp={() => setDragStart(null)}>
     <section className="rpt-modal rpt-replicate-modal" role="dialog" aria-modal="true" aria-labelledby="rpt-replicate-title">
-      <header><div><span className="rpt-eyebrow">REPORTS · REPLICATE XLS</span><h2 id="rpt-replicate-title">{t.title}</h2><p>{language === "en" ? "Teach MLSM how your workbook is structured, preserve its design and extend it as new records arrive." : "Insegna a MLSM come è costruito il workbook, conserva il design e fallo crescere quando arrivano nuovi dati."}</p></div><button className="rpt-icon-button rpt-animation-close" aria-label="Chiudi" onClick={onClose}><ReportIcon name="close" /></button></header>
-      <div className="rpt-replicate-steps"><span className={config.templateBase64 ? "is-done" : "is-active"}>1 <b>Template</b></span><span className={config.regions.length ? "is-done" : config.templateBase64 ? "is-active" : ""}>2 <b>Modello</b></span><span className={testReady ? "is-done" : config.regions.length ? "is-active" : ""}>3 <b>Test</b></span></div>
+      <header><div><span className="rpt-eyebrow">REPORTS · REPLICATE XLS</span><h2 id="rpt-replicate-title">{t.title}</h2><p>{language === "en" ? "Teach MLSM how your workbook is structured, preserve its design and extend it as new records arrive." : "Insegna a MLSM come è costruito il workbook, conserva il design e fallo crescere quando arrivano nuovi dati."}</p></div><button className="rpt-icon-button rpt-animation-close" aria-label={language === "en" ? "Close" : "Chiudi"} onClick={onClose}><ReportIcon name="close" /></button></header>
+      <div className="rpt-replicate-steps"><span className={config.templateBase64 ? "is-done" : "is-active"}>1 <b>Template</b></span><span className={config.regions.length ? "is-done" : config.templateBase64 ? "is-active" : ""}>2 <b>{language === "en" ? "Model" : "Modello"}</b></span><span className={testReady ? "is-done" : config.regions.length ? "is-active" : ""}>3 <b>Test</b></span></div>
       <div className="rpt-replicate-body">
         <aside className="rpt-replicate-sidebar">
-          <section><h3>{language === "en" ? "Data source" : "Base dati"}</h3><strong>{dataset.name}</strong><small>{dataset.rows.length.toLocaleString()} {language === "en" ? "rows" : "righe"} · {dataset.fields.length} {language === "en" ? "fields" : "campi"}</small></section>
-          <section><h3>{language === "en" ? "Original template" : "Template originale"}</h3><input ref={input} className="rpt-sr-only" type="file" accept=".xlsx,.xls,.xlsm,.xlsb,.ods" onChange={event => { const file = event.target.files?.[0]; if (file) void upload(file); event.currentTarget.value = ""; }} /><button className="rpt-button rpt-full-width" disabled={Boolean(busy)} onClick={() => input.current?.click()}><ReportIcon name="file" />{config.templateName || t.upload}</button>{config.templateName && <small>{language === "en" ? "Stored inside this dashboard model." : "Memorizzato nel modello della dashboard."}</small>}</section>
+          <section><ReportsModelSelector task="replicate" language={language} disabled={Boolean(busy)} /></section>
+          <section><h3>{language === "en" ? "Data source" : "Base dati"}</h3><strong><span data-no-localize>{dataset.name}</span></strong><small>{dataset.rows.length.toLocaleString()} {language === "en" ? "rows" : "righe"} · {dataset.fields.length} {language === "en" ? "fields" : "campi"}</small></section>
+          <section><h3>{language === "en" ? "Original template" : "Template originale"}</h3><input ref={input} className="rpt-sr-only" type="file" accept=".xlsx,.xls,.xlsm,.xlsb,.ods" onChange={event => { const file = event.target.files?.[0]; if (file) void upload(file); event.currentTarget.value = ""; }} /><button className="rpt-button rpt-full-width" disabled={Boolean(busy)} onClick={() => input.current?.click()}><ReportIcon name="file" /><span data-no-localize>{config.templateName || t.upload}</span></button>{config.templateName && <small>{language === "en" ? "Stored inside this dashboard model." : "Memorizzato nel modello della dashboard."}</small>}</section>
           {summary && <section><h3>{language === "en" ? "AI model" : "Modello AI"}</h3><button className="rpt-button rpt-button-primary rpt-full-width" disabled={Boolean(busy)} onClick={() => void askAi(config, summary)}><ReportIcon name="sparkle" />{busy === "ai" ? (language === "en" ? "Analyzing…" : "Analisi…") : t.analyze}</button><textarea rows={5} placeholder={language === "en" ? "Explain what the AI should correct…" : "Spiega cosa deve correggere l’AI…"} value={config.correctionNotes} onChange={event => setConfig(current => ({ ...current, correctionNotes: event.target.value }))} /><button className="rpt-button rpt-full-width" disabled={Boolean(busy) || !config.correctionNotes.trim()} onClick={() => void askAi(config, summary, config.correctionNotes)}>{t.refine}</button>{config.aiProvider && <small>{config.aiProvider} · {config.aiModel}</small>}</section>}
         </aside>
         <main className="rpt-replicate-sheet-panel">
-          {workbook && grid ? <><div className="rpt-replicate-sheet-toolbar"><select aria-label="Foglio" value={config.sheetName} onChange={event => { const sheetName = event.target.value; setConfig(current => ({ ...current, sheetName })); void showGrid(workbook, sheetName); }}>{workbook.SheetNames.map(name => <option key={name}>{name}</option>)}</select><span>{draft.range}</span><small>{grid.truncated ? (language === "en" ? "Preview limited to 80 × 40 cells" : "Anteprima limitata a 80 × 40 celle") : `${grid.rowCount} × ${grid.columnCount}`}</small></div>
-            <div className="rpt-replicate-grid-wrap"><table className="rpt-replicate-grid"><colgroup><col className="rpt-replicate-row-number" />{grid.columnWidths.map((width, index) => <col key={index} style={{ width }} />)}</colgroup><thead><tr><th /><>{grid.cells[0]?.map(cell => <th key={cell.column} onClick={() => { const first = grid.cells[0]?.[0]; const last = grid.cells.at(-1)?.[cell.column - grid.startColumn]; if (first && last) { const range = selectionRange({ row: first.row, column: cell.column }, { row: last.row, column: cell.column }); setDraft(current => ({ ...current, range })); } }}>{cell.address.replace(/\d+$/, "")}</th>)}</></tr></thead><tbody>{grid.cells.map((row, rowIndex) => <tr key={rowIndex} style={{ height: grid.rowHeights[rowIndex] }}><th onClick={() => { const first = row[0]; const last = row.at(-1); if (first && last) setDraft(current => ({ ...current, range: selectionRange({ row: first.row, column: first.column }, { row: last.row, column: last.column }) })); }}>{row[0]!.row + 1}</th>{row.map(cell => { const region = regionAt(cell.row, cell.column); return <td key={cell.address} title={cell.formula ? `=${cell.formula}` : cell.display} className={region ? "is-mapped" : ""} style={{ ...cell.style, "--region-color": region ? `hsl(${(config.regions.indexOf(region) * 71 + 326) % 360} 78% 55%)` : undefined } as CSSProperties} onMouseDown={(event: MouseEvent) => { event.preventDefault(); setDragStart({ row: cell.row, column: cell.column }); selectCell(cell.row, cell.column); }} onMouseEnter={() => { if (dragStart) selectCell(cell.row, cell.column); }} onMouseUp={() => selectCell(cell.row, cell.column, true)}>{cell.display}</td>; })}</tr>)}</tbody></table></div></> : <div className="rpt-replicate-empty"><ReportIcon name="replicateXls" /><h3>{t.empty}</h3><button className="rpt-button rpt-button-primary" onClick={() => input.current?.click()}>{t.upload}</button></div>}
+          {workbook && grid ? <><div className="rpt-replicate-sheet-toolbar"><select aria-label={language === "en" ? "Sheet" : "Foglio"} value={config.sheetName} onChange={event => { const sheetName = event.target.value; setConfig(current => ({ ...current, sheetName })); void showGrid(workbook, sheetName); }}>{workbook.SheetNames.map(name => <option key={name}>{name}</option>)}</select><span>{draft.range}</span><small>{grid.truncated ? (language === "en" ? "Preview limited to 80 × 40 cells" : "Anteprima limitata a 80 × 40 celle") : `${grid.rowCount} × ${grid.columnCount}`}</small></div>
+            <div className="rpt-replicate-grid-wrap"><table className="rpt-replicate-grid"><colgroup><col className="rpt-replicate-row-number" />{grid.columnWidths.map((width, index) => <col key={index} style={{ width }} />)}</colgroup><thead><tr><th /><>{grid.cells[0]?.map(cell => <th key={cell.column} onClick={() => { const first = grid.cells[0]?.[0]; const last = grid.cells.at(-1)?.[cell.column - grid.startColumn]; if (first && last) { const range = selectionRange({ row: first.row, column: cell.column }, { row: last.row, column: cell.column }); setDraft(current => ({ ...current, range })); } }}>{cell.address.replace(/\d+$/, "")}</th>)}</></tr></thead><tbody>{grid.cells.map((row, rowIndex) => <tr key={rowIndex} style={{ height: grid.rowHeights[rowIndex] }}><th onClick={() => { const first = row[0]; const last = row.at(-1); if (first && last) setDraft(current => ({ ...current, range: selectionRange({ row: first.row, column: first.column }, { row: last.row, column: last.column }) })); }}>{row[0]!.row + 1}</th>{row.map(cell => { const region = regionAt(cell.row, cell.column); return <td data-no-localize key={cell.address} title={cell.formula ? `=${cell.formula}` : cell.display} className={[region ? "is-mapped" : "", rangeContains(draft.range, cell.row, cell.column) ? "is-selected" : ""].join(" ")} style={{ ...cell.style, "--region-color": region ? `hsl(${(config.regions.indexOf(region) * 71 + 326) % 360} 78% 55%)` : undefined } as CSSProperties} onMouseDown={(event: MouseEvent) => { event.preventDefault(); setDragStart({ row: cell.row, column: cell.column }); selectCell(cell.row, cell.column); }} onMouseEnter={() => { if (dragStart) selectCell(cell.row, cell.column); }} onMouseUp={() => selectCell(cell.row, cell.column, true)}>{cell.display}</td>; })}</tr>)}</tbody></table></div></> : <div className="rpt-replicate-empty"><ReportIcon name="replicateXls" /><h3>{t.empty}</h3><button className="rpt-button rpt-button-primary" onClick={() => input.current?.click()}>{t.upload}</button></div>}
         </main>
         <aside className="rpt-replicate-model">
-          <section className="rpt-replicate-ai-summary"><span><ReportIcon name="sparkle" />{language === "en" ? "AI STRUCTURE ANALYSIS" : "ANALISI STRUTTURA AI"}</span><p>{config.aiSummary || (language === "en" ? "After upload, the selected Reports AI analyzes sheets and proposes a first editable model." : "Dopo il caricamento, l’AI scelta in Reports analizza i fogli e propone un primo modello modificabile.")}</p></section>
-          {config.templateBase64 && <section className="rpt-replicate-region-form"><h3>{language === "en" ? "Describe selected region" : "Descrivi l’area selezionata"}</h3><label>{language === "en" ? "Range" : "Intervallo"}<input value={draft.range} onChange={event => setDraft(current => ({ ...current, range: event.target.value.toUpperCase() }))} /></label><label>{language === "en" ? "Name" : "Nome"}<input value={draft.label} onChange={event => setDraft(current => ({ ...current, label: event.target.value }))} /></label><label>{language === "en" ? "Behavior" : "Comportamento"}<select value={draft.mode} onChange={event => setDraft(current => ({ ...current, mode: event.target.value as ReplicateXlsRegionMode }))}>{(["static", "singleCell", "tableRows", "tableColumns"] as const).map(mode => <option key={mode} value={mode}>{modeLabel(mode, language)}</option>)}</select></label><label>{language === "en" ? "What happens here" : "Cosa avviene qui"}<textarea rows={3} value={draft.description} onChange={event => setDraft(current => ({ ...current, description: event.target.value }))} /></label>{draft.mode !== "static" && <fieldset><legend>{language === "en" ? "Dataset fields" : "Campi del dataset"}</legend>{dataset.fields.map(field => <label key={field.id}><input type="checkbox" checked={draft.fieldIds.includes(field.id)} onChange={event => setDraft(current => ({ ...current, fieldIds: event.target.checked ? [...current.fieldIds, field.id] : current.fieldIds.filter(id => id !== field.id) }))} /><span>{field.name}</span><small>{field.type}</small></label>)}</fieldset>}{draft.mode === "tableRows" || draft.mode === "tableColumns" ? <label className="rpt-replicate-check"><input type="checkbox" checked={draft.includeHeaders} onChange={event => setDraft(current => ({ ...current, includeHeaders: event.target.checked }))} />{language === "en" ? "Write field names" : "Scrivi nomi dei campi"}</label> : null}<button className="rpt-button rpt-full-width" onClick={addRegion}><ReportIcon name="plus" />{t.area}</button></section>}
-          <section className="rpt-replicate-regions"><h3>{language === "en" ? "Mapped regions" : "Aree mappate"} <span>{config.regions.length}</span></h3>{config.regions.map(region => <article key={region.id}><div><strong>{region.label}</strong><small>{region.sheetName} · {region.range} · {modeLabel(region.mode, language)}</small></div><p>{region.description}</p><button className="rpt-icon-button" aria-label="Elimina area" onClick={() => setConfig(current => ({ ...current, regions: current.regions.filter(item => item.id !== region.id) }))}><ReportIcon name="trash" /></button></article>)}</section>
+          <section className="rpt-replicate-ai-summary"><span><ReportIcon name="sparkle" />{language === "en" ? "AI STRUCTURE ANALYSIS" : "ANALISI STRUTTURA AI"}</span><p><span data-no-localize>{config.aiSummary || (language === "en" ? "After upload, the selected Reports AI analyzes sheets and proposes a first editable model." : "Dopo il caricamento, l’AI scelta in Reports analizza i fogli e propone un primo modello modificabile.")}</span></p></section>
+          {config.templateBase64 && <section className="rpt-replicate-region-form"><h3>{language === "en" ? "Describe selected region" : "Descrivi l’area selezionata"}</h3><label>{language === "en" ? "Range" : "Intervallo"}<input value={draft.range} onChange={event => setDraft(current => ({ ...current, range: event.target.value.toUpperCase() }))} /></label><label>{language === "en" ? "Name" : "Nome"}<input value={draft.label} onChange={event => setDraft(current => ({ ...current, label: event.target.value }))} /></label><label>{language === "en" ? "Behavior" : "Comportamento"}<select value={draft.mode} onChange={event => setDraft(current => ({ ...current, mode: event.target.value as ReplicateXlsRegionMode }))}>{(["static", "singleCell", "tableRows", "tableColumns"] as const).map(mode => <option key={mode} value={mode}>{modeLabel(mode, language)}</option>)}</select></label><label>{language === "en" ? "What happens here" : "Cosa avviene qui"}<textarea rows={3} value={draft.description} onChange={event => setDraft(current => ({ ...current, description: event.target.value }))} /></label>{draft.mode !== "static" && <fieldset><legend>{language === "en" ? "Dataset fields" : "Campi del dataset"}</legend>{dataset.fields.map(field => <label key={field.id}><input type="checkbox" checked={draft.fieldIds.includes(field.id)} onChange={event => setDraft(current => ({ ...current, fieldIds: event.target.checked ? [...current.fieldIds, field.id] : current.fieldIds.filter(id => id !== field.id) }))} /><span><span data-no-localize>{field.name}</span></span><small>{language === "en" ? field.type : ({ text: "testo", number: "numero", date: "data", boolean: "booleano" }[field.type])}</small></label>)}</fieldset>}{draft.mode === "tableRows" || draft.mode === "tableColumns" ? <label className="rpt-replicate-check"><input type="checkbox" checked={draft.includeHeaders} onChange={event => setDraft(current => ({ ...current, includeHeaders: event.target.checked }))} />{language === "en" ? "Write field names" : "Scrivi nomi dei campi"}</label> : null}<button className="rpt-button rpt-full-width" onClick={addRegion}><ReportIcon name="plus" />{t.area}</button></section>}
+          <section className="rpt-replicate-regions"><h3>{language === "en" ? "Mapped regions" : "Aree mappate"} <span>{config.regions.length}</span></h3>{config.regions.map(region => <article key={region.id}><div><strong><span data-no-localize>{region.label}</span></strong><small><span data-no-localize>{region.sheetName}</span> · {region.range} · {modeLabel(region.mode, language)}</small></div><p><span data-no-localize>{region.description}</span></p><button className="rpt-icon-button" aria-label={language === "en" ? "Delete region" : "Elimina area"} onClick={() => setConfig(current => ({ ...current, regions: current.regions.filter(item => item.id !== region.id) }))}><ReportIcon name="trash" /></button></article>)}</section>
         </aside>
       </div>
-      {error && <div className="rpt-replicate-error" role="alert">{error}</div>}
+      <div>{busy === "ai" && <div className="rpt-replicate-progress" role="status"><progress aria-label={language === "en" ? "AI analysis" : "Analisi AI"} /><span>{busyLabel}</span><button className="rpt-button" onClick={() => { aiController.current?.abort(); setBusy(null); }}>{language === "en" ? "Cancel analysis" : "Annulla analisi"}</button></div>}
+      {error && <div className="rpt-replicate-error" role="alert">{error}</div>}</div>
       <footer><span aria-live="polite">{busy ? busyLabel : testReady ? (language === "en" ? "Test generated: inspect the populated sheet above." : "Test generato: controlla il foglio popolato qui sopra.") : (language === "en" ? "The original template is never modified." : "Il template originale non viene mai modificato.")}</span><button className="rpt-button" disabled={!config.templateBase64 || !config.regions.length || Boolean(busy)} onClick={() => void testModel()}>{t.test}</button><button className="rpt-button" disabled={!config.templateBase64 || !config.regions.length || Boolean(busy)} onClick={() => { setBusy("export"); void downloadReplicatedWorkbook(config, dataset).catch(reason => setError(reason instanceof Error ? reason.message : String(reason))).finally(() => setBusy(null)); }}>{t.export}</button><button className="rpt-button rpt-button-primary" disabled={!config.templateBase64 || !config.regions.length || Boolean(busy)} onClick={() => onSave(config)}>{t.save}</button></footer>
     </section>
   </div>;

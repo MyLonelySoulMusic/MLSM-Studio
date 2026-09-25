@@ -67,7 +67,7 @@ export function DashboardGrid({
             onDragOver={event => { if (!readOnly && event.dataTransfer.types.includes("application/mlsm-report-widget")) event.preventDefault(); }}
             onDrop={(event: DragEvent<HTMLElement>) => { event.preventDefault(); event.stopPropagation(); const id = event.dataTransfer.getData("application/mlsm-report-widget"); if (id) onMoveWidgetTo?.(id, widget.id, row.id); }}
           >
-            <header className="rpt-widget-header"><h2>{widget.title}</h2>{!readOnly && <div className="rpt-widget-actions">
+            <header className="rpt-widget-header"><h2><span data-no-localize>{widget.title}</span></h2>{!readOnly && <div className="rpt-widget-actions">
               <button className="rpt-icon-button rpt-drag-handle" aria-label={`Trascina ${widget.title}`} title="Trascina per riordinare" draggable onDragStart={event => { event.dataTransfer.setData("application/mlsm-report-widget", widget.id); event.dataTransfer.effectAllowed = "move"; }}><ReportIcon name="grip" /></button>
               <button className="rpt-icon-button" title="Sposta prima" aria-label={`Sposta prima ${widget.title}`} disabled={widgetIndex === 0} onClick={event => { event.stopPropagation(); onMoveWidget?.(widget.id, -1); }}><ReportIcon name="up" /></button>
               <button className="rpt-icon-button" title="Sposta dopo" aria-label={`Sposta dopo ${widget.title}`} disabled={widgetIndex === widgets.length - 1} onClick={event => { event.stopPropagation(); onMoveWidget?.(widget.id, 1); }}><ReportIcon name="down" /></button>

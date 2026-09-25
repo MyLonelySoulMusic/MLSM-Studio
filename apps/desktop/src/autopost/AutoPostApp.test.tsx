@@ -58,6 +58,23 @@ describe("AutoPost integrato", () => {
     expect(onHome).toHaveBeenCalledOnce();
   });
 
+  it("mostra la foto dell'articolo e apre la sua anteprima editoriale", async () => {
+    render(<AutoPostApp onHome={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText("Blog principale")).toBeInTheDocument());
+    const content = '<figure><img src="https://cdn.example/suno.jpg" alt="Suno"></figure><p>Testo completo dell’articolo.</p>';
+    fireEvent.change(screen.getByLabelText("Incolla qui il JSON degli articoli"), { target: { value: JSON.stringify({ articles: [{ title: "Suno v6", content, excerpt: "Anteprima Suno" }] }) } });
+    fireEvent.click(screen.getByRole("button", { name: "Analizza JSON" }));
+
+    const cover = document.querySelector<HTMLImageElement>(".autopost-article-cover");
+    expect(cover?.src).toBe("https://cdn.example/suno.jpg");
+    fireEvent.click(screen.getByRole("button", { name: "Anteprima" }));
+    expect(screen.getByRole("dialog", { name: "Suno v6" })).toBeInTheDocument();
+    const frame = screen.getByTitle("Anteprima: Suno v6");
+    expect(frame.getAttribute("srcdoc")).toContain("Testo completo dell’articolo.");
+    fireEvent.click(screen.getByRole("button", { name: "Chiudi anteprima" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
   it("legge le categorie WordPress all'apertura e a ogni cambio blog", async () => {
     const secondBlog = { ...state.blogs[0], id: "blog-2", name: "Music TodAI", siteUrl: "https://musictodai.altervista.org", categories: [{ id: 1, name: "Uncategorized", slug: "uncategorized", parent: 0, count: 0 }] };
     const multiState = { ...state, blogs: [state.blogs[0], secondBlog] };

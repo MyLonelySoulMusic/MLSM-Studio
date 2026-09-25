@@ -726,13 +726,14 @@ function compileCatalogue(language: UiLanguage) {
 // Compile once, not hundreds of regular expressions for each DOM mutation.
 const catalogues = { it: compileCatalogue("it"), en: compileCatalogue("en") };
 
-export function localizeUiText(value: string, language: UiLanguage): string {
+export function localizeUiText(value: string, language: UiLanguage, exactOnly = false): string {
   const trimmed = value.trim();
   if (!trimmed || /^(?:[A-Za-z]:[\\/]|\/|https?:\/\/)/.test(trimmed)) return value;
   const { translations, pattern } = catalogues[language];
   // Complete reviewed phrases take priority, including phrases containing product names.
   const exact = translations.get(trimmed.toLowerCase());
   if (exact) return value.replace(trimmed, replacementCase(trimmed, exact));
+  if (exactOnly) return value;
   const protectedValues: string[] = [];
   const protectedText = value.replace(PROTECTED_UI_TERMS, (match) => `\uE000${protectedValues.push(match) - 1}\uE001`);
   // Single pass: replacement text must never be translated again in this call.

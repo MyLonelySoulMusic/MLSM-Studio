@@ -39,4 +39,17 @@ describe("UiLocalizationBridge", () => {
     expect(screen.getByRole("textbox")).toHaveAttribute("placeholder", "Paste the text");
     expect(screen.getByRole("textbox")).toHaveValue("Testo dell’utente");
   });
+
+  it("preserves report file names, column names and cells across language changes", async () => {
+    updateUiPreferences({ language: "it" });
+    render(<><UiLocalizationBridge /><main className="rpt-workspace"><span data-no-localize>results.xlsx</span><span data-no-localize>Date Inserted</span><span data-no-localize>Song</span><button>Aggiungi dati</button></main></>);
+    expect(screen.getByText("Song")).toBeInTheDocument();
+    updateUiPreferences({ language: "en" });
+    await waitFor(() => expect(screen.getByText("Add data")).toBeInTheDocument());
+    expect(screen.getByText("results.xlsx")).toBeInTheDocument();
+    expect(screen.getByText("Date Inserted")).toBeInTheDocument();
+    updateUiPreferences({ language: "it" });
+    await waitFor(() => expect(screen.getByText("Aggiungi dati")).toBeInTheDocument());
+    expect(screen.getByText("Song")).toBeInTheDocument();
+  });
 });

@@ -21,7 +21,7 @@ export function studioSettingsService(): Plugin {
           children.add(child);
           let output = "";
           const kill = () => { if (child.exitCode === null) child.kill(); };
-          const timeout = setTimeout(kill, 60_000);
+          const timeout = setTimeout(kill, 195_000);
           response.once("close", kill);
           child.stdout?.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); if (output.length > 2_000_000) kill(); });
           child.once("error", () => { clearTimeout(timeout); children.delete(child); if (!response.writableEnded) send(503, { error: "Python unavailable for settings bridge" }); });

@@ -4,6 +4,15 @@ import type { ReportDataset } from "./types";
 const runtime = vi.hoisted(() => ({
   status: vi.fn(),
   answer: vi.fn(),
+  local: vi.fn(),
+  generator: vi.fn(),
+}));
+
+vi.mock("../services/local-model-runtime", () => ({
+  preferredLocalAssistantModel: "qwen-test", preferredLocalAssistantLabel: "Qwen local",
+  getLocalTextGenerator: runtime.generator,
+  runLocalTextGeneration: runtime.local,
+  localGeneratedAnswer: (output: string) => output,
 }));
 
 vi.mock("../services/studio-settings", () => ({
@@ -26,6 +35,8 @@ describe("Reports calculated-field LLM assistant", () => {
     localStorage.clear();
     runtime.status.mockReset();
     runtime.answer.mockReset();
+    runtime.generator.mockReset().mockResolvedValue(() => undefined);
+    runtime.local.mockReset().mockResolvedValue('{"name":"Total","formula":"SUM([Revenue])","description":"Aggregate sum."}');
     runtime.status.mockResolvedValue({
       activeProvider: "openai",
       providers: {
@@ -55,7 +66,7 @@ describe("Reports calculated-field LLM assistant", () => {
     expect(runtime.answer).not.toHaveBeenCalled();
   });
 
-  it("uses an available API provider when Studio is currently set to local", async () => {
+  it("honors Studio local selection without sending requests to an API", async () => {
     saveReportsAiSettings({ enabled: true, provider: "" });
     runtime.status.mockResolvedValue({
       activeProvider: "local",
@@ -67,8 +78,35 @@ describe("Reports calculated-field LLM assistant", () => {
       },
     });
     const result = await suggestCalculatedField("Total revenue", dataset, "en");
-    expect(result.provider).toBe("openai");
-    expect(runtime.answer).toHaveBeenCalledWith(expect.any(Array), expect.objectContaining({ provider: "openai" }));
+    expect(result.provider).toBe("local");
+    expect(runtime.answer).not.toHaveBeenCalled();
+    expect(runtime.local).toHaveBeenCalledOnce();
+  });
+
+  it("uses an explicit local choice without requiring API settings", async () => {
+    saveReportsAiSettings({ enabled: true, provider: "", formulaProvider: "local" });
+    runtime.status.mockRejectedValue(new Error("API service unavailable"));
+    expect((await suggestCalculatedField("Total", dataset, "en")).provider).toBe("local");
+    expect(runtime.status).not.toHaveBeenCalled();
+    expect(runtime.answer).not.toHaveBeenCalled();
+  });
+
+  it("never silently replaces an unavailable explicit API provider", async () => {
+    saveReportsAiSettings({ enabled: true, provider: "", formulaProvider: "nvidia" });
+    await expect(suggestCalculatedField("Total", dataset, "en")).rejects.toThrow();
+    expect(runtime.answer).not.toHaveBeenCalled();
+    expect(runtime.local).not.toHaveBeenCalled();
+  });
+
+  it("keeps formula and replication providers independent", async () => {
+    saveReportsAiSettings({ enabled: true, provider: "", formulaProvider: "openai", replicateProvider: "local" });
+    expect((await suggestCalculatedField("Total", dataset, "en")).provider).toBe("openai");
+    runtime.local.mockResolvedValue(JSON.stringify({ summary: "Local report", regions: [{ sheetName: "Report", range: "A2", label: "Data", description: "Rows", mode: "tableRows", fieldIds: ["revenue"], includeHeaders: false }] }));
+    const result = await suggestReplicateXlsModel({ fileName: "report.xlsx", format: "xlsx", sheets: [{ name: "Report", range: "A1:A2", merges: [], populatedCells: 1, sampleCells: [] }] }, dataset, "en");
+    expect(result.provider).toBe("local");
+    expect(result.regions).toHaveLength(1);
+    expect(runtime.answer).toHaveBeenCalledOnce();
+    expect(runtime.local).toHaveBeenCalledOnce();
   });
 
   it("turns the workbook analysis into validated editable Replicate XLS regions", async () => {

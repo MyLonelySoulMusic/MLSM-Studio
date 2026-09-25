@@ -54,22 +54,56 @@ export const providerCatalogUrls: Record<LlmProvider, string> = {
   gemini: "https://ai.google.dev/gemini-api/docs/models",
   xai: "https://docs.x.ai/developers/models",
 };
-export interface ProviderSettings { configured: boolean; enabled: boolean; model: string; keySource: "settings" | "environment" | "none"; endpoint: string; provider: LlmProvider }
+export interface ProviderLimits { enabled: boolean; requests: number; windowSeconds: number; contextTokens: number }
+export const DEFAULT_PROVIDER_LIMITS: ProviderLimits = { enabled: false, requests: 40, windowSeconds: 1, contextTokens: 128000 };
+export interface ProviderSettings { configured: boolean; enabled: boolean; model: string; keySource: "settings" | "environment" | "none"; endpoint: string; provider: LlmProvider; limits?: ProviderLimits }
 export interface LlmSettings { activeProvider: LlmProvider | "local"; providers: Record<LlmProvider, ProviderSettings> }
 export interface DiskCache { id: string; label: string; path: string; bytes: number }
 export interface RemoteLlmReply { content: string; model: string; source: LlmProvider }
 export async function settingsRequest<T>(request: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
   if (isTauri()) return invoke<T>("studio_settings", { request });
-  const response = await fetch("/__mlsm/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request), signal: signal ?? AbortSignal.timeout(65_000) });
+  const timeout = AbortSignal.timeout(200_000);
+  const response = await fetch("/__mlsm/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request), signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
   if (!response.headers.get("content-type")?.includes("application/json")) throw new Error("Settings backend unavailable");
   const payload = await response.json() as { result?: T; error?: string };
   if (!response.ok || payload.error || payload.result === undefined) throw new Error(payload.error ?? `Settings HTTP ${response.status}`);
   return payload.result;
 }
 export const getLlmSettings = () => settingsRequest<LlmSettings>({ action: "status" });
-export async function saveLlmSettings(settings: { provider: LlmProvider; activeProvider?: LlmProvider | "local"; model: string; enabled: boolean; apiKey?: string; removeKey?: boolean }): Promise<LlmSettings> {
+export async function saveLlmSettings(settings: { provider: LlmProvider; activeProvider?: LlmProvider | "local"; model: string; enabled: boolean; apiKey?: string; removeKey?: boolean; limits?: ProviderLimits }): Promise<LlmSettings> {
   const result = await settingsRequest<LlmSettings>({ action: "configure", ...settings });
   if (typeof window !== "undefined") window.dispatchEvent(new Event("mlsm-llm-settings-changed"));
   return result;
 }
-export const requestRemoteAnswer = (messages: LocalChatMessage[], options: { provider?: LlmProvider; maxTokens?: number; signal?: AbortSignal } = {}) => settingsRequest<RemoteLlmReply>({ action: "chat", messages, ...(options.provider ? { provider: options.provider } : {}), ...(options.maxTokens ? { maxTokens: options.maxTokens } : {}) }, options.signal);
+const providerQueues = new Map<string, Promise<unknown>>();
+const lastRequestStarted = new Map<string, number>();
+export async function requestRemoteAnswer(messages: LocalChatMessage[], options: { provider?: LlmProvider; maxTokens?: number; signal?: AbortSignal; onProgress?: (message: string) => void } = {}): Promise<RemoteLlmReply> {
+  const settings = await getLlmSettings();
+  const provider = options.provider ?? settings.activeProvider;
+  if (provider === "local") throw new Error("Select an API provider / Seleziona un provider API");
+  const limits = settings.providers[provider].limits;
+  const execute = async () => {
+    options.signal?.throwIfAborted();
+    if (limits?.enabled) {
+      const delay = Math.max(0, (lastRequestStarted.get(provider) ?? 0) + limits.windowSeconds * 1000 / Math.max(1, limits.requests) - Date.now());
+      if (delay) {
+        options.onProgress?.(`Rate limit · ${Math.ceil(delay / 1000)} s`);
+        await new Promise<void>((resolve, reject) => {
+          const abort = () => { clearTimeout(timer); reject(options.signal?.reason); };
+          const timer = setTimeout(() => { options.signal?.removeEventListener("abort", abort); resolve(); }, delay);
+          options.signal?.addEventListener("abort", abort, { once: true });
+        });
+      }
+    }
+    options.signal?.throwIfAborted();
+    lastRequestStarted.set(provider, Date.now());
+    options.onProgress?.(`${providerLabels[provider]} · ${settings.providers[provider].model}`);
+    return settingsRequest<RemoteLlmReply>({ action: "chat", messages, provider, maxTokens: options.maxTokens ?? 1024 }, options.signal);
+  };
+  if (!limits?.enabled) return execute();
+  options.onProgress?.("AI · in coda / queued");
+  const pending = (providerQueues.get(provider) ?? Promise.resolve()).catch(() => undefined).then(execute);
+  providerQueues.set(provider, pending);
+  try { return await pending; }
+  finally { if (providerQueues.get(provider) === pending) providerQueues.delete(provider); }
+}

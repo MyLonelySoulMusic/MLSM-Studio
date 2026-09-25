@@ -12,6 +12,15 @@ spec.loader.exec_module(worker)
 
 
 class SettingsTest(unittest.TestCase):
+    def test_provider_limits_are_persisted_and_context_is_checked_before_network(self):
+        limits = {"enabled": True, "requests": 40, "windowSeconds": 1, "contextTokens": 128000}
+        result = self.call(action="configure", provider="nvidia", apiKey="test-key", limits=limits)
+        self.assertEqual(result["providers"]["nvidia"]["limits"], limits)
+        with patch.object(worker.urllib.request, "build_opener") as network:
+            with self.assertRaisesRegex(ValueError, "Context budget"):
+                self.call(action="chat", messages=[{"role": "user", "content": "x" * 128000}])
+            network.assert_not_called()
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name).resolve()

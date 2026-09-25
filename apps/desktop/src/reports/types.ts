@@ -38,6 +38,16 @@ export interface BarRaceAnimation {
 }
 export type ReportWidgetAnimation = TimeSeriesAnimation | BarRaceAnimation;
 export type ReplicateXlsRegionMode = "static" | "singleCell" | "tableRows" | "tableColumns";
+export interface ReplicateXlsQuery {
+  groupBy: string[];
+  measure: string;
+  aggregation: Aggregation;
+  pivotField?: string;
+  pivotValues?: CellValue[];
+  total?: boolean;
+  timeGrain?: TimeGrain;
+  blankColumns?: number[];
+}
 export interface ReplicateXlsRegion {
   id: string;
   sheetName: string;
@@ -47,6 +57,7 @@ export interface ReplicateXlsRegion {
   mode: ReplicateXlsRegionMode;
   fieldIds: string[];
   includeHeaders: boolean;
+  query?: ReplicateXlsQuery;
 }
 export interface ReplicateXlsConfig {
   templateName: string;

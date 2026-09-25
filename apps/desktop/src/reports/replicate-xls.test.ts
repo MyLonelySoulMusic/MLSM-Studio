@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import * as XLSX from "xlsx";
-import { buildReplicatedWorkbook, buildReplicatedWorkbookBytes, normalizeCellRange, selectionRange } from "./replicate-xls";
+import { buildReplicatedWorkbook, buildReplicatedWorkbookBytes, createReplicateXlsGrid, inspectStoredReplicateXlsTemplate, normalizeCellRange, selectionRange } from "./replicate-xls";
+import { readFileSync } from "node:fs";
 import type { ReportDataset, ReplicateXlsConfig } from "./types";
 
 const dataset: ReportDataset = {
@@ -36,6 +37,29 @@ function config(mode: "tableRows" | "tableColumns"): ReplicateXlsConfig {
 }
 
 describe("Replicate XLS", () => {
+  it("builds a grouped pivot with spacer columns and recalculated totals", async () => {
+    const value = config("tableRows");
+    value.regions[0]!.includeHeaders = false;
+    value.regions[0]!.query = { groupBy: ["country"], measure: "revenue", aggregation: "sum", pivotField: "kind", pivotValues: ["Song", "Video"], total: true, blankColumns: [1] };
+    const source: ReportDataset = { ...dataset, fields: [...dataset.fields, { id: "kind", name: "Kind", type: "text" }], rows: [{ country: "IT", revenue: 10, kind: "Song" }, { country: "IT", revenue: 20, kind: "Song" }, { country: "IT", revenue: 7, kind: "Video" }, { country: "US", revenue: 5, kind: "Podcast" }] };
+    const result = await buildReplicatedWorkbook(value, source);
+    const sheet = result.Sheets.Report!;
+    expect(sheet.A3?.v).toBe("IT"); expect(sheet.B3?.v).toBeUndefined();
+    expect(sheet.C3?.v).toBe(30); expect(sheet.D3?.v).toBe(7);
+    expect(sheet.F3?.v).toBe(37); expect(sheet.E4?.v).toBe(5);
+  });
+
+  it.skipIf(!process.env.MLSM_TEST_TEMPLATE)("preserves the supplied workbook's actual colors and text", async () => {
+    const value = config("tableRows");
+    value.templateBase64 = readFileSync(process.env.MLSM_TEST_TEMPLATE!).toString("base64");
+    const inspected = await inspectStoredReplicateXlsTemplate(value);
+    const grid = await createReplicateXlsGrid(inspected.workbook, inspected.workbook.SheetNames[0]!);
+    expect(grid.cells[0]![0]!.style.backgroundColor).toBe("#DFE4EC");
+    expect(grid.cells[0]![2]!.style.backgroundColor).toBe("#8093B3");
+    expect(grid.cells[0]![2]!.style.color).toBe("#FFFFFF");
+    expect(grid.cells[0]![2]!.display).toBe("Song");
+    expect(inspected.summary.sheets[0]!.sampleCells.length).toBeLessThan(160);
+  });
   it("normalizes cell selections in every drag direction", () => {
     expect(normalizeCellRange("D9:B2")).toBe("B2:D9");
     expect(selectionRange({ row: 4, column: 2 }, { row: 1, column: 0 })).toBe("A2:C5");

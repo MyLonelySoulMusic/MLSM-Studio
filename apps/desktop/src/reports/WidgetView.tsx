@@ -136,9 +136,9 @@ function ChartView({ widget, dataset, theme, data, language }: Omit<WidgetViewPr
     <details className="rpt-chart-data">
       <summary>Mostra dati del grafico <span>({count.toLocaleString(language === "en" ? "en-GB" : "it-IT")})</span></summary>
       <div className="rpt-table-wrap"><table className="rpt-data-table">
-        <caption className="rpt-sr-only">Dati di {widget.title}</caption>
-        <thead><tr><th scope="col">{dimensionName}</th><th scope="col">{valueLabel}</th></tr></thead>
-        <tbody>{scatter ? data.scatter.slice(0, 200).map((point, index) => <tr key={index}><td>{formatReportNumber(point.x, "number", "EUR", 2, language)}</td><td>{formatWidgetNumber(point.y, widget, language)}</td></tr>) : data.points.map((point, index) => <tr key={index}><td>{point.label}</td><td>{formatWidgetNumber(point.value, widget, language)}</td></tr>)}</tbody>
+        <caption className="rpt-sr-only">Dati di <span data-no-localize>{widget.title}</span></caption>
+        <thead><tr><th scope="col" data-no-localize>{dimensionName}</th><th scope="col" data-no-localize>{valueLabel}</th></tr></thead>
+        <tbody>{scatter ? data.scatter.slice(0, 200).map((point, index) => <tr key={index}><td>{formatReportNumber(point.x, "number", "EUR", 2, language)}</td><td>{formatWidgetNumber(point.y, widget, language)}</td></tr>) : data.points.map((point, index) => <tr key={index}><td data-no-localize>{point.label}</td><td>{formatWidgetNumber(point.value, widget, language)}</td></tr>)}</tbody>
       </table></div>
       {scatter && count > 200 && <p className="rpt-widget-note">Prime 200 coppie mostrate. Aggiungi una tabella per consultare tutte le righe.</p>}
     </details>
@@ -168,9 +168,9 @@ function DataTable({ widget, dataset, filters, language }: { widget: ReportWidge
 
   return <>
     <div className="rpt-table-wrap"><table className="rpt-data-table">
-      <caption className="rpt-sr-only">{widget.title}: {rows.length.toLocaleString(language === "en" ? "en-GB" : "it-IT")} righe</caption>
-      <thead><tr>{dataset.fields.map(field => <th key={field.id} scope="col">{field.name}</th>)}</tr></thead>
-      <tbody>{rows.slice(offset, offset + pageSize).map((row, rowIndex) => <tr key={offset + rowIndex}>{dataset.fields.map(field => <td key={field.id}>{typeof row[field.id] === "number" ? field.id === widget.measure ? formatWidgetNumber(row[field.id] as number, widget, language) : formatReportNumber(row[field.id] as number, "number", "EUR", 2, language) : displayCell(row[field.id])}</td>)}</tr>)}</tbody>
+      <caption className="rpt-sr-only"><span data-no-localize>{widget.title}</span>: {rows.length.toLocaleString(language === "en" ? "en-GB" : "it-IT")} righe</caption>
+      <thead><tr>{dataset.fields.map(field => <th data-no-localize key={field.id} scope="col">{field.name}</th>)}</tr></thead>
+      <tbody>{rows.slice(offset, offset + pageSize).map((row, rowIndex) => <tr key={offset + rowIndex}>{dataset.fields.map(field => <td data-no-localize key={field.id}>{typeof row[field.id] === "number" ? field.id === widget.measure ? formatWidgetNumber(row[field.id] as number, widget, language) : formatReportNumber(row[field.id] as number, "number", "EUR", 2, language) : displayCell(row[field.id])}</td>)}</tr>)}</tbody>
     </table></div>
     <div className="rpt-table-footer">
       <span>{(rows.length ? offset + 1 : 0).toLocaleString("it-IT")}–{Math.min(offset + pageSize, rows.length).toLocaleString("it-IT")} di {rows.length.toLocaleString("it-IT")} righe</span>
@@ -190,7 +190,7 @@ function PivotTable({ widget, dataset, filters, language }: { widget: ReportWidg
   if (result.message) return <div className="rpt-widget-content rpt-widget-empty" role="status">{result.message}</div>;
   const totalLabel = widget.aggregation === "avg" ? "Media complessiva" : widget.aggregation === "count" ? "Totale righe" : widget.aggregation === "distinct" ? "Distinti complessivi" : "Totale";
   return <div className="rpt-widget-content rpt-table-widget rpt-pivot-widget"><div className="rpt-table-wrap"><table className="rpt-data-table rpt-pivot-table">
-    <caption className="rpt-sr-only">{widget.title}: {rowField?.name} per {columnField?.name}</caption>
+    <caption className="rpt-sr-only"><span data-no-localize>{widget.title}</span>: {rowField?.name} per {columnField?.name}</caption>
     <thead><tr><th scope="col">{rowField?.name ?? "Righe"} × {columnField?.name ?? "Colonne"}</th>{result.columnLabels.map(label => <th scope="col" key={label}>{label}</th>)}<th scope="col">{totalLabel}</th></tr></thead>
     <tbody>{result.rowLabels.map((label, rowIndex) => <tr key={label}><th scope="row">{label}</th>{result.cells[rowIndex]!.map((value, columnIndex) => <td key={`${label}-${result.columnLabels[columnIndex]}`}>{value === null ? "—" : formatWidgetNumber(value, widget, language)}</td>)}<td className="rpt-pivot-total">{result.rowTotals[rowIndex] === null ? "—" : formatWidgetNumber(result.rowTotals[rowIndex]!, widget, language)}</td></tr>)}</tbody>
     <tfoot><tr><th scope="row">{totalLabel}</th>{result.columnTotals.map((value, index) => <td key={result.columnLabels[index]}>{value === null ? "—" : formatWidgetNumber(value, widget, language)}</td>)}<td>{result.grandTotal === null ? "—" : formatWidgetNumber(result.grandTotal, widget, language)}</td></tr></tfoot>
@@ -206,8 +206,8 @@ export function WidgetView({ widget, dataset, theme, filters }: WidgetViewProps)
     const config = widget.replicateXls;
     return <div className="rpt-widget-content rpt-replicate-widget">
       <span className="rpt-replicate-widget-icon"><ReportIcon name="replicateXls" /></span>
-      <div><strong>{config?.templateName || (language === "en" ? "Template not configured" : "Template da configurare")}</strong>
-        <p>{config ? `${config.sheetName} · ${config.regions.length} ${language === "en" ? "mapped regions" : "aree mappate"}` : (language === "en" ? "Open the widget to upload an Excel template and teach MLSM how to populate it." : "Apri il widget per caricare un template Excel e insegnare a MLSM come popolarlo.")}</p>
+      <div><strong><span data-no-localize>{config?.templateName || (language === "en" ? "Template not configured" : "Template da configurare")}</span></strong>
+        <p><span data-no-localize>{config ? `${config.sheetName} · ${config.regions.length} ${language === "en" ? "mapped regions" : "aree mappate"}` : (language === "en" ? "Open the widget to upload an Excel template and teach MLSM how to populate it." : "Apri il widget per caricare un template Excel e insegnare a MLSM come popolarlo.")}</span></p>
         {config && <small>{dataset?.rows.length.toLocaleString(language === "en" ? "en-GB" : "it-IT")} {language === "en" ? "source rows" : "righe sorgente"}{config.aiModel ? ` · AI ${config.aiModel}` : ""}</small>}
       </div>
       <span className="rpt-replicate-widget-action">{language === "en" ? "Open model" : "Apri modello"} →</span>
@@ -222,7 +222,7 @@ export function WidgetView({ widget, dataset, theme, filters }: WidgetViewProps)
     return <div className="rpt-widget-content rpt-kpi">
       {widget.showKpiLabel && <span className="rpt-kpi-label">{widget.aggregation === "count" ? AGGREGATION_LABELS_BY_LANGUAGE[language].count : `${AGGREGATION_LABELS_BY_LANGUAGE[language][widget.aggregation]} · ${measureName ?? (language === "en" ? "Measure" : "Misura")}`}</span>}
       <strong className="rpt-kpi-value" style={{ color: widget.color || theme.accent }}>{data.value === null ? "—" : formatWidgetNumber(data.value, widget, language)}</strong>
-      {widget.showKpiMeta && <span className="rpt-kpi-meta">{data.rowCount.toLocaleString(language === "en" ? "en-GB" : "it-IT")} {language === "en" ? "rows" : "righe"} · {dataset?.name}</span>}
+      {widget.showKpiMeta && <span className="rpt-kpi-meta">{data.rowCount.toLocaleString(language === "en" ? "en-GB" : "it-IT")} {language === "en" ? "rows" : "righe"} · <span data-no-localize>{dataset?.name}</span></span>}
       {data.excludedRows > 0 && <span className="rpt-widget-note">{data.excludedRows.toLocaleString(language === "en" ? "en-GB" : "it-IT")} {language === "en" ? "rows without numeric values excluded." : "righe senza valori numerici escluse."}</span>}
     </div>;
   }

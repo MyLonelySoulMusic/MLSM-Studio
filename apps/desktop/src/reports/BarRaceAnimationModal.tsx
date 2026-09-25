@@ -93,7 +93,7 @@ export function BarRaceAnimationModal({ widget, dataset, filters, theme, onClose
   return <div className={`rpt-modal-backdrop rpt-animation-backdrop${leaving ? " is-closing" : ""}`} onClick={event => { if (event.target === event.currentTarget) requestClose(); }}>
     <section className="rpt-modal rpt-animation-modal rpt-bar-race-modal" role="dialog" aria-modal="true" aria-labelledby="rpt-bar-race-title">
       <header>
-        <div><span className="rpt-eyebrow">{language === "en" ? "BAR CHART RACE" : "CORSA DELLE BARRE"} · {TIME_GRAIN_LABELS_BY_LANGUAGE[language][animation.timeGrain].toUpperCase()}</span><h2 id="rpt-bar-race-title">{widget.title}</h2><p>{language === "en" ? `${measureName} by ${groupName}, evolving chronologically through ${dateName}.` : `${measureName} per ${groupName}, in evoluzione cronologica attraverso ${dateName}.`}</p></div>
+        <div><span className="rpt-eyebrow">{language === "en" ? "BAR CHART RACE" : "CORSA DELLE BARRE"} · {TIME_GRAIN_LABELS_BY_LANGUAGE[language][animation.timeGrain].toUpperCase()}</span><h2 id="rpt-bar-race-title"><span data-no-localize>{widget.title}</span></h2><p>{language === "en" ? `${measureName} by ${groupName}, evolving chronologically through ${dateName}.` : `${measureName} per ${groupName}, in evoluzione cronologica attraverso ${dateName}.`}</p></div>
         <button className="rpt-icon-button rpt-animation-close" aria-label={language === "en" ? "Close animation" : "Chiudi animazione"} onClick={requestClose}><ReportIcon name="close" /></button>
       </header>
       {!frames.length ? <div className="rpt-animation-empty">{language === "en" ? "No valid periods are available for this animation." : "Nessun periodo valido disponibile per questa animazione."}</div> : <>
@@ -102,11 +102,11 @@ export function BarRaceAnimationModal({ widget, dataset, filters, theme, onClose
           <div className={`rpt-bar-race-stage is-${animation.orientation}`}>
             {animation.orientation === "horizontal" ? <div className="rpt-bar-race-horizontal" style={{ height: `${Math.max(260, rowHeight * points.length)}px` }}>
               {points.map(point => <div key={point.id} className="rpt-bar-race-row" style={{ transform: `translateY(${point.rank * rowHeight}px)`, height: `${rowHeight - 7}px` }}>
-                <span title={point.label}>{point.label}</span><i><b style={{ width: `${Math.abs(point.value) / globalMaximum * 100}%`, background: colorFor(point.id, color, theme.ink) }} /></i><strong>{formatReportNumber(point.value, widget.format, widget.currency, displayDecimals, language)}</strong>
+                <span title={point.label}><span data-no-localize>{point.label}</span></span><i><b style={{ width: `${Math.abs(point.value) / globalMaximum * 100}%`, background: colorFor(point.id, color, theme.ink) }} /></i><strong>{formatReportNumber(point.value, widget.format, widget.currency, displayDecimals, language)}</strong>
               </div>)}
             </div> : <div className="rpt-bar-race-vertical">
               {points.map(point => <div key={point.id} className="rpt-bar-race-column" style={{ "--rpt-race-rank": point.rank, "--rpt-race-count": points.length } as CSSProperties}>
-                <strong>{formatReportNumber(point.value, widget.format, widget.currency, displayDecimals, language)}</strong><i><b style={{ height: `${Math.abs(point.value) / globalMaximum * 100}%`, background: colorFor(point.id, color, theme.ink) }} /></i><span title={point.label}>{point.label}</span>
+                <strong>{formatReportNumber(point.value, widget.format, widget.currency, displayDecimals, language)}</strong><i><b style={{ height: `${Math.abs(point.value) / globalMaximum * 100}%`, background: colorFor(point.id, color, theme.ink) }} /></i><span title={point.label}><span data-no-localize>{point.label}</span></span>
               </div>)}
             </div>}
           </div>

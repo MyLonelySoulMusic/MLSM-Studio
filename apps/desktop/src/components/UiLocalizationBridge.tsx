@@ -22,7 +22,8 @@ function localizeTextNode(node: Text, language: UiLanguage) {
   const current = node.nodeValue ?? "";
   const previous = textState.get(node);
   const source = previous && current === previous.output ? previous.source : current;
-  const output = localizeUiText(source, language);
+  const reports = Boolean(node.parentElement?.closest(".rpt-workspace"));
+  const output = reports && language === "it" ? source : localizeUiText(source, language, reports);
   textState.set(node, { source, output });
   if (current !== output) node.nodeValue = output;
 }
@@ -36,7 +37,8 @@ function localizeAttributes(element: Element, language: UiLanguage) {
     if (current === null) continue;
     const previous = states.get(attribute);
     const source = previous && current === previous.output ? previous.source : current;
-    const output = localizeUiText(source, language);
+    const reports = Boolean(element.closest(".rpt-workspace"));
+    const output = reports && language === "it" ? source : localizeUiText(source, language, reports);
     states.set(attribute, { source, output });
     if (current !== output) element.setAttribute(attribute, output);
   }
