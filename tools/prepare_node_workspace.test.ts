@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-const { prepareWorkspace, workspaceStatus, writeState } = require("./prepare_node_workspace.cjs");
+const { prepareWorkspace, spawnInvocation, workspaceStatus, writeState } = require("./prepare_node_workspace.cjs");
 const roots: string[] = [];
 function file(root: string, path: string, content = "ok") { const target = join(root, path); mkdirSync(join(target, ".."), { recursive: true }); writeFileSync(target, content); }
 function fixture() {
@@ -23,6 +23,13 @@ function fixture() {
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 describe("preparazione incrementale workspace Node", () => {
+  it("avvia npm.cmd attraverso cmd.exe su Windows", () => {
+    expect(spawnInvocation("npm.cmd", ["ci", "--include=dev"], "win32", { ComSpec: "C:\\Windows\\System32\\cmd.exe" })).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: ["/d", "/s", "/c", "npm.cmd ci --include=dev"],
+    });
+    expect(spawnInvocation("npm", ["run", "build"], "darwin", {})).toEqual({ command: "npm", args: ["run", "build"] });
+  });
   it("distingue modifiche alle dipendenze da modifiche ai sorgenti", () => {
     const root = fixture(); const initial = workspaceStatus(root);
     writeState(root, { dependencyFingerprint: initial.dependencyFingerprint, buildFingerprint: initial.buildFingerprint });

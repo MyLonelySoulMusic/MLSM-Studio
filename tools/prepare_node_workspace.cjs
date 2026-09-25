@@ -67,10 +67,16 @@ function workspaceStatus(root = projectRoot) {
   const buildRequired = installRequired || !existsSync(resolve(root, "apps/desktop/dist/index.html")) || state?.buildFingerprint !== currentBuildFingerprint;
   return { state, dependencyFingerprint, buildFingerprint: currentBuildFingerprint, installRequired, buildRequired };
 }
+function spawnInvocation(command, args, platform = process.platform, environment = process.env) {
+  if (platform !== "win32") return { command, args };
+  const commandProcessor = environment.ComSpec || environment.COMSPEC || "cmd.exe";
+  return { command: commandProcessor, args: ["/d", "/s", "/c", [command, ...args].join(" ")] };
+}
 function run(root, command, args) {
   const shown = [command, ...args].join(" ");
   console.log(`\n[MLSM launcher] ${shown}`);
-  const result = spawnSync(command, args, { cwd: root, env: process.env, stdio: "inherit", shell: false });
+  const invocation = spawnInvocation(command, args);
+  const result = spawnSync(invocation.command, invocation.args, { cwd: root, env: process.env, stdio: "inherit", shell: false });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`Comando terminato con codice ${result.status}: ${shown}`);
 }
@@ -110,4 +116,4 @@ if (require.main === module) {
   try { main(); }
   catch (error) { console.error(`[MLSM launcher] Preparazione non riuscita: ${error instanceof Error ? error.message : String(error)}`); process.exitCode = 1; }
 }
-module.exports = { BUILD_ROOTS, STATE_RELATIVE_PATH, buildFiles, dependenciesPresent, dependencyFiles, hashFiles, prepareWorkspace, readState, statePath, workspaceStatus, writeState };
+module.exports = { BUILD_ROOTS, STATE_RELATIVE_PATH, buildFiles, dependenciesPresent, dependencyFiles, hashFiles, prepareWorkspace, readState, spawnInvocation, statePath, workspaceStatus, writeState };
