@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AutoPostApp } from "./AutoPostApp";
 
-const apiMock = vi.hoisted(() => ({ state: vi.fn(), clearQueue: vi.fn(), refreshBlogCategories: vi.fn(), import: vi.fn() }));
+const apiMock = vi.hoisted(() => ({ state: vi.fn(), clearQueue: vi.fn(), refreshBlogCategories: vi.fn(), refreshAllBlogCategories: vi.fn(), import: vi.fn() }));
 const categoryAiMock = vi.hoisted(() => ({ status: vi.fn(), map: vi.fn() }));
 const categoryVectorMock = vi.hoisted(() => ({ map: vi.fn(), writeMode: vi.fn(), writeThreshold: vi.fn(), writeSelectionMode: vi.fn() }));
 vi.mock("./api", () => ({ api: apiMock }));
@@ -33,6 +33,10 @@ describe("AutoPost integrato", () => {
     localStorage.clear();
     apiMock.state.mockResolvedValue(state);
     apiMock.refreshBlogCategories.mockResolvedValue(state);
+    apiMock.refreshAllBlogCategories.mockImplementation(async () => {
+      const current = await apiMock.state();
+      return { state: current, results: current.blogs.map((blog: typeof state.blogs[number]) => ({ blogId: blog.id, blogName: blog.name, endpoint: `${blog.siteUrl}/wp-json/wp/v2/categories`, ok: true, count: blog.categories.length })) };
+    });
     categoryAiMock.status.mockResolvedValue({ provider: "nvidia", label: "NVIDIA", model: "openai/gpt-oss-20b" });
     categoryAiMock.map.mockResolvedValue({ provider: "nvidia", label: "NVIDIA", model: "openai/gpt-oss-20b", categoryIds: [2] });
     categoryVectorMock.map.mockResolvedValue({ categoryIds: [2], categoryName: "NEWS MUSIC AI", score: 0.81, fallback: false, bestCategoryName: "NEWS MUSIC AI", threshold: 0.5, ranking: [{ id: 2, name: "NEWS MUSIC AI", score: 0.81, evidence: "Suno v6" }, { id: 3, name: "Tecnologia", score: 0.32 }], model: "paraphrase-multilingual-MiniLM-L12-v2" });
@@ -52,6 +56,22 @@ describe("AutoPost integrato", () => {
     expect(screen.getByText("Articolo migrato")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Torna alle aree" }));
     expect(onHome).toHaveBeenCalledOnce();
+  });
+
+  it("legge le categorie WordPress all'apertura e a ogni cambio blog", async () => {
+    const secondBlog = { ...state.blogs[0], id: "blog-2", name: "Music TodAI", siteUrl: "https://musictodai.altervista.org", categories: [{ id: 1, name: "Uncategorized", slug: "uncategorized", parent: 0, count: 0 }] };
+    const multiState = { ...state, blogs: [state.blogs[0], secondBlog] };
+    const refreshedState = { ...multiState, blogs: [state.blogs[0], { ...secondBlog, categories: [{ id: 2, name: "NEWS MUSIC AI", slug: "news-music-ai", parent: 0, count: 3 }], categoriesSyncedAt: "2026-09-25T10:00:00Z" }] };
+    apiMock.state.mockResolvedValue(multiState);
+    apiMock.refreshAllBlogCategories.mockResolvedValue({ state: multiState, results: multiState.blogs.map((blog) => ({ blogId: blog.id, blogName: blog.name, endpoint: `${blog.siteUrl}/wp-json/wp/v2/categories`, ok: true, count: blog.categories.length })) });
+    apiMock.refreshBlogCategories.mockResolvedValue(refreshedState);
+
+    render(<AutoPostApp onHome={vi.fn()} />);
+    await waitFor(() => expect(apiMock.refreshAllBlogCategories).toHaveBeenCalledOnce());
+    fireEvent.change(screen.getByLabelText("Blog"), { target: { value: "blog-2" } });
+
+    await waitFor(() => expect(apiMock.refreshBlogCategories).toHaveBeenCalledWith("blog-2"));
+    expect(await screen.findByText("NEWS MUSIC AI")).toBeInTheDocument();
   });
 
   it("mantiene il layout AutoPost isolato dalla griglia globale dello Studio", async () => {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type DragEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { parseArticleDocument } from "./media.mjs";
 import { api } from "./api";
 import type { AppState, ArticleInput, BlogConnection, LibraryMedia, QueueItem, QueueStatus, RecognizedMedia } from "./types";
@@ -128,14 +128,29 @@ export function AutoPostApp({ onHome }: { onHome: () => void }) {
   const [libraryImportMode, setLibraryImportMode] = useState<"append" | "replace">("append");
   const [blogForm, setBlogForm] = useState(emptyBlogForm);
   const [busy, setBusy] = useState("");
+  const [categoriesSyncing, setCategoriesSyncing] = useState(false);
   const [notice, setNotice] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   const [now, setNow] = useState(Date.now());
+  const initialCategorySyncStarted = useRef(false);
   const t = copy[language];
   const refresh = useCallback(async (quiet = false) => {
     try { const next = await api.state(); setState(next); if (!quiet) { setIntervalValue(next.schedule.intervalMinutes); setPostsPerRun(next.schedule.postsPerRun); setLibraryRules({ tracksPerPost: next.library.tracksPerPost, playlistEveryTracks: next.library.playlistEveryTracks }); } }
     catch (error) { if (!quiet) setNotice({ kind: "error", text: error instanceof Error ? error.message : String(error) }); }
   }, []);
   useEffect(() => { void refresh(); const poll = window.setInterval(() => void refresh(true), 4_000); const clock = window.setInterval(() => setNow(Date.now()), 1_000); return () => { clearInterval(poll); clearInterval(clock); }; }, [refresh]);
+  useEffect(() => {
+    if (!state?.blogs.length || initialCategorySyncStarted.current) return;
+    initialCategorySyncStarted.current = true;
+    setCategoriesSyncing(true);
+    void api.refreshAllBlogCategories()
+      .then((result) => {
+        setState(result.state);
+        const failures = result.results.filter((entry) => !entry.ok);
+        if (failures.length) setNotice({ kind: "error", text: failures.map((entry) => `${entry.blogName}: ${entry.error || "endpoint WordPress non raggiungibile"}`).join(" · ") });
+      })
+      .catch((error) => setNotice({ kind: "error", text: error instanceof Error ? error.message : String(error) }))
+      .finally(() => setCategoriesSyncing(false));
+  }, [state]);
   useEffect(() => { void getAutoPostAiStatus().then(setLlmStatus).catch(() => setLlmStatus(null)); }, []);
   useEffect(() => {
     if (!state) return;
@@ -330,6 +345,20 @@ export function AutoPostApp({ onHome }: { onHome: () => void }) {
   const setCategoriesForArticle = (articleIndex: number, blogId: string, categoryIds: number[]) => {
     setArticleCategories((current) => current.map((categories, index) => index === articleIndex ? { ...categories, [blogId]: categoryIds } : categories));
   };
+  const refreshCategoryBlog = async (blogId: string) => {
+    if (!blogId) return;
+    setCategoriesSyncing(true);
+    setNotice(null);
+    try {
+      const next = await api.refreshBlogCategories(blogId);
+      setState(next);
+    } catch (error) {
+      setNotice({ kind: "error", text: error instanceof Error ? error.message : String(error) });
+      await refresh(true);
+    } finally {
+      setCategoriesSyncing(false);
+    }
+  };
   const queued = state?.summary.queued || 0;
   const canPublish = Boolean(state?.blogs.length && state.queue.filter((item) => item.status === "queued").every((item) => item.blogIds.every((id) => state.blogs.find((blog) => blog.id === id)?.hasPassword)));
   const nextSeconds = state?.schedule.nextRunAt ? Math.max(0, Math.ceil((Date.parse(state.schedule.nextRunAt) - now) / 1000)) : null;
@@ -352,7 +381,16 @@ export function AutoPostApp({ onHome }: { onHome: () => void }) {
     <main className="autopost-workspace">
       {tab === "import" && <section className="autopost-page autopost-import-page">
         <div className="autopost-hero"><span>{t.eyebrow}</span><h1>{t.title}</h1><p>{t.intro}</p></div>
-        {state?.blogs.length ? <article className="autopost-home-categories"><div><span className="autopost-library-kicker">WORDPRESS TAXONOMY</span><h2>{language === "it" ? "Categorie del blog" : "Blog categories"}</h2><p>{language === "it" ? "Seleziona un blog per consultare o copiare in massa le categorie disponibili durante la scrittura." : "Select a blog to browse or bulk-copy the categories available while writing."}</p></div><div className="autopost-home-category-actions"><label>{language === "it" ? "Blog" : "Blog"}<select value={categoryBlogId} onChange={(event) => setCategoryBlogId(event.target.value)}>{state.blogs.map((blog) => <option key={blog.id} value={blog.id}>{blog.name}</option>)}</select></label><button disabled={!categoryBlog?.categories.length} onClick={() => categoryBlog && void run("copy-categories", async () => copyBlogCategories(categoryBlog))}>{language === "it" ? "Copia tutte" : "Copy all"}</button></div><div className="autopost-category-cloud">{categoryBlog?.categories.length ? categoryBlog.categories.map((category) => <span key={category.id}><b>{category.id}</b>{category.name}</span>) : <em>{language === "it" ? "Nessuna categoria sincronizzata." : "No synchronized categories."}</em>}</div></article> : null}
+        {state?.blogs.length ? <article className="autopost-home-categories">
+          <div><span className="autopost-library-kicker">WORDPRESS TAXONOMY</span><h2>{language === "it" ? "Categorie del blog" : "Blog categories"}</h2><p>{language === "it" ? "Le categorie vengono lette direttamente dall’endpoint /wp-json/wp/v2/categories del blog selezionato." : "Categories are read directly from the selected blog’s /wp-json/wp/v2/categories endpoint."}</p></div>
+          <div className="autopost-home-category-actions">
+            <label>Blog<select value={categoryBlogId} disabled={categoriesSyncing} onChange={(event) => { const blogId = event.target.value; setCategoryBlogId(blogId); void refreshCategoryBlog(blogId); }}>{state.blogs.map((blog) => <option key={blog.id} value={blog.id}>{blog.name}</option>)}</select></label>
+            <button disabled={Boolean(busy) || categoriesSyncing || !categoryBlog} onClick={() => categoryBlog && void refreshCategoryBlog(categoryBlog.id)}>{categoriesSyncing ? (language === "it" ? "Sincronizzo…" : "Syncing…") : (language === "it" ? "Aggiorna" : "Refresh")}</button>
+            <button disabled={!categoryBlog?.categories.length || categoriesSyncing} onClick={() => categoryBlog && void run("copy-categories", async () => copyBlogCategories(categoryBlog))}>{language === "it" ? "Copia tutte" : "Copy all"}</button>
+          </div>
+          <div className="autopost-category-sync-state">{categoryBlog?.categoryError ? <span className="autopost-error">{categoryBlog.categoryError}</span> : <span>{categoriesSyncing ? (language === "it" ? "Lettura dell’endpoint WordPress…" : "Reading WordPress endpoint…") : categoryBlog?.categoriesSyncedAt ? `${language === "it" ? "Ultima lettura" : "Last read"}: ${formatDate(categoryBlog.categoriesSyncedAt, language)}` : (language === "it" ? "Endpoint non ancora letto." : "Endpoint not read yet.")}</span>}</div>
+          <div className="autopost-category-cloud">{categoryBlog?.categories.length ? categoryBlog.categories.map((category) => <span key={category.id}><b>{category.id}</b>{category.name}</span>) : <em>{categoriesSyncing ? (language === "it" ? "Caricamento categorie da WordPress…" : "Loading categories from WordPress…") : (language === "it" ? "Nessuna categoria restituita dall’endpoint." : "The endpoint returned no categories.")}</em>}</div>
+        </article> : null}
         <div className="autopost-import-grid">
           <article className="autopost-drop-card" onDragOver={(event) => event.preventDefault()} onDrop={drop}>
             <div className="autopost-drop-icon"><svg viewBox="0 0 24 24"><path d="M12 4v11m-5-5 5 5 5-5M5 20h14" /></svg></div>

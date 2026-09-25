@@ -15,6 +15,7 @@ export const api = {
   testBlog: (value: { id?: string; siteUrl?: string; username?: string; password?: string }) => request<{ ok: true; latencyMs: number; name: string; roles: string[] }>("/api/blogs/test", { method: "POST", body: JSON.stringify(value) }),
   removeBlog: (id: string) => request<AppState>(`/api/blogs/${encodeURIComponent(id)}/remove`, { method: "POST", body: "{}" }),
   refreshBlogCategories: (id: string) => request<AppState>(`/api/blogs/${encodeURIComponent(id)}/categories`, { method: "POST", body: "{}" }),
+  refreshAllBlogCategories: () => request<{ state: AppState; results: Array<{ blogId: string; blogName: string; endpoint: string; ok: boolean; count: number; error?: string }> }>("/api/blogs/categories/refresh-all", { method: "POST", body: "{}" }),
   import: (document: unknown, blogIdsByArticle: string[][], categoriesByArticle: Array<Record<string, number[]>>) => request<{ imported: number; state: AppState }>("/api/import", { method: "POST", body: JSON.stringify({ document, blogIdsByArticle, categoriesByArticle }) }),
   addLibraryItem: (url: string, priority: number) => request<AppState>("/api/library/item", { method: "POST", body: JSON.stringify({ url, priority }) }),
   updateLibraryItem: (key: string, priority: number) => request<AppState>(`/api/library/${encodeURIComponent(key)}/update`, { method: "POST", body: JSON.stringify({ priority }) }),

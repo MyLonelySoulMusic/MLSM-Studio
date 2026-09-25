@@ -153,10 +153,21 @@ async function fetchBlogCategories(blog) {
     if (!Array.isArray(batch)) throw new Error("Risposta categorie WordPress non valida.");
     const reportedPages = Number(response.headers.get("x-wp-totalpages"));
     if (page === 1 && Number.isInteger(reportedPages) && reportedPages > 0) totalPages = Math.min(reportedPages, 1_000);
-    categories.push(...batch.map((category) => ({ id: Number(category.id), name: String(category.name || ""), slug: String(category.slug || ""), parent: Number(category.parent) || 0, count: Number(category.count) || 0 })).filter((category) => Number.isInteger(category.id) && category.name));
+    categories.push(...batch.map((category) => ({ id: Number(category.id), name: decodeWordPressText(category.name), slug: String(category.slug || ""), parent: Number(category.parent) || 0, count: Number(category.count) || 0 })).filter((category) => Number.isInteger(category.id) && category.name));
     if (batch.length < 100) break;
   }
   return categories.sort((left, right) => left.name.localeCompare(right.name, "it", { sensitivity: "base" }));
+}
+
+function decodeWordPressText(value) {
+  return String(value || "")
+    .replace(/&#x([0-9a-f]+);/gi, (_match, code) => String.fromCodePoint(Number.parseInt(code, 16)))
+    .replace(/&#(\d+);/g, (_match, code) => String.fromCodePoint(Number.parseInt(code, 10)))
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#0*39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">");
 }
 
 async function enrichMedia(media) {
@@ -333,20 +344,45 @@ async function api(request, response, url) {
     const user = await wpRequest("users/me?context=edit", undefined, existing, input);
     return sendJson(response, 200, { ok: true, latencyMs: Date.now() - started, name: user.name, roles: user.roles || [] });
   }
+  if (request.method === "POST" && url.pathname === "/api/blogs/categories/refresh-all") {
+    const results = await Promise.all(state.blogs.map(async (blog) => {
+      const endpoint = `${normalizeSiteUrl(blog.siteUrl)}/wp-json/wp/v2/categories`;
+      console.log(`[AutoPost categories] Sincronizzazione ${blog.name}: ${endpoint}`);
+      try {
+        blog.categories = await fetchBlogCategories(blog);
+        blog.categoriesSyncedAt = new Date().toISOString();
+        delete blog.categoryError;
+        console.log(`[AutoPost categories] ${blog.name}: ${blog.categories.length} categorie lette dall'endpoint WordPress.`);
+        return { blogId: blog.id, blogName: blog.name, endpoint, ok: true, count: blog.categories.length };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        blog.categoryError = `${endpoint}: ${message}`;
+        console.error(`[AutoPost categories] ${blog.name}: ${blog.categoryError}`);
+        return { blogId: blog.id, blogName: blog.name, endpoint, ok: false, count: blog.categories.length, error: message };
+      }
+    }));
+    await saveState();
+    return sendJson(response, 200, { state: publicState(), results });
+  }
   const categoryMatch = url.pathname.match(/^\/api\/blogs\/([^/]+)\/categories$/);
   if (request.method === "POST" && categoryMatch) {
     const blog = state.blogs.find((entry) => entry.id === decodeURIComponent(categoryMatch[1]));
     if (!blog) return sendJson(response, 404, { error: "Blog non trovato" });
+    const endpoint = `${normalizeSiteUrl(blog.siteUrl)}/wp-json/wp/v2/categories`;
+    console.log(`[AutoPost categories] Sincronizzazione ${blog.name}: ${endpoint}`);
     try {
       blog.categories = await fetchBlogCategories(blog);
       blog.categoriesSyncedAt = new Date().toISOString();
       delete blog.categoryError;
       await saveState();
+      console.log(`[AutoPost categories] ${blog.name}: ${blog.categories.length} categorie lette dall'endpoint WordPress.`);
       return sendJson(response, 200, publicState());
     } catch (error) {
-      blog.categoryError = error instanceof Error ? error.message : String(error);
+      const message = error instanceof Error ? error.message : String(error);
+      blog.categoryError = `${endpoint}: ${message}`;
+      console.error(`[AutoPost categories] ${blog.name}: ${blog.categoryError}`);
       await saveState();
-      throw error;
+      throw new Error(blog.categoryError);
     }
   }
   const blogMatch = url.pathname.match(/^\/api\/blogs\/([^/]+)\/remove$/);
