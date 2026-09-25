@@ -11,6 +11,10 @@ coverage/
 *.log
 *.partial
 
+# Cache incrementale TypeScript generata localmente da tsc.
+# Non è uno stato di release e non deve essere condivisa tra Mac e Windows.
+*.tsbuildinfo
+
 # File di sessione effimeri creati da database aperti con `:memory:`.
 # Il carattere `:` rende questi percorsi impossibili da estrarre su Windows/NTFS.
 /:memory:*.ses
