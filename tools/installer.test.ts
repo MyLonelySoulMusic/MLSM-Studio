@@ -63,11 +63,11 @@ describe("installer multipiattaforma", () => {
   });
   it("include l’intera catena macOS", () => {
     const script = readFileSync(platformScript("macos", "install.sh"), "utf8");
-    for (const command of ["xcode-select", "brew install", "python@3.11", "npm ci --include=dev", "verify_node_dependencies.cjs", "setup_python_runtime.cjs upscaler", "setup_python_runtime.cjs ai-quantizer", "setup_python_runtime.cjs song-player", "setup_python_runtime.cjs audio-tts", "cargo fetch", "verify_installation.cjs"]) expect(script).toContain(command);
+    for (const command of ["xcode-select", "brew install", "python@3.11", "prepare_node_workspace.cjs", "setup_python_runtime.cjs upscaler", "setup_python_runtime.cjs ai-quantizer", "setup_python_runtime.cjs song-player", "setup_python_runtime.cjs audio-tts", "cargo fetch", "verify_installation.cjs"]) expect(script).toContain(command);
   });
   it("include l’intera catena Windows senza Bash", () => {
     const script = readFileSync(platformScript("windows", "install.bat"), "utf8");
-    for (const command of ["OpenJS.NodeJS.LTS", "Python.Python.3.11", "py -3.11", "Rustlang.Rustup", "Gyan.FFmpeg", "MSYS2.MSYS2", "mingw-w64-ucrt-x86_64-rubberband", "Microsoft.EdgeWebView2Runtime", "Microsoft.VisualStudio.2022.BuildTools", "npm ci --include=dev", "verify_node_dependencies.cjs", "ensure-user-path.ps1", "rubberband.exe\" --version", "setup_python_runtime.cjs upscaler", "setup_python_runtime.cjs ai-quantizer", "setup_python_runtime.cjs song-player", "setup_python_runtime.cjs audio-tts", "verify_installation.cjs || exit /b"]) expect(script).toContain(command);
+    for (const command of ["OpenJS.NodeJS.LTS", "Python.Python.3.11", "py -3.11", "Rustlang.Rustup", "Gyan.FFmpeg", "MSYS2.MSYS2", "mingw-w64-ucrt-x86_64-rubberband", "Microsoft.EdgeWebView2Runtime", "Microsoft.VisualStudio.2022.BuildTools", "prepare_node_workspace.cjs", "ensure-user-path.ps1", "rubberband.exe\" --version", "setup_python_runtime.cjs upscaler", "setup_python_runtime.cjs ai-quantizer", "setup_python_runtime.cjs song-player", "setup_python_runtime.cjs audio-tts", "verify_installation.cjs || exit /b"]) expect(script).toContain(command);
     expect(script).not.toContain("setup_ai_quantizer_env.sh");
     expect(script).not.toContain("setup_upscaler_env.sh");
   });
@@ -85,6 +85,12 @@ describe("installer multipiattaforma", () => {
     expect(windows).toContain("npm run dev --workspace @rbs/desktop -- --port 1421");
     expect(mac).toContain('"$SCRIPT_DIR/../.."');
     expect(windows).toContain('"%~dp0\\..\\.."');
+    expect(mac).toContain("prepare_node_workspace.cjs");
+    expect(windows).toContain("prepare_node_workspace.cjs");
+    const prepare = readFileSync(resolve(root, "tools/prepare_node_workspace.cjs"), "utf8");
+    expect(prepare).toContain('["ci", "--include=dev"]');
+    expect(prepare).toContain('["run", "build"]');
+    expect(prepare).toContain("node_modules/.cache/mlsm-studio/node-workspace-state.json");
   });
   it("fornisce packaging Tauri nativo per DMG e installer Windows", () => {
     const mac = readFileSync(platformScript("macos", "build.sh"), "utf8");

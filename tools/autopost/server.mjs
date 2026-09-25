@@ -140,11 +140,10 @@ async function wpRequest(path, body, blog = {}, override = {}) {
 
 async function fetchBlogCategories(blog) {
   const siteUrl = normalizeSiteUrl(blog.siteUrl);
-  const password = await decryptSecret(blog.password);
-  const authorization = blog.username && password ? { Authorization: `Basic ${Buffer.from(`${blog.username}:${password}`).toString("base64")}` } : {};
   const categories = [];
-  for (let page = 1; page <= 20; page += 1) {
-    const response = await fetchWithTimeout(`${siteUrl}/wp-json/wp/v2/categories?per_page=100&page=${page}&orderby=id&order=asc&_fields=id,name,slug,parent,count`, { headers: { Accept: "application/json", ...authorization } });
+  let totalPages = 1;
+  for (let page = 1; page <= totalPages; page += 1) {
+    const response = await fetchWithTimeout(`${siteUrl}/wp-json/wp/v2/categories?per_page=100&page=${page}&orderby=id&order=asc&_fields=id,name,slug,parent,count`, { headers: { Accept: "application/json" } });
     if (!response.ok) {
       if (page > 1 && response.status === 400) break;
       const payload = await response.json().catch(() => ({}));
@@ -152,6 +151,8 @@ async function fetchBlogCategories(blog) {
     }
     const batch = await response.json();
     if (!Array.isArray(batch)) throw new Error("Risposta categorie WordPress non valida.");
+    const reportedPages = Number(response.headers.get("x-wp-totalpages"));
+    if (page === 1 && Number.isInteger(reportedPages) && reportedPages > 0) totalPages = Math.min(reportedPages, 1_000);
     categories.push(...batch.map((category) => ({ id: Number(category.id), name: String(category.name || ""), slug: String(category.slug || ""), parent: Number(category.parent) || 0, count: Number(category.count) || 0 })).filter((category) => Number.isInteger(category.id) && category.name));
     if (batch.length < 100) break;
   }

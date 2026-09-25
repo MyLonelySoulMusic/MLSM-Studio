@@ -29,6 +29,8 @@ L’installer iniziale viene eseguito direttamente perché su una macchina nuova
 
 Anche launcher e build script macOS inizializzano autonomamente il percorso Homebrew di `node@22`, quindi funzionano su un’installazione nuova senza dipendere dal profilo della shell.
 
+I launcher macOS e Windows eseguono `tools/prepare_node_workspace.cjs` prima di Vite. Il controllo usa impronte dei manifest/lockfile e dei sorgenti: lancia `npm ci --include=dev` solo dopo modifiche alle dipendenze e `npm run build` solo quando la build locale è assente o superata. Se il marker non esiste, come al primo avvio dopo l’aggiornamento che introduce questa funzione, vengono eseguiti entrambi. Il marker è locale in `node_modules/.cache/mlsm-studio/`. Con `--check` il launcher non modifica nulla e restituisce errore se sarebbe necessaria una preparazione.
+
 Gli installer preparano Node.js con tutte le dipendenze npm bloccate dal lockfile, Python 3.11, i quattro virtualenv Python, FFmpeg, Rubber Band e Rust/Tauri. L’installazione termina con errore se anche un solo componente o import Python richiesto non è disponibile; il messaggio “pronto” viene mostrato soltanto dopo la verifica completa. `build.sh` produce il DMG macOS; `build.bat` produce gli installer NSIS e MSI Windows.
 
 Su Windows Rubber Band viene installato tramite MSYS2 in `C:\msys64\ucrt64\bin`. L’installer aggiunge la directory al PATH utente senza usare `setx` e l’app dispone anche di un resolver interno per i percorsi noti: non è necessario configurare manualmente `C:\Tools` o riavviare il terminale per il primo avvio tramite gli script MLSM.

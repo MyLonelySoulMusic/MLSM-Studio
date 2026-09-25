@@ -226,6 +226,7 @@ it('translates the guided workflow and download feedback into English', () => {
     expect(translator.translate('Download incompleto. Riprova.')).not.toBe('Download incompleto. Riprova.');
     expect(translator.translate('Correzione oltre il limite consigliato')).toBe('Correction above the recommended limit');
     expect(translator.translate('correzione locale fino al 18%, oltre il limite consigliato')).toBe('Local correction up to 18%, above the recommended limit');
+    expect(translator.translate('Il brano non è quantizzabile automaticamente')).toBe('This song cannot be quantized automatically');
     expect(document.querySelector('#unsafeWarpCancel')?.textContent).toBe('Return to the map');
   } finally { translator.setLanguage('it'); }
 });

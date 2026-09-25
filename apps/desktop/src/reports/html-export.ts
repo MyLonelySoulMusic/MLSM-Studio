@@ -108,6 +108,10 @@ function renderWidget(widget: ReportWidget, dashboard: ReportDashboard): string 
   const yAxisTitle = widget.yAxisLabel.trim() || (widget.type === "bar" ? dimensionName : measureName);
   let content = "";
   if (widget.type === "text") content = `<div class="text">${escapeHtml(widget.text).replace(/\n/g, "<br>")}</div>`;
+  else if (widget.type === "replicateXls") {
+    const config = widget.replicateXls;
+    content = `<div class="text"><strong>${escapeHtml(config?.templateName || "Template non configurato")}</strong><br><span>${config ? `${escapeHtml(config.sheetName)} · ${config.regions.length} aree mappate · ${dataset?.rows.length.toLocaleString("it-IT") ?? 0} righe sorgente` : "Apri questa dashboard nell’editor MLSM Studio per configurare Replica Excel."}</span></div>`;
+  }
   else if (data.message) content = `<p class="empty">${escapeHtml(data.message)}</p>`;
   else if (widget.type === "kpi") {
     const measureName = widget.aggregation === "count" ? "" : dataset?.fields.find(field => field.id === widget.measure)?.name ?? "Misura";

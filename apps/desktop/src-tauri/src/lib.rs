@@ -46,6 +46,10 @@ enum ProjectIoError {
     UpscalerRuntime(String),
     #[error("Servizio AutoPost locale non avviabile: {0}")]
     AutoPostRuntime(String),
+    #[error("Il percorso del report Excel non è valido")]
+    InvalidReportWorkbookPath,
+    #[error("Il report Excel è vuoto o supera il limite di 30 MB")]
+    InvalidReportWorkbookPayload,
 }
 
 #[derive(Default)]
@@ -567,6 +571,28 @@ fn write_project(path: String, content: String) -> Result<(), ProjectIoError> {
     Ok(())
 }
 
+#[tauri::command]
+fn write_report_workbook(path: String, bytes: Vec<u8>) -> Result<(), ProjectIoError> {
+    const MAX_WORKBOOK_BYTES: usize = 30 * 1024 * 1024;
+    let destination = Path::new(&path);
+    let extension = destination.extension().and_then(|value| value.to_str()).unwrap_or("").to_ascii_lowercase();
+    if !destination.is_absolute() || destination.file_name().is_none() || !matches!(extension.as_str(), "xlsx" | "xls" | "xlsm" | "xlsb" | "ods") {
+        return Err(ProjectIoError::InvalidReportWorkbookPath);
+    }
+    if bytes.is_empty() || bytes.len() > MAX_WORKBOOK_BYTES {
+        return Err(ProjectIoError::InvalidReportWorkbookPayload);
+    }
+    let parent = destination.parent().ok_or(ProjectIoError::InvalidReportWorkbookPath)?;
+    if !parent.is_dir() { return Err(ProjectIoError::InvalidReportWorkbookPath); }
+    AtomicFile::new(destination, AllowOverwrite).write(|file| {
+        file.write_all(&bytes)?;
+        file.sync_all()
+    }).map_err(|error| match error {
+        atomicwrites::Error::Internal(error) | atomicwrites::Error::User(error) => ProjectIoError::Io(error),
+    })?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
@@ -578,6 +604,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             read_project,
             write_project,
+            write_report_workbook,
             detect_audio_tools,
             detect_upscaler_hardware,
             ensure_upscaler_service,
@@ -662,6 +689,17 @@ mod tests {
         write_project(path.to_string_lossy().into_owned(), "{\"version\":1}".into()).expect("first save");
         write_project(path.to_string_lossy().into_owned(), "{\"version\":2}".into()).expect("overwrite");
         assert_eq!(fs::read_to_string(path).expect("saved file"), "{\"version\":2}");
+    }
+
+    #[test]
+    fn atomically_writes_only_supported_report_workbooks() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("replicated.xlsx");
+        write_report_workbook(path.to_string_lossy().into_owned(), b"PK workbook fixture".to_vec()).expect("workbook save");
+        assert_eq!(fs::read(path).expect("saved workbook"), b"PK workbook fixture");
+        assert!(write_report_workbook(directory.path().join("report.exe").to_string_lossy().into_owned(), vec![1]).is_err());
+        assert!(write_report_workbook(directory.path().join("empty.xlsx").to_string_lossy().into_owned(), vec![]).is_err());
+        assert!(write_report_workbook("relative.xlsx".into(), vec![1]).is_err());
     }
 
     #[test]

@@ -55,7 +55,7 @@ describe("ReportsWorkspace", () => {
     expect(screen.getByRole("heading", { name: /Una storia da raccontare/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Carica il tuo primo file" })).toBeInTheDocument();
     expect(screen.getByRole("complementary", { name: "Origini e campi" })).toHaveTextContent("Carica un file per esplorare dimensioni e misure.");
-    expect(screen.getByRole("complementary", { name: "Widget e proprietà" })).toHaveTextContent("11 tipi");
+    expect(screen.getByRole("complementary", { name: "Widget e proprietà" })).toHaveTextContent("12 tipi");
     expect(screen.getByRole("button", { name: /Le mie dashboard/ })).toHaveTextContent("0");
     expect(onHome).not.toHaveBeenCalled();
   });

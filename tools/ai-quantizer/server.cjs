@@ -15,6 +15,7 @@ const PYTHON = process.env.AIQ_PYTHON || path.resolve(ROOT, '..', '..', '.venv-a
 const PORT = Number(process.env.PORT || 4173);
 const MAX_UPLOAD = 1024 * 1024 * 1024;
 const PROCESS_SAMPLE_RATE = 48000;
+const UNQUANTIZABLE_ERROR = 'Il brano non è quantizzabile automaticamente';
 const FFMPEG = resolveTool('ffmpeg');
 const FFPROBE = resolveTool('ffprobe');
 const RUBBERBAND = resolveTool('rubberband');
@@ -365,7 +366,7 @@ function sharedWarpTimeline(project) {
     const targetFrame = Math.max(0, Math.round(point.target * PROCESS_SAMPLE_RATE));
     const previous = framed.at(-1);
     if (previous && (sourceFrame <= previous.sourceFrame || targetFrame <= previous.targetFrame))
-      throw new Error('La beat map non è valida alla risoluzione di 48 kHz');
+      throw new Error(UNQUANTIZABLE_ERROR);
     framed.push({ sourceFrame, targetFrame });
   }
   return {
@@ -677,7 +678,7 @@ async function api(req, res, url) {
     let maxUnsafeCorrection = 0;
     for (let i = 1; i < points.length; i++) {
       if (points[i].source <= points[i - 1].source || points[i].target <= points[i - 1].target)
-        throw new Error('La beat map deve essere strettamente crescente');
+        throw new Error(UNQUANTIZABLE_ERROR);
       const sourceSpan = points[i].source - points[i - 1].source;
       const targetSpan = points[i].target - points[i - 1].target;
       const stretch = targetSpan / sourceSpan;

@@ -65,6 +65,8 @@ presente e la mini inferenza reale passa sul dispositivo selezionato.
 
 Gli script nativi sono raccolti in `scripts/macos/` e `scripts/windows/`. Installazione, avvio e build possono essere richiamati direttamente anche su una macchina nuova; gli alias npm restano scorciatoie equivalenti dopo il setup. La struttura completa è descritta in [`scripts/README.md`](../scripts/README.md). Ogni script supporta `--check` dove documentato. La CI usa runner nativi macOS e Windows; Windows non viene simulato con Docker Linux.
 
+Dopo un pull non è necessario ricordare manualmente `npm install` o `npm run build`: entrambi i launcher verificano le impronte locali e preparano soltanto ciò che è diventato obsoleto. Viene usato `npm ci --include=dev`, più riproducibile di `npm install` perché rispetta esattamente `package-lock.json`.
+
 ## Screenshot del manuale
 
 Dopo `npm run build`:

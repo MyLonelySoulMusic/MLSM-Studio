@@ -17,7 +17,8 @@ const allowedRepositories = new Set([
   "onnx-community/whisper-base_timestamped",
   "onnx-community/whisper-medium_timestamped",
   "onnx-community/Qwen2.5-0.5B-Instruct",
-  "Xenova/detr-resnet-50"
+  "Xenova/detr-resnet-50",
+  "Xenova/paraphrase-multilingual-MiniLM-L12-v2"
 ]);
 
 const cacheRoot = fileURLToPath(new URL("../../.transformers-cache/", import.meta.url));

@@ -10,6 +10,7 @@ import { AGGREGATION_LABELS_BY_LANGUAGE, type ReportDataset, type ReportFilter, 
 import { filtersForWidget } from "./filter-targets";
 import { buildPivotTable } from "./pivot";
 import { useUiPreferences, type UiLanguage } from "../services/ui-preferences";
+import { ReportIcon } from "./ReportIcon";
 
 const GeoMapView = lazy(() => import("./GeoMapView"));
 
@@ -201,6 +202,17 @@ export function WidgetView({ widget, dataset, theme, filters }: WidgetViewProps)
   const activeFilters = useMemo(() => filtersForWidget(filters, widget.id, widget.datasetId) as ReportFilter[], [filters, widget.datasetId, widget.id]);
   const data = useMemo(() => aggregateWidget(widget, dataset, activeFilters, language), [widget, dataset, activeFilters, language]);
   if (widget.type === "text") return <div className="rpt-widget-content rpt-text-widget" style={{ color: widget.color || theme.ink, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{widget.text || "Aggiungi una nota nelle impostazioni del widget."}</div>;
+  if (widget.type === "replicateXls") {
+    const config = widget.replicateXls;
+    return <div className="rpt-widget-content rpt-replicate-widget">
+      <span className="rpt-replicate-widget-icon"><ReportIcon name="replicateXls" /></span>
+      <div><strong>{config?.templateName || (language === "en" ? "Template not configured" : "Template da configurare")}</strong>
+        <p>{config ? `${config.sheetName} · ${config.regions.length} ${language === "en" ? "mapped regions" : "aree mappate"}` : (language === "en" ? "Open the widget to upload an Excel template and teach MLSM how to populate it." : "Apri il widget per caricare un template Excel e insegnare a MLSM come popolarlo.")}</p>
+        {config && <small>{dataset?.rows.length.toLocaleString(language === "en" ? "en-GB" : "it-IT")} {language === "en" ? "source rows" : "righe sorgente"}{config.aiModel ? ` · AI ${config.aiModel}` : ""}</small>}
+      </div>
+      <span className="rpt-replicate-widget-action">{language === "en" ? "Open model" : "Apri modello"} →</span>
+    </div>;
+  }
   if (widget.type === "pivot" && dataset) return <PivotTable widget={widget} dataset={dataset} filters={activeFilters} language={language} />;
   if (data.message) return <div className="rpt-widget-content rpt-widget-empty" role="status">{data.message}</div>;
   if (widget.type === "table" && dataset) return <div className="rpt-widget-content rpt-table-widget"><DataTable widget={widget} dataset={dataset} filters={activeFilters} language={language} /></div>;

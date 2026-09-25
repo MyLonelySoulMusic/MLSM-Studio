@@ -10,6 +10,7 @@ const paths = {
   scatter: "M3 3v18h18 M7 13h1 M12 8h1 M14 14h1 M18 5h1 M18 10h1", table: "M3 4h18v16H3z M3 9h18 M3 14h18 M9 4v16 M15 4v16",
   map: "M4 6l5-3 6 3 5-3v15l-5 3-6-3-5 3z M9 3v15 M15 6v15",
   pivot: "M3 4h18v16H3z M3 9h18 M10 4v16 M15 9v11 M3 15h18 M6 12l-2 2 2 2 M13 6l2-2 2 2",
+  replicateXls: "M4 3h11l5 5v13H4z M15 3v6h5 M7 12h10 M7 16h10 M10 10v8 M14 10v8",
   text: "M4 5h16 M12 5v15 M8 20h8", kpi: "M3 5h18v14H3z M7 10h3v5H7 M14 13l2-3 2 1",
   filter: "M3 4h18l-7 8v8l-4-2v-6z", up: "m6 15 6-6 6 6", down: "m6 9 6 6 6-6",
   grip: "M8 5h1 M15 5h1 M8 12h1 M15 12h1 M8 19h1 M15 19h1", search: "M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14 M15 15l6 6",

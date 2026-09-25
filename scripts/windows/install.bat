@@ -39,8 +39,7 @@ if not exist C:\msys64\ucrt64\bin\rubberband.exe (
 )
 if "%DRY_RUN%"=="1" (
   echo [dry-run] powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows\ensure-user-path.ps1 -Directory "%MSYS2_UCRT_BIN%"
-  echo [dry-run] npm ci --include=dev
-  echo [dry-run] node tools\verify_node_dependencies.cjs
+  echo [dry-run] node tools\prepare_node_workspace.cjs
   echo [dry-run] node tools\setup_python_runtime.cjs upscaler
   echo [dry-run] node tools\setup_python_runtime.cjs ai-quantizer
   echo [dry-run] node tools\setup_python_runtime.cjs song-player
@@ -61,8 +60,7 @@ where rustc >nul 2>nul || (echo ERRORE: Rust non disponibile dopo l'installazion
 where cargo >nul 2>nul || (echo ERRORE: Cargo non disponibile dopo l'installazione.& exit /b 7)
 py -3.11 -c "import sys;raise SystemExit(0 if sys.version_info[:2]==(3,11) else 1)" >nul 2>nul || (echo Riavvia questo installer: Python 3.11 e' stato installato ma non e' ancora disponibile.& exit /b 3)
 
-call npm ci --include=dev || exit /b 10
-call node tools\verify_node_dependencies.cjs || exit /b 10
+call node tools\prepare_node_workspace.cjs || exit /b 10
 call node tools\setup_python_runtime.cjs upscaler || exit /b 11
 call node tools\setup_python_runtime.cjs ai-quantizer || exit /b 12
 call node tools\setup_python_runtime.cjs song-player || exit /b 13

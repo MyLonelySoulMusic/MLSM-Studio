@@ -38,8 +38,7 @@ if [[ -d /opt/homebrew/opt/node@22/bin ]]; then export PATH="/opt/homebrew/opt/n
 if [[ -d /usr/local/opt/node@22/bin ]]; then export PATH="/usr/local/opt/node@22/bin:$PATH"; fi
 export MLSM_PYTHON="$(brew --prefix python@3.11)/bin/python3.11"
 
-run npm ci --include=dev
-run node tools/verify_node_dependencies.cjs
+run node tools/prepare_node_workspace.cjs
 run node tools/setup_python_runtime.cjs upscaler
 run node tools/setup_python_runtime.cjs ai-quantizer
 run node tools/setup_python_runtime.cjs song-player

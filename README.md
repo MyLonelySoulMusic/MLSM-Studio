@@ -214,6 +214,8 @@ scripts\windows\install.bat
 scripts\windows\launch.bat
 ```
 
+Dopo un `git pull`, il launcher confronta automaticamente manifest e lockfile con l’ultima preparazione riuscita. Se le dipendenze sono cambiate esegue `npm ci --include=dev`; se sono cambiati i sorgenti o manca la build esegue `npm run build`. Al primo avvio successivo all’introduzione di questo controllo il marker non esiste ancora: per sicurezza vengono eseguiti entrambi i comandi. Lo stato è salvato soltanto in `node_modules/.cache/mlsm-studio/` e non viene versionato. Se uno dei due comandi fallisce, l’app non viene avviata e resta visibile l’errore reale.
+
 Da PowerShell usa il prefisso `./`:
 
 ```powershell

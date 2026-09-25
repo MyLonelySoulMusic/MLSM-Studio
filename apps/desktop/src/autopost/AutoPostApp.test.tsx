@@ -2,8 +2,22 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AutoPostApp } from "./AutoPostApp";
 
-const apiMock = vi.hoisted(() => ({ state: vi.fn(), clearQueue: vi.fn() }));
+const apiMock = vi.hoisted(() => ({ state: vi.fn(), clearQueue: vi.fn(), refreshBlogCategories: vi.fn(), import: vi.fn() }));
+const categoryAiMock = vi.hoisted(() => ({ status: vi.fn(), map: vi.fn() }));
+const categoryVectorMock = vi.hoisted(() => ({ map: vi.fn(), writeMode: vi.fn(), writeThreshold: vi.fn(), writeSelectionMode: vi.fn() }));
 vi.mock("./api", () => ({ api: apiMock }));
+vi.mock("./category-ai", () => ({ getAutoPostAiStatus: categoryAiMock.status, mapAutoPostCategories: categoryAiMock.map }));
+vi.mock("./category-vector", () => ({
+  CATEGORY_VECTOR_MODEL_LABEL: "MiniLM multilingua",
+  CATEGORY_VECTOR_THRESHOLD: 0.4,
+  readCategoryAssociationMode: () => "vector",
+  readCategoryVectorThreshold: () => 0.4,
+  writeCategoryVectorThreshold: categoryVectorMock.writeThreshold,
+  readCategorySelectionMode: () => "first",
+  writeCategorySelectionMode: categoryVectorMock.writeSelectionMode,
+  writeCategoryAssociationMode: categoryVectorMock.writeMode,
+  mapAutoPostCategoriesWithVectorDb: categoryVectorMock.map,
+}));
 
 const state = {
   blogs: [{ id: "blog-1", name: "Blog principale", siteUrl: "https://example.com", username: "author", defaultStatus: "publish", hasPassword: true, categories: [{ id: 7, name: "Musica", slug: "musica", parent: 0, count: 2 }], categoriesSyncedAt: "2026-09-10T00:00:00Z" }],
@@ -15,7 +29,14 @@ const state = {
 } as const;
 
 describe("AutoPost integrato", () => {
-  beforeEach(() => { localStorage.clear(); apiMock.state.mockResolvedValue(state); });
+  beforeEach(() => {
+    localStorage.clear();
+    apiMock.state.mockResolvedValue(state);
+    apiMock.refreshBlogCategories.mockResolvedValue(state);
+    categoryAiMock.status.mockResolvedValue({ provider: "nvidia", label: "NVIDIA", model: "openai/gpt-oss-20b" });
+    categoryAiMock.map.mockResolvedValue({ provider: "nvidia", label: "NVIDIA", model: "openai/gpt-oss-20b", categoryIds: [2] });
+    categoryVectorMock.map.mockResolvedValue({ categoryIds: [2], categoryName: "NEWS MUSIC AI", score: 0.81, fallback: false, bestCategoryName: "NEWS MUSIC AI", threshold: 0.5, ranking: [{ id: 2, name: "NEWS MUSIC AI", score: 0.81, evidence: "Suno v6" }, { id: 3, name: "Tecnologia", score: 0.32 }], model: "paraphrase-multilingual-MiniLM-L12-v2" });
+  });
   afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
   it("mostra i dati persistiti, tutte le schede e torna alle aree", async () => {
@@ -74,5 +95,178 @@ describe("AutoPost integrato", () => {
     expect(window.confirm).toHaveBeenCalledOnce();
     await waitFor(() => expect(apiMock.clearQueue).toHaveBeenCalledOnce());
     expect(await screen.findByText("Coda svuotata.")).toBeInTheDocument();
+  });
+
+  it("chiede il blog sorgente e associa con l'LLM le categorie del blog destinazione", async () => {
+    const sourceBlog = { ...state.blogs[0], categories: [{ id: 7, name: "Sport", slug: "sport", parent: 0, count: 66 }] };
+    const secondBlog = { ...state.blogs[0], id: "blog-2", name: "Music TodAI", siteUrl: "https://music.example", categories: [{ id: 2, name: "NEWS MUSIC AI", slug: "news-music-ai", parent: 0, count: 1 }] };
+    const multiState = { ...state, blogs: [sourceBlog, secondBlog] };
+    apiMock.state.mockResolvedValue(multiState);
+    apiMock.refreshBlogCategories.mockResolvedValue(multiState);
+    render(<AutoPostApp onHome={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText("Music TodAI")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText("Incolla qui il JSON degli articoli"), { target: { value: JSON.stringify({ articles: [{ title: "Suno v6", content: "Musica AI", categories: [7] }] }) } });
+    fireEvent.click(screen.getByRole("button", { name: "Analizza JSON" }));
+    fireEvent.change(await screen.findByLabelText("Blog sorgente"), { target: { value: "blog-1" } });
+    fireEvent.change(screen.getByLabelText("Metodo associazione"), { target: { value: "llm" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Music TodAI" }));
+
+    await waitFor(() => expect(categoryAiMock.map).toHaveBeenCalledWith(expect.objectContaining({ title: "Suno v6", categories: [7] }), expect.objectContaining({ id: "blog-1" }), expect.objectContaining({ id: "blog-2" })));
+    expect((await screen.findAllByText("NVIDIA · openai/gpt-oss-20b")).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByRole<HTMLOptionElement>("option", { name: "NEWS MUSIC AI (#2)" }).selected).toBe(true);
+  });
+
+  it("mostra il vero errore del provider quando l'associazione fallisce", async () => {
+    const sourceBlog = { ...state.blogs[0], categories: [{ id: 7, name: "Sport", slug: "sport", parent: 0, count: 66 }] };
+    const secondBlog = { ...state.blogs[0], id: "blog-2", name: "Music TodAI", siteUrl: "https://music.example", categories: [{ id: 2, name: "NEWS MUSIC AI", slug: "news-music-ai", parent: 0, count: 1 }] };
+    const multiState = { ...state, blogs: [sourceBlog, secondBlog] };
+    apiMock.state.mockResolvedValue(multiState);
+    apiMock.refreshBlogCategories.mockResolvedValue(multiState);
+    categoryAiMock.map.mockRejectedValue(new Error("nvidia · openai/gpt-oss-20b: limite richieste raggiunto (HTTP 429)"));
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    render(<AutoPostApp onHome={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText("Music TodAI")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText("Incolla qui il JSON degli articoli"), { target: { value: JSON.stringify({ articles: [{ title: "Suno v6", content: "Musica AI", categories: [7] }] }) } });
+    fireEvent.click(screen.getByRole("button", { name: "Analizza JSON" }));
+    fireEvent.change(await screen.findByLabelText("Blog sorgente"), { target: { value: "blog-1" } });
+    fireEvent.change(screen.getByLabelText("Metodo associazione"), { target: { value: "llm" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Music TodAI" }));
+
+    expect((await screen.findAllByText(/limite richieste raggiunto \(HTTP 429\)/)).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("usa Vector DB locale di default e mostra l'avanzamento animato", async () => {
+    const sourceBlog = { ...state.blogs[0], categories: [{ id: 7, name: "Sport", slug: "sport", parent: 0, count: 66 }] };
+    const secondBlog = { ...state.blogs[0], id: "blog-2", name: "Music TodAI", siteUrl: "https://music.example", categories: [{ id: 2, name: "NEWS MUSIC AI", slug: "news-music-ai", parent: 0, count: 1 }] };
+    const multiState = { ...state, blogs: [sourceBlog, secondBlog] };
+    apiMock.state.mockResolvedValue(multiState);
+    apiMock.refreshBlogCategories.mockResolvedValue(multiState);
+    let finishMapping: ((value: unknown) => void) | undefined;
+    categoryVectorMock.map.mockImplementation((_article, _blog, progress: (message: string) => void) => {
+      progress("Initial download MiniLM · 42%");
+      return new Promise(resolve => { finishMapping = resolve; });
+    });
+    render(<AutoPostApp onHome={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText("Music TodAI")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText("Incolla qui il JSON degli articoli"), { target: { value: JSON.stringify({ articles: [{ title: "Suno v6", content: "Musica AI", categories: [7] }] }) } });
+    fireEvent.click(screen.getByRole("button", { name: "Analizza JSON" }));
+    fireEvent.change(await screen.findByLabelText("Blog sorgente"), { target: { value: "blog-1" } });
+    const threshold = screen.getByLabelText("Soglia coseno") as HTMLInputElement;
+    expect(threshold.value).toBe("0.4");
+    fireEvent.change(threshold, { target: { value: "0.55" } });
+    expect(categoryVectorMock.writeThreshold).toHaveBeenCalledWith(0.55);
+    fireEvent.change(screen.getByLabelText("Categorie sopra soglia"), { target: { value: "all" } });
+    expect(categoryVectorMock.writeSelectionMode).toHaveBeenCalledWith("all");
+    fireEvent.click(screen.getByRole("checkbox", { name: "Music TodAI" }));
+    await waitFor(() => expect(categoryVectorMock.map).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.any(Function), 0.55, "all"));
+
+    expect((await screen.findAllByText("Initial download MiniLM · 42%")).length).toBeGreaterThanOrEqual(1);
+    expect(document.querySelector(".autopost-association-orbit")).not.toBeNull();
+    finishMapping?.({ categoryIds: [2], categoryName: "NEWS MUSIC AI", score: 0.81, fallback: false, bestCategoryName: "NEWS MUSIC AI", threshold: 0.5, ranking: [{ id: 2, name: "NEWS MUSIC AI", score: 0.81, evidence: "Suno v6" }, { id: 3, name: "Tecnologia", score: 0.32 }], model: "paraphrase-multilingual-MiniLM-L12-v2" });
+    await waitFor(() => expect(screen.getByText(/Vector DB · coseno 0.81/)).toBeInTheDocument());
+    expect(screen.getByText(/selezionata “NEWS MUSIC AI”/)).toBeInTheDocument();
+    expect(screen.getByText(/soglia 0.50/)).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Mostra ranking cosine (2)"));
+    expect(screen.getByText(/Passaggio con coseno massimo: “Suno v6”/)).toBeInTheDocument();
+    expect(screen.getByText(/NEWS MUSIC AI · coseno 0.81/)).toBeInTheDocument();
+    expect(screen.getByText(/Tecnologia · coseno 0.32/)).toBeInTheDocument();
+  });
+
+  it("mostra la candidata migliore e il ranking quando il coseno è sotto soglia", async () => {
+    const sourceBlog = { ...state.blogs[0], categories: [{ id: 7, name: "Sport", slug: "sport", parent: 0, count: 66 }] };
+    const secondBlog = { ...state.blogs[0], id: "blog-2", name: "Music TodAI", siteUrl: "https://music.example", categories: [
+      { id: 2, name: "NEWS MUSIC AI", slug: "news-music-ai", parent: 0, count: 1 },
+      { id: 3, name: "Tecnologia", slug: "tecnologia", parent: 0, count: 1 },
+      { id: 1, name: "Uncategorized", slug: "uncategorized", parent: 0, count: 1 },
+    ] };
+    const multiState = { ...state, blogs: [sourceBlog, secondBlog] };
+    apiMock.state.mockResolvedValue(multiState);
+    apiMock.refreshBlogCategories.mockResolvedValue(multiState);
+    categoryVectorMock.map.mockResolvedValue({
+      categoryIds: [1],
+      categoryName: "Uncategorized",
+      score: 0.42,
+      fallback: true,
+      bestCategoryName: "NEWS MUSIC AI",
+      threshold: 0.5,
+      ranking: [
+        { id: 2, name: "NEWS MUSIC AI", score: 0.42, evidence: "Suno v6" },
+        { id: 3, name: "Tecnologia", score: 0.39 },
+        { id: 1, name: "Uncategorized", score: 0.18 },
+      ],
+      model: "paraphrase-multilingual-MiniLM-L12-v2",
+    });
+    render(<AutoPostApp onHome={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText("Music TodAI")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText("Incolla qui il JSON degli articoli"), { target: { value: JSON.stringify({ articles: [{ title: "Suno v6", content: "Musica AI", categories: [7] }] }) } });
+    fireEvent.click(screen.getByRole("button", { name: "Analizza JSON" }));
+    fireEvent.change(await screen.findByLabelText("Blog sorgente"), { target: { value: "blog-1" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Music TodAI" }));
+
+    expect(await screen.findByText(/migliore candidata “NEWS MUSIC AI”/)).toBeInTheDocument();
+    expect(screen.getByText(/coseno reale 0.42/)).toBeInTheDocument();
+    expect(screen.getByText(/soglia 0.50/)).toBeInTheDocument();
+    expect(screen.getByText(/selezionata “Uncategorized”/)).toBeInTheDocument();
+    expect(screen.queryByText(/Vector DB · coseno 0.42/)).toBeNull();
+    fireEvent.click(screen.getByText("Mostra ranking cosine (3)"));
+    expect(screen.getByText(/Passaggio con coseno massimo: “Suno v6”/)).toBeInTheDocument();
+    expect(screen.getByText(/NEWS MUSIC AI · coseno 0.42/)).toBeInTheDocument();
+    expect(screen.getByText(/Tecnologia · coseno 0.39/)).toBeInTheDocument();
+    expect(screen.getByText(/Uncategorized · coseno 0.18/)).toBeInTheDocument();
+  });
+  it("associa con Vector DB tutti gli articoli mostrando il progresso batch", async () => {
+    const sourceBlog = { ...state.blogs[0], categories: [{ id: 7, name: "Sport", slug: "sport", parent: 0, count: 66 }] };
+    const secondBlog = { ...state.blogs[0], id: "blog-2", name: "Music TodAI", siteUrl: "https://music.example", categories: [{ id: 2, name: "NEWS MUSIC AI", slug: "news-music-ai", parent: 0, count: 1 }] };
+    const multiState = { ...state, blogs: [sourceBlog, secondBlog] };
+    apiMock.state.mockResolvedValue(multiState);
+    const addedCategory = { id: 9, name: "Nuova categoria", slug: "nuova", parent: 0, count: 0 };
+    let targetRefreshes = 0;
+    apiMock.refreshBlogCategories.mockImplementation(async (id: string) => {
+      if (id === "blog-2") targetRefreshes += 1;
+      return targetRefreshes >= 2 ? { ...multiState, blogs: [sourceBlog, { ...secondBlog, categories: [...secondBlog.categories, addedCategory] }] } : multiState;
+    });
+    categoryVectorMock.map.mockImplementation(async (article: { title: string }, _blog, progress: (message: string) => void) => {
+      progress(`Vector DB · analisi semantica di “${article.title}”`);
+      return { categoryIds: [2], categoryName: "NEWS MUSIC AI", score: 0.81, fallback: false, bestCategoryName: "NEWS MUSIC AI", threshold: 0.5, ranking: [{ id: 2, name: "NEWS MUSIC AI", score: 0.81 }, { id: 3, name: "Tecnologia", score: 0.32 }], model: "paraphrase-multilingual-MiniLM-L12-v2" };
+    });
+    render(<AutoPostApp onHome={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText("Music TodAI")).toBeInTheDocument());
+
+    const articles = [
+      { title: "Suno v6", content: "Musica AI", categories: [7] },
+      { title: "Nuovo sintetizzatore", content: "Produzione musicale", categories: [7] },
+    ];
+    fireEvent.change(screen.getByLabelText("Incolla qui il JSON degli articoli"), { target: { value: JSON.stringify({ articles }) } });
+    fireEvent.click(screen.getByRole("button", { name: "Analizza JSON" }));
+    fireEvent.change(await screen.findByLabelText("Blog sorgente"), { target: { value: "blog-1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Associa tutti · Music TodAI" }));
+
+    await waitFor(() => expect(categoryVectorMock.map).toHaveBeenCalledTimes(2));
+    expect(targetRefreshes).toBe(2);
+    expect(categoryVectorMock.map.mock.calls[1]?.[1].categories).toContainEqual(addedCategory);
+    expect(await screen.findByText("Vector DB locale · 2/2")).toBeInTheDocument();
+    expect(screen.getByText("Associazione completata per Music TodAI")).toBeInTheDocument();
+  });
+
+  it("non usa categorie vecchie se il refresh WordPress fallisce", async () => {
+    const secondBlog = { ...state.blogs[0], id: "blog-2", name: "Music TodAI" };
+    const multiState = { ...state, blogs: [state.blogs[0], secondBlog] };
+    apiMock.state.mockResolvedValue(multiState);
+    apiMock.refreshBlogCategories.mockImplementation(async (id: string) => {
+      if (id === "blog-2") throw new Error("Categorie WordPress non raggiungibili");
+      return multiState;
+    });
+    render(<AutoPostApp onHome={vi.fn()} />);
+    await screen.findByText("Music TodAI");
+    fireEvent.change(screen.getByLabelText("Incolla qui il JSON degli articoli"), { target: { value: JSON.stringify({ articles: [{ title: "Cucina", content: "Ricette", categories: [7] }] }) } });
+    fireEvent.click(screen.getByRole("button", { name: "Analizza JSON" }));
+    fireEvent.change(await screen.findByLabelText("Blog sorgente"), { target: { value: "blog-1" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Music TodAI" }));
+    expect((await screen.findAllByText("Categorie WordPress non raggiungibili")).length).toBeGreaterThan(0);
+    expect(categoryVectorMock.map).not.toHaveBeenCalled();
   });
 });

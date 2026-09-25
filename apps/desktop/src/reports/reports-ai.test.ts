@@ -12,7 +12,7 @@ vi.mock("../services/studio-settings", () => ({
   requestRemoteAnswer: runtime.answer,
 }));
 
-import { saveReportsAiSettings, suggestCalculatedField } from "./reports-ai";
+import { saveReportsAiSettings, suggestCalculatedField, suggestReplicateXlsModel } from "./reports-ai";
 
 const dataset: ReportDataset = {
   id: "sales", name: "Sales", sourceName: "sales.csv",
@@ -53,5 +53,33 @@ describe("Reports calculated-field LLM assistant", () => {
     saveReportsAiSettings({ enabled: false, provider: "openai" });
     await expect(suggestCalculatedField("Total revenue", dataset, "en")).rejects.toThrow(/Enable the formula assistant/);
     expect(runtime.answer).not.toHaveBeenCalled();
+  });
+
+  it("uses an available API provider when Studio is currently set to local", async () => {
+    saveReportsAiSettings({ enabled: true, provider: "" });
+    runtime.status.mockResolvedValue({
+      activeProvider: "local",
+      providers: {
+        openai: { provider: "openai", configured: true, enabled: true, model: "gpt-test", keySource: "settings", endpoint: "" },
+        nvidia: { provider: "nvidia", configured: false, enabled: false, model: "", keySource: "none", endpoint: "" },
+        gemini: { provider: "gemini", configured: false, enabled: false, model: "", keySource: "none", endpoint: "" },
+        xai: { provider: "xai", configured: false, enabled: false, model: "", keySource: "none", endpoint: "" },
+      },
+    });
+    const result = await suggestCalculatedField("Total revenue", dataset, "en");
+    expect(result.provider).toBe("openai");
+    expect(runtime.answer).toHaveBeenCalledWith(expect.any(Array), expect.objectContaining({ provider: "openai" }));
+  });
+
+  it("turns the workbook analysis into validated editable Replicate XLS regions", async () => {
+    saveReportsAiSettings({ enabled: true, provider: "openai" });
+    runtime.answer.mockResolvedValue({ source: "openai", model: "gpt-test", content: JSON.stringify({
+      summary: "Rows are metrics and new records continue to the right.",
+      regions: [{ sheetName: "Report", range: "B4:C8", label: "Sales", description: "Add one column for every record.", mode: "tableColumns", fieldIds: ["customer", "revenue"], includeHeaders: true }],
+    }) });
+    const result = await suggestReplicateXlsModel({ fileName: "report.xlsx", format: "xlsx", sheets: [{ name: "Report", range: "A1:C8", merges: [], populatedCells: 5, sampleCells: [{ address: "A1", value: "Report" }] }] }, dataset, "en");
+    expect(result.summary).toContain("continue to the right");
+    expect(result.regions[0]).toMatchObject({ sheetName: "Report", range: "B4:C8", mode: "tableColumns", fieldIds: ["customer", "revenue"] });
+    expect(runtime.answer).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ content: expect.stringContaining("tableColumns") })]), expect.objectContaining({ provider: "openai" }));
   });
 });

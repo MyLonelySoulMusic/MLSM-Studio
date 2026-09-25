@@ -19,11 +19,12 @@ interface DashboardGridProps {
   onDeleteRow?: (rowId: string) => void;
   onChangeWidgetType?: (widget: ReportWidget) => void;
   onPlayAnimation?: (widget: ReportWidget) => void;
+  onOpenReplicateXls?: (widget: ReportWidget) => void;
 }
 
 export function DashboardGrid({
   dashboard, tabId, readOnly = false, selectedWidgetId, selectedRowId, onSelectWidget, onSelectRow,
-  onMoveWidget, onMoveWidgetTo, onDuplicateWidget, onDeleteWidget, onSetRowColumns, onDeleteRow, onChangeWidgetType, onPlayAnimation,
+  onMoveWidget, onMoveWidgetTo, onDuplicateWidget, onDeleteWidget, onSetRowColumns, onDeleteRow, onChangeWidgetType, onPlayAnimation, onOpenReplicateXls,
 }: DashboardGridProps) {
   const rows = tabId ? dashboard.layoutRows.filter(row => row.tabId === tabId) : dashboard.layoutRows;
   return <div className="rpt-layout-rows">
@@ -61,8 +62,8 @@ export function DashboardGrid({
             style={{ "--rpt-widget-span": fixedColumns ? 1 : widget.width, "--rpt-widget-height": `${widget.height}px` } as CSSProperties}
             aria-label={`Widget ${widget.title}`}
             tabIndex={readOnly ? undefined : 0}
-            onKeyDown={event => { if (!readOnly && event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); onSelectRow?.(row.id); onSelectWidget?.(widget.id); } }}
-            onClick={event => { event.stopPropagation(); if (!readOnly) { onSelectRow?.(row.id); onSelectWidget?.(widget.id); } }}
+            onKeyDown={event => { if (!readOnly && event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); onSelectRow?.(row.id); onSelectWidget?.(widget.id); if (widget.type === "replicateXls") onOpenReplicateXls?.(widget); } }}
+            onClick={event => { event.stopPropagation(); if (!readOnly) { onSelectRow?.(row.id); onSelectWidget?.(widget.id); if (widget.type === "replicateXls") onOpenReplicateXls?.(widget); } }}
             onDragOver={event => { if (!readOnly && event.dataTransfer.types.includes("application/mlsm-report-widget")) event.preventDefault(); }}
             onDrop={(event: DragEvent<HTMLElement>) => { event.preventDefault(); event.stopPropagation(); const id = event.dataTransfer.getData("application/mlsm-report-widget"); if (id) onMoveWidgetTo?.(id, widget.id, row.id); }}
           >

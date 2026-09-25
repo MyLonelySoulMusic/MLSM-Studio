@@ -178,6 +178,27 @@ describe("AI Quantizer modules API", () => {
     expect(aligned.project.tracks[1]).toMatchObject({ output: "outputs/stem-quantized.wav" });
   });
 
+  it("rejects an unreliable beat map without rewriting or processing it", async () => {
+    const { api, project } = await setup();
+    const before = JSON.parse(await readFile(join(currentDataRoot!, project.id, "project.json"), "utf8")) as Project;
+    await expect(api(requestWithJson({
+      points: [
+        { source: 0, target: 0 },
+        { source: 0, target: 0 },
+        { source: 1, target: 1 }
+      ],
+      sourceDuration: 3,
+      estimatedBpm: 120,
+      confidence: 80,
+      settings: { targetBpm: 120 }
+    }), responseCapture(), new URL(`http://localhost/api/projects/${project.id}/warp-map`)))
+      .rejects.toThrow("Il brano non è quantizzabile automaticamente");
+
+    const after = JSON.parse(await readFile(join(currentDataRoot!, project.id, "project.json"), "utf8")) as Project;
+    expect(after.warpMap).toEqual(before.warpMap);
+    expect(after.tracks).toEqual(before.tracks);
+  });
+
   it("builds alignment-only FFmpeg filters without any quantization stage", async () => {
     const { api } = await setup();
     const forward = api.alignmentRenderPlan(480_000, { enabled: true, shiftSeconds: 1, fadeSeconds: .15 });

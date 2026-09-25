@@ -1,3 +1,5 @@
+import { verifiedFeatureExtractor } from "./verified-feature-extractor";
+
 export interface LocalChatMessage {
   role: "system" | "user" | "assistant";
   content: string;
@@ -8,6 +10,8 @@ export interface LocalGeneratedText {
 }
 
 export type LocalTextGenerator = (input: LocalChatMessage[], options: Record<string, unknown>) => Promise<LocalGeneratedText[]>;
+export interface LocalFeatureTensor { data: Float32Array | number[]; dims: number[]; tolist: () => unknown; }
+export type LocalFeatureExtractor = ((input: string | string[], options: { pooling: "mean"; normalize: true }) => Promise<LocalFeatureTensor>) & { embeddingSpace?: string; dispose?: () => Promise<void> };
 export type LocalModelPhase = "idle" | "loading" | "ready" | "error";
 export interface LocalModelStatus { phase: LocalModelPhase; message: string; }
 
@@ -17,7 +21,9 @@ const remoteModelRepositories = {
   "whisper-medium_timestamped": "onnx-community/whisper-medium_timestamped",
   "qwen2.5-0.5b-instruct": "onnx-community/Qwen2.5-0.5B-Instruct",
   "detr-resnet-50": "Xenova/detr-resnet-50",
-  "Xenova/detr-resnet-50": "Xenova/detr-resnet-50"
+  "Xenova/detr-resnet-50": "Xenova/detr-resnet-50",
+  "paraphrase-multilingual-MiniLM-L12-v2": "Xenova/paraphrase-multilingual-MiniLM-L12-v2",
+  "Xenova/paraphrase-multilingual-MiniLM-L12-v2": "Xenova/paraphrase-multilingual-MiniLM-L12-v2"
 } as const;
 
 export const preferredLocalAssistantModel = "qwen2.5-0.5b-instruct";
@@ -26,6 +32,7 @@ export const preferredLocalAssistantLabel = "Qwen2.5 0.5B";
 const transcriberPromises = new Map<string, Promise<unknown>>();
 const textGeneratorPromises = new Map<string, Promise<unknown>>();
 const objectDetectorPromises = new Map<string, Promise<unknown>>();
+const featureExtractorPromises = new Map<string, Promise<unknown>>();
 const readyTextGenerators = new Set<string>();
 const localModelStatuses = new Map<string, LocalModelStatus>();
 let persistentStorageRequest: Promise<boolean> | undefined;
@@ -136,7 +143,7 @@ export function modelProgressMessage(model: string, event: unknown, cachedFiles:
   return null;
 }
 
-async function createLocalPipeline(task: "automatic-speech-recognition" | "text-generation" | "object-detection", model: string, progress?: (message: string) => void): Promise<unknown> {
+async function createLocalPipeline(task: "automatic-speech-recognition" | "text-generation" | "object-detection" | "feature-extraction", model: string, progress?: (message: string) => void): Promise<unknown> {
   const transformers = await import("@huggingface/transformers");
   configureModelDownloads(transformers.env);
   await preserveModelCache();
@@ -156,6 +163,13 @@ async function createLocalPipeline(task: "automatic-speech-recognition" | "text-
   if (gpu) {
     try { adapter = await gpu.requestAdapter(); } catch { adapter = null; }
   }
+  if (task === "feature-extraction") {
+    return verifiedFeatureExtractor(
+      async device => await transformers.pipeline("feature-extraction", repository, { dtype: "q8", device, progress_callback: reportProgress }) as unknown as LocalFeatureExtractor,
+      Boolean(adapter), repository,
+      message => setLocalModelStatus(model, "loading", message, progress),
+    );
+  }
   if (adapter) {
     const dtype = task === "text-generation" && adapter.features?.has("shader-f16") ? "q4f16" : "q4";
     try {
@@ -167,6 +181,25 @@ async function createLocalPipeline(task: "automatic-speech-recognition" | "text-
   }
   setLocalModelStatus(model, "loading", `Initializing ${model} on WASM · q4`, progress);
   return transformers.pipeline(task, repository, { dtype: "q4", device: "wasm", progress_callback: reportProgress });
+}
+
+export async function getLocalFeatureExtractor(model: string, progress?: (message: string) => void): Promise<LocalFeatureExtractor> {
+  let pipeline = featureExtractorPromises.get(model);
+  if (!pipeline) {
+    pipeline = createLocalPipeline("feature-extraction", model, progress).then((extractor) => {
+      setLocalModelStatus(model, "ready", `${model} ready for local embeddings`, progress);
+      return extractor;
+    }).catch((error: unknown) => {
+      featureExtractorPromises.delete(model);
+      const message = localModelErrorMessage(error);
+      setLocalModelStatus(model, "error", `${model} unavailable: ${message}`, progress);
+      throw new Error(message, { cause: error });
+    });
+    featureExtractorPromises.set(model, pipeline);
+  } else if (progress) {
+    progress(getLocalModelStatus(model).message);
+  }
+  return pipeline as Promise<LocalFeatureExtractor>;
 }
 
 export function getLocalTranscriber(model: string, progress?: (message: string) => void): Promise<unknown> {

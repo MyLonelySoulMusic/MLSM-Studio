@@ -253,6 +253,7 @@
     'Il progetto non contiene tracce': 'The project contains no tracks',
     'Servono almeno due beat': 'At least two beats are required',
     'La beat map deve essere strettamente crescente': 'The beat map must be strictly increasing',
+    'Il brano non è quantizzabile automaticamente': 'This song cannot be quantized automatically',
     'Carica prima una traccia master': 'Upload a master track first',
     'Pulsazione non sufficientemente affidabile per la quantizzazione automatica': 'The detected pulse is not reliable enough for automatic quantization',
     'Analizza e salva prima la beat map': 'Analyze and save the beat map first',

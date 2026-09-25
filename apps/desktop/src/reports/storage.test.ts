@@ -104,7 +104,7 @@ describe("Reports portable JSON", () => {
     expect(() => importDashboard("{broken")).toThrow(/JSON valido/);
     expect(() => importDashboard("null")).toThrow(/oggetto/);
     const dashboard = createDemoDashboard();
-    expect(() => importDashboard(JSON.stringify({ ...dashboard, schemaVersion: 16 }))).toThrow(/versione non supportata/);
+    expect(() => importDashboard(JSON.stringify({ ...dashboard, schemaVersion: 17 }))).toThrow(/versione non supportata/);
     expect(() => importDashboard(JSON.stringify({ ...dashboard, executable: "alert(1)" }))).toThrow(/struttura/);
   });
 
@@ -130,7 +130,7 @@ describe("Reports portable JSON", () => {
     legacy.widgets.forEach((widget: Record<string, unknown>) => { delete widget.secondaryDimension; delete widget.timeGrain; delete widget.rowId; delete widget.currency; delete widget.decimals; delete widget.xSort; });
     legacy.filters = [{ id: "legacy-filter", datasetId: legacy.datasets[0].id, fieldId: "field-2", value: "Instagram" }];
     const migrated = importDashboard(JSON.stringify(legacy));
-    expect(migrated.schemaVersion).toBe(15);
+    expect(migrated.schemaVersion).toBe(16);
     expect(migrated.widgets.every(widget => widget.timeGrain === "exact" && widget.secondaryDimension === "")).toBe(true);
     expect(migrated.layoutRows).toHaveLength(1);
     expect(migrated.widgets.every(widget => widget.rowId === migrated.layoutRows[0]!.id && widget.currency === "EUR" && widget.decimals === 2 && widget.xSort === "asc")).toBe(true);
@@ -143,7 +143,7 @@ describe("Reports portable JSON", () => {
     delete legacy.layoutRows;
     legacy.widgets.forEach((widget: Record<string, unknown>) => { delete widget.rowId; delete widget.currency; delete widget.decimals; delete widget.xSort; });
     const migrated = importDashboard(JSON.stringify(legacy));
-    expect(migrated.schemaVersion).toBe(15);
+    expect(migrated.schemaVersion).toBe(16);
     expect(migrated.tabs).toEqual([{ id: "tab-main", name: "Pagina 1" }]);
     expect(migrated.layoutRows).toEqual([{ id: "row-main", tabId: "tab-main", columns: null }]);
     expect(migrated.widgets.every(widget => widget.rowId === "row-main" && widget.currency === "EUR" && widget.decimals === 2 && widget.xSort === "asc")).toBe(true);
@@ -154,7 +154,7 @@ describe("Reports portable JSON", () => {
     legacy.schemaVersion = 3;
     legacy.widgets.forEach((widget: Record<string, unknown>) => { delete widget.xSort; });
     const migrated = importDashboard(JSON.stringify(legacy));
-    expect(migrated.schemaVersion).toBe(15);
+    expect(migrated.schemaVersion).toBe(16);
     expect(migrated.widgets.every(widget => widget.xSort === "asc")).toBe(true);
   });
 
@@ -163,7 +163,7 @@ describe("Reports portable JSON", () => {
     legacy.schemaVersion = 4;
     legacy.filters = [{ id: "legacy-filter", datasetId: legacy.datasets[0].id, fieldId: "field-2", value: "Instagram", targetMode: "all", widgetIds: [] }];
     const migrated = importDashboard(JSON.stringify(legacy));
-    expect(migrated.schemaVersion).toBe(15);
+    expect(migrated.schemaVersion).toBe(16);
     expect(migrated.filters[0]).toMatchObject({ value: "Instagram", defaultValue: "Instagram", includeAll: true });
   });
 
@@ -177,7 +177,7 @@ describe("Reports portable JSON", () => {
 
     const migrated = importDashboard(JSON.stringify(legacy));
 
-    expect(migrated.schemaVersion).toBe(15);
+    expect(migrated.schemaVersion).toBe(16);
     expect(migrated.tabs).toEqual([{ id: "tab-main", name: "Pagina 1" }]);
     expect(migrated.layoutRows.every(row => row.tabId === "tab-main")).toBe(true);
     expect(migrated.widgets[0]!.limit).toBeNull();
@@ -191,7 +191,7 @@ describe("Reports portable JSON", () => {
 
     const migrated = importDashboard(JSON.stringify(legacy));
 
-    expect(migrated.schemaVersion).toBe(15);
+    expect(migrated.schemaVersion).toBe(16);
     expect(migrated.widgets.every(widget => widget.mapBackground === DEFAULT_MAP_BACKGROUND)).toBe(true);
   });
 
@@ -202,7 +202,7 @@ describe("Reports portable JSON", () => {
 
     const migrated = importDashboard(JSON.stringify(legacy));
 
-    expect(migrated.schemaVersion).toBe(15);
+    expect(migrated.schemaVersion).toBe(16);
     expect(migrated.widgets.every(widget => widget.animation === null)).toBe(true);
   });
 
@@ -216,7 +216,7 @@ describe("Reports portable JSON", () => {
 
     const migrated = importDashboard(JSON.stringify(legacy));
 
-    expect(migrated.schemaVersion).toBe(15);
+    expect(migrated.schemaVersion).toBe(16);
     expect(migrated.widgets[0]!.animation?.valueMode).toBe("period");
   });
 
@@ -227,7 +227,7 @@ describe("Reports portable JSON", () => {
 
     const migrated = importDashboard(JSON.stringify(legacy));
 
-    expect(migrated.schemaVersion).toBe(15);
+    expect(migrated.schemaVersion).toBe(16);
     expect(migrated.widgets.every(widget => widget.categoryLimitMode === "first")).toBe(true);
   });
 
@@ -237,7 +237,7 @@ describe("Reports portable JSON", () => {
 
     const migrated = importDashboard(JSON.stringify(legacy));
 
-    expect(migrated.schemaVersion).toBe(15);
+    expect(migrated.schemaVersion).toBe(16);
     expect(migrated.widgets.every(widget => widget.animation === null)).toBe(true);
   });
 
@@ -252,7 +252,7 @@ describe("Reports portable JSON", () => {
 
     const migrated = importDashboard(JSON.stringify(legacy));
 
-    expect(migrated.schemaVersion).toBe(15);
+    expect(migrated.schemaVersion).toBe(16);
     expect(migrated.widgets.every(widget => !widget.showKpiLabel && !widget.showKpiMeta)).toBe(true);
     expect(migrated.widgets.every(widget => widget.showXTicks && widget.showYTicks && widget.xTickCount === null && widget.yTickCount === null)).toBe(true);
     expect(migrated.widgets.every(widget => widget.xAxisMin === null && widget.xAxisMax === null && widget.yAxisMin === null && widget.yAxisMax === null)).toBe(true);
@@ -284,7 +284,7 @@ describe("Reports portable JSON", () => {
 
     const migrated = importDashboard(JSON.stringify(legacy));
 
-    expect(migrated.schemaVersion).toBe(15);
+    expect(migrated.schemaVersion).toBe(16);
     expect(migrated.widgets.every(widget => widget.xAxisLabel === "" && widget.yAxisLabel === "")).toBe(true);
   });
 
@@ -295,7 +295,7 @@ describe("Reports portable JSON", () => {
 
     const migrated = importDashboard(JSON.stringify(legacy));
 
-    expect(migrated.schemaVersion).toBe(15);
+    expect(migrated.schemaVersion).toBe(16);
     expect(migrated.datasets[0]!.sources).toEqual([expect.objectContaining({
       fileName: "MLSM-demo.csv",
       sheetName: "Performance dei canali",
@@ -371,6 +371,24 @@ describe("Reports portable JSON", () => {
     delete dashboard.datasets[0]!.rows[0]!["unknown-field"];
     delete dashboard.datasets[0]!.rows[0]!["field-3"];
     expect(() => exportDashboard(dashboard)).toThrow(/struttura/);
+  });
+
+  it("migrates v15 dashboards and persists Replicate XLS models", () => {
+    const legacy = JSON.parse(JSON.stringify(createDemoDashboard()));
+    legacy.schemaVersion = 15;
+    legacy.widgets.forEach((widget: Record<string, unknown>) => { delete widget.replicateXls; });
+    const migrated = validateDashboard(legacy);
+    expect(migrated.schemaVersion).toBe(16);
+    expect(migrated.widgets.every(widget => widget.replicateXls === null)).toBe(true);
+
+    const widget = migrated.widgets[0]!;
+    widget.type = "replicateXls";
+    widget.replicateXls = {
+      templateName: "report.xlsx", templateFormat: "xlsx", templateBase64: "UEs=", sheetName: "Report", selectedRange: "A1:B2",
+      regions: [{ id: "region-1", sheetName: "Report", range: "A1:B2", label: "Dati", description: "Continua per colonne", mode: "tableColumns", fieldIds: [migrated.datasets[0]!.fields[0]!.id], includeHeaders: true }],
+      aiSummary: "Report mensile", aiProvider: "openai", aiModel: "test", correctionNotes: "", lastTestedAt: null,
+    };
+    expect(validateDashboard(JSON.parse(JSON.stringify(migrated))).widgets[0]!.replicateXls).toEqual(widget.replicateXls);
   });
 
   it("reports an unavailable shared local archive instead of claiming a save succeeded", async () => {

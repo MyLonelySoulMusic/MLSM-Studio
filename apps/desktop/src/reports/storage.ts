@@ -239,8 +239,16 @@ export function validateDashboard(value: unknown): ReportDashboard {
       } : dataset) : legacy.datasets,
     };
   }
+  if (candidate && typeof candidate === "object" && !Array.isArray(candidate) && (candidate as JsonObject).schemaVersion === 15) {
+    const legacy = candidate as JsonObject;
+    candidate = {
+      ...legacy,
+      schemaVersion: 16,
+      widgets: Array.isArray(legacy.widgets) ? legacy.widgets.map(widget => widget && typeof widget === "object" && !Array.isArray(widget) ? { ...widget, replicateXls: null } : widget) : legacy.widgets,
+    };
+  }
   const data = object(candidate, ["schemaVersion", "id", "name", "description", "createdAt", "updatedAt", "theme", "datasets", "tabs", "layoutRows", "widgets", "filters"], "dashboard");
-  if (data.schemaVersion !== 15) invalid("versione non supportata. Questo programma legge i formati Reports dalla v1 alla v15.");
+  if (data.schemaVersion !== 16) invalid("versione non supportata. Questo programma legge i formati Reports dalla v1 alla v16.");
   const theme = object(data.theme, ["accent", "ink", "paper"], "tema");
   const datasets = array(data.datasets, REPORT_LIMITS.datasets, "dataset").map(dataset);
   unique(datasets.map(item => item.id), "dataset");
@@ -264,7 +272,7 @@ export function validateDashboard(value: unknown): ReportDashboard {
   if (tabs.some(tab => !layoutRows.some(row => row.tabId === tab.id))) invalid("ogni tab deve contenere almeno una riga layout.");
   const layoutRowIds = new Set(layoutRows.map(row => row.id));
   const widgets: ReportWidget[] = array(data.widgets, REPORT_LIMITS.widgets, "widget").map(value => {
-    const widget = object(value, ["id", "type", "title", "datasetId", "dimension", "secondaryDimension", "measure", "aggregation", "timeGrain", "rowId", "width", "height", "color", "mapBackground", "text", "format", "currency", "decimals", "sort", "xSort", "limit", "categoryLimitMode", "showKpiLabel", "showKpiMeta", "showXTicks", "showYTicks", "xTickCount", "yTickCount", "xAxisMin", "xAxisMax", "yAxisMin", "yAxisMax", "xAxisLabel", "yAxisLabel", "animation"], "widget");
+    const widget = object(value, ["id", "type", "title", "datasetId", "dimension", "secondaryDimension", "measure", "aggregation", "timeGrain", "rowId", "width", "height", "color", "mapBackground", "text", "format", "currency", "decimals", "sort", "xSort", "limit", "categoryLimitMode", "showKpiLabel", "showKpiMeta", "showXTicks", "showYTicks", "xTickCount", "yTickCount", "xAxisMin", "xAxisMax", "yAxisMin", "yAxisMax", "xAxisLabel", "yAxisLabel", "animation", "replicateXls"], "widget");
     const datasetId = id(widget.datasetId, "dataset del widget", true);
     const source = datasetId ? datasetsById.get(datasetId) : undefined;
     if (datasetId && !source) invalid("un widget fa riferimento a un dataset inesistente.");
@@ -326,8 +334,31 @@ export function validateDashboard(value: unknown): ReportDashboard {
         };
       } else invalid("tipo animazione non supportato.");
     }
+    let replicateXls: ReportWidget["replicateXls"] = null;
+    if (widget.replicateXls !== null) {
+      const config = object(widget.replicateXls, ["templateName", "templateFormat", "templateBase64", "sheetName", "selectedRange", "regions", "aiSummary", "aiProvider", "aiModel", "correctionNotes", "lastTestedAt"], "configurazione Replica Excel");
+      if (!source) invalid("Replica Excel richiede un dataset valido.");
+      const templateBase64 = string(config.templateBase64, "template Replica Excel", 21_000_000);
+      if (!/^[A-Za-z0-9+/]*={0,2}$/.test(templateBase64)) invalid("il template Replica Excel non è codificato correttamente.");
+      const regions = array(config.regions, 100, "aree Replica Excel").map((value, index) => {
+        const region = object(value, ["id", "sheetName", "range", "label", "description", "mode", "fieldIds", "includeHeaders"], `area Replica Excel ${index + 1}`);
+        const fieldIds = array(region.fieldIds, REPORT_LIMITS.fields, "campi area Replica Excel").map((value, fieldIndex) => id(value, `campo ${fieldIndex + 1} dell’area`));
+        if (fieldIds.some(fieldId => !source.fields.some(field => field.id === fieldId))) invalid("un’area Replica Excel fa riferimento a un campo inesistente.");
+        if (typeof region.includeHeaders !== "boolean") invalid("l’opzione intestazioni di Replica Excel deve essere booleana.");
+        const range = string(region.range, "intervallo area Replica Excel", 50);
+        if (!/^[A-Z]+[1-9]\d*:[A-Z]+[1-9]\d*$/i.test(range)) invalid("un intervallo Replica Excel non usa la notazione A1 valida.");
+        return { id: id(region.id, "ID area Replica Excel"), sheetName: string(region.sheetName, "foglio area Replica Excel", 300), range: range.toUpperCase(), label: string(region.label, "nome area Replica Excel", 120, true), description: string(region.description, "descrizione area Replica Excel", 1200, true), mode: choice(region.mode, ["static", "singleCell", "tableRows", "tableColumns"] as const, "modalità area Replica Excel"), fieldIds, includeHeaders: region.includeHeaders };
+      });
+      unique(regions.map(region => region.id), "aree Replica Excel");
+      replicateXls = {
+        templateName: string(config.templateName, "nome template Replica Excel", 500), templateFormat: choice(config.templateFormat, ["xlsx", "xls", "xlsm", "xlsb", "ods"] as const, "formato template Replica Excel"), templateBase64,
+        sheetName: string(config.sheetName, "foglio Replica Excel", 300), selectedRange: string(config.selectedRange, "selezione Replica Excel", 50), regions,
+        aiSummary: string(config.aiSummary, "analisi AI Replica Excel", 6000, true), aiProvider: string(config.aiProvider, "provider AI Replica Excel", 100, true), aiModel: string(config.aiModel, "modello AI Replica Excel", 300, true), correctionNotes: string(config.correctionNotes, "note Replica Excel", 6000, true),
+        lastTestedAt: config.lastTestedAt === null ? null : date(config.lastTestedAt, "data ultimo test Replica Excel"),
+      };
+    }
     return {
-      id: id(widget.id, "ID widget"), type: choice(widget.type, ["kpi", "bar", "column", "line", "area", "doughnut", "scatter", "map", "table", "pivot", "text"] as const, "tipo widget"),
+      id: id(widget.id, "ID widget"), type: choice(widget.type, ["kpi", "bar", "column", "line", "area", "doughnut", "scatter", "map", "table", "pivot", "replicateXls", "text"] as const, "tipo widget"),
       title: string(widget.title, "titolo widget", 300, true), datasetId, dimension, secondaryDimension, measure, rowId,
       aggregation: choice(widget.aggregation, ["sum", "avg", "count", "distinct", "median", "min", "max", "range", "variance", "stddev"] as const, "aggregazione"),
       timeGrain: choice(widget.timeGrain, ["exact", "day", "week", "month", "quarter", "year"] as const, "raggruppamento temporale"),
@@ -340,7 +371,7 @@ export function validateDashboard(value: unknown): ReportDashboard {
       showKpiLabel: widget.showKpiLabel, showKpiMeta: widget.showKpiMeta,
       showXTicks: widget.showXTicks, showYTicks: widget.showYTicks, xTickCount, yTickCount,
       xAxisMin, xAxisMax, yAxisMin, yAxisMax,
-      xAxisLabel: string(widget.xAxisLabel, "etichetta asse X", 160, true), yAxisLabel: string(widget.yAxisLabel, "etichetta asse Y", 160, true), animation,
+      xAxisLabel: string(widget.xAxisLabel, "etichetta asse X", 160, true), yAxisLabel: string(widget.yAxisLabel, "etichetta asse Y", 160, true), animation, replicateXls,
     };
   });
   unique(widgets.map(item => item.id), "widget");
@@ -366,7 +397,7 @@ export function validateDashboard(value: unknown): ReportDashboard {
   });
   unique(filters.map(item => item.id), "filtri");
   return {
-    schemaVersion: 15, id: id(data.id, "ID dashboard"), name: string(data.name, "nome dashboard"), description: string(data.description, "descrizione", 5000, true),
+    schemaVersion: 16, id: id(data.id, "ID dashboard"), name: string(data.name, "nome dashboard"), description: string(data.description, "descrizione", 5000, true),
     createdAt: date(data.createdAt, "data di creazione"), updatedAt: date(data.updatedAt, "data di modifica"),
     theme: { accent: color(theme.accent, "colore principale"), ink: color(theme.ink, "colore testo"), paper: color(theme.paper, "colore sfondo") },
     datasets, tabs, layoutRows, widgets, filters,

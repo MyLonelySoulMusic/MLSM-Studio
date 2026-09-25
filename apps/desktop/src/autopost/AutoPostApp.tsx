@@ -2,11 +2,25 @@ import { useCallback, useEffect, useMemo, useState, type DragEvent } from "react
 import { parseArticleDocument } from "./media.mjs";
 import { api } from "./api";
 import type { AppState, ArticleInput, BlogConnection, LibraryMedia, QueueItem, QueueStatus, RecognizedMedia } from "./types";
+import { getAutoPostAiStatus, mapAutoPostCategories, type AutoPostAiStatus } from "./category-ai";
+import { CATEGORY_VECTOR_MODEL_LABEL, CATEGORY_VECTOR_THRESHOLD, mapAutoPostCategoriesWithVectorDb, readCategoryAssociationMode, readCategorySelectionMode, readCategoryVectorThreshold, writeCategoryAssociationMode, writeCategorySelectionMode, writeCategoryVectorThreshold, type CategoryAssociationMode, type CategorySelectionMode } from "./category-vector";
 import { useUiPreferences } from "../services/ui-preferences";
 import "./autopost.css";
 
 type Tab = "import" | "queue" | "library" | "stats" | "settings";
 type Language = "it" | "en";
+
+type CategoryVectorRankingItem = { id: number; name: string; score: number; evidence?: string };
+type CategoryVectorFeedback = {
+  categoryName: string;
+  score: number;
+  fallback: boolean;
+  bestCategoryName?: string;
+  threshold?: number;
+  ranking?: readonly CategoryVectorRankingItem[];
+  selectionMode?: CategorySelectionMode;
+};
+type CategoryMappingState = { state: "loading" | "done" | "error"; label?: string; feedback?: CategoryVectorFeedback };
 const EXAMPLE_JSON = JSON.stringify({
   intervalMinutes: 15,
   postsPerRun: 3,
@@ -47,6 +61,22 @@ const copy = {
 const statusLabel = (status: QueueStatus, language: Language) => ({ queued: copy[language].queued, publishing: copy[language].publishing, published: copy[language].published, failed: copy[language].failed })[status];
 const formatDate = (value: string | null, language: Language) => value ? new Intl.DateTimeFormat(language === "it" ? "it-IT" : "en-GB", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value)) : "—";
 
+const formatCosine = (value: number): string => value.toFixed(2);
+const vectorMappingLabel = (result: CategoryVectorFeedback): string => {
+  const threshold = result.threshold ?? CATEGORY_VECTOR_THRESHOLD;
+  const selectedCategory = result.categoryName || "WordPress default";
+  const bestCategory = result.bestCategoryName || "candidata non disponibile";
+  const score = formatCosine(result.score);
+  const thresholdLabel = formatCosine(threshold);
+  return result.fallback
+    ? ["Vector DB", "fallback", "migliore candidata “" + bestCategory + "”", "coseno reale " + score, "soglia " + thresholdLabel, "selezionata “" + selectedCategory + "”"].join(" · ")
+    : ["Vector DB", "coseno " + score, selectedCategory, "soglia " + thresholdLabel, "selezionata “" + selectedCategory + "”"].join(" · ");
+};
+
+function VectorRanking({ ranking, language }: { ranking: readonly CategoryVectorRankingItem[]; language: Language }) {
+  const winningEvidence = ranking[0]?.evidence;
+  return <details className="autopost-vector-ranking"><summary>{language === "it" ? "Mostra ranking cosine (" + ranking.length + ")" : "Show cosine ranking (" + ranking.length + ")"}</summary>{winningEvidence ? <p>Passaggio con coseno massimo: “{winningEvidence}”</p> : null}<ol>{ranking.map(entry => <li key={entry.id}><span>{entry.name} · {language === "it" ? "coseno" : "cosine"} {formatCosine(entry.score)}{entry.evidence ? " · " + entry.evidence : ""}</span><b>#{entry.id}</b></li>)}</ol></details>;
+}
 function Brand() {
   return <div className="autopost-brand" aria-label="MLSM AutoPost"><img className="autopost-brand-mark" src="/mlsm-studio-favicon-192.png" alt="" /><span><strong>MLSM AutoPost</strong><small>My Lonely Soul Music</small></span></div>;
 }
@@ -81,6 +111,13 @@ export function AutoPostApp({ onHome }: { onHome: () => void }) {
   const [preview, setPreview] = useState<ArticleInput[]>([]);
   const [articleBlogIds, setArticleBlogIds] = useState<string[][]>([]);
   const [articleCategories, setArticleCategories] = useState<Array<Record<string, number[]>>>([]);
+  const [sourceBlogId, setSourceBlogId] = useState("");
+  const [llmStatus, setLlmStatus] = useState<AutoPostAiStatus | null>(null);
+  const [categoryAssociationMode, setCategoryAssociationMode] = useState<CategoryAssociationMode>(readCategoryAssociationMode);
+  const [categoryVectorThreshold, setCategoryVectorThreshold] = useState(readCategoryVectorThreshold);
+  const [categorySelectionMode, setCategorySelectionMode] = useState<CategorySelectionMode>(readCategorySelectionMode);
+  const [categoryMapping, setCategoryMapping] = useState<Record<string, CategoryMappingState>>({});
+  const [associationProgress, setAssociationProgress] = useState<{ done: number; total: number; label: string; complete?: boolean } | null>(null);
   const [categoryBlogId, setCategoryBlogId] = useState("");
   const [fileName, setFileName] = useState("");
   const [pastedJson, setPastedJson] = useState("");
@@ -99,6 +136,7 @@ export function AutoPostApp({ onHome }: { onHome: () => void }) {
     catch (error) { if (!quiet) setNotice({ kind: "error", text: error instanceof Error ? error.message : String(error) }); }
   }, []);
   useEffect(() => { void refresh(); const poll = window.setInterval(() => void refresh(true), 4_000); const clock = window.setInterval(() => setNow(Date.now()), 1_000); return () => { clearInterval(poll); clearInterval(clock); }; }, [refresh]);
+  useEffect(() => { void getAutoPostAiStatus().then(setLlmStatus).catch(() => setLlmStatus(null)); }, []);
   useEffect(() => {
     if (!state) return;
     if (!state.blogs.some((blog) => blog.id === categoryBlogId)) setCategoryBlogId(state.blogs[0]?.id || "");
@@ -114,8 +152,10 @@ export function AutoPostApp({ onHome }: { onHome: () => void }) {
     const parsed = parseArticleDocument(value);
     const onlyBlog = state?.blogs.length === 1 ? state.blogs[0] : undefined;
     setArticleDocument(value); setPreview(parsed.articles); setFileName(name);
+    setSourceBlogId(onlyBlog?.id || "");
     setArticleBlogIds(parsed.articles.map(() => onlyBlog ? [onlyBlog.id] : []));
     setArticleCategories(parsed.articles.map((article) => onlyBlog ? { [onlyBlog.id]: article.categories } : {}));
+    setCategoryMapping({});
     setIntervalValue(parsed.intervalMinutes ?? state?.schedule.intervalMinutes ?? 15);
     setPostsPerRun(parsed.postsPerRun ?? state?.schedule.postsPerRun ?? 1);
   };
@@ -158,9 +198,134 @@ export function AutoPostApp({ onHome }: { onHome: () => void }) {
     setNotice({ kind: "ok", text: language === "it" ? `${blog.categories.length} categorie di ${blog.name} copiate.` : `${blog.categories.length} categories from ${blog.name} copied.` });
   };
   const drop = (event: DragEvent) => { event.preventDefault(); void readFile(event.dataTransfer.files[0]); };
-  const toggleArticleBlog = (articleIndex: number, blogId: string) => {
-    setArticleBlogIds((current) => current.map((ids, index) => index !== articleIndex ? ids : ids.includes(blogId) ? ids.filter((id) => id !== blogId) : [...ids, blogId]));
-    setArticleCategories((current) => current.map((categories, index) => index === articleIndex && !(blogId in categories) ? { ...categories, [blogId]: [] } : categories));
+  const chooseSourceBlog = async (blogId: string) => {
+    setSourceBlogId(blogId);
+    setArticleBlogIds(preview.map(() => blogId ? [blogId] : []));
+    setArticleCategories(preview.map(article => blogId ? { [blogId]: article.categories } : {}));
+    setCategoryMapping({});
+    if (!blogId) return;
+    try { setState(await api.refreshBlogCategories(blogId)); }
+    catch (error) { setNotice({ kind: "error", text: error instanceof Error ? error.message : String(error) }); }
+  };
+  const changeCategoryAssociationMode = (mode: CategoryAssociationMode) => {
+    writeCategoryAssociationMode(mode);
+    setCategoryAssociationMode(mode);
+    setArticleBlogIds(preview.map(() => sourceBlogId ? [sourceBlogId] : []));
+    setArticleCategories(preview.map(article => sourceBlogId ? { [sourceBlogId]: article.categories } : {}));
+    setCategoryMapping({});
+    setAssociationProgress(null);
+  };
+  const changeCategoryVectorThreshold = (value: number) => {
+    const next = Math.min(1, Math.max(0, value));
+    writeCategoryVectorThreshold(next);
+    setCategoryVectorThreshold(next);
+  };
+  const changeCategorySelectionMode = (value: CategorySelectionMode) => {
+    writeCategorySelectionMode(value);
+    setCategorySelectionMode(value);
+  };
+  const mapArticleToTarget = async (articleIndex: number, sourceBlog: BlogConnection, targetBlog: BlogConnection): Promise<boolean> => {
+    const mappingKey = `${articleIndex}:${targetBlog.id}`;
+    const article = preview[articleIndex];
+    if (!article) return false;
+    setCategoryMapping(current => ({ ...current, [mappingKey]: { state: "loading", label: categoryAssociationMode === "vector" ? "Preparazione Vector DB locale…" : "Invio al modello LLM…" } }));
+    try {
+      const refreshed = await api.refreshBlogCategories(targetBlog.id);
+      setState(refreshed);
+      const currentTarget = refreshed.blogs.find(blog => blog.id === targetBlog.id);
+      if (!currentTarget || currentTarget.categoryError) throw new Error(currentTarget?.categoryError || "Blog destinazione non disponibile.");
+      targetBlog = currentTarget;
+      if (categoryAssociationMode === "vector") {
+        const result = await mapAutoPostCategoriesWithVectorDb(article, targetBlog, label => {
+          setCategoryMapping(current => ({ ...current, [mappingKey]: { state: "loading", label } }));
+          setAssociationProgress(current => current ? { ...current, label } : current);
+        }, categoryVectorThreshold, categorySelectionMode);
+        setCategoriesForArticle(articleIndex, targetBlog.id, result.categoryIds);
+        const feedback = result as typeof result & CategoryVectorFeedback;
+        const label = vectorMappingLabel(feedback);
+        setCategoryMapping(current => ({ ...current, [mappingKey]: { state: "done", label, feedback } }));
+      } else {
+        const result = await mapAutoPostCategories(article, sourceBlog, targetBlog);
+        setCategoriesForArticle(articleIndex, targetBlog.id, result.categoryIds);
+        setCategoryMapping(current => ({ ...current, [mappingKey]: { state: "done", label: `${result.label} · ${result.model}` } }));
+      }
+      return true;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      setArticleCategories(current => current.map((categories, index) => index === articleIndex ? { ...categories, [targetBlog.id]: [] } : categories));
+      setCategoryMapping(current => ({ ...current, [mappingKey]: { state: "error", label: detail } }));
+      console.error("[AutoPost] Associazione categorie non riuscita", { mode: categoryAssociationMode, sourceBlogId, targetBlogId: targetBlog.id, detail });
+      setNotice({ kind: "error", text: detail });
+      return false;
+    }
+  };
+  const toggleArticleBlog = async (articleIndex: number, blogId: string) => {
+    const selected = articleBlogIds[articleIndex]?.includes(blogId) || false;
+    const mappingKey = `${articleIndex}:${blogId}`;
+    setArticleBlogIds(current => current.map((ids, index) => index !== articleIndex ? ids : selected ? ids.filter(id => id !== blogId) : [...ids, blogId]));
+    if (selected) {
+      setArticleCategories(current => current.map((categories, index) => {
+        if (index !== articleIndex) return categories;
+        const remaining = { ...categories };
+        delete remaining[blogId];
+        return remaining;
+      }));
+      setCategoryMapping(current => { const remaining = { ...current }; delete remaining[mappingKey]; return remaining; });
+      return;
+    }
+    if (blogId === sourceBlogId) {
+      setCategoriesForArticle(articleIndex, blogId, preview[articleIndex]?.categories || []);
+      return;
+    }
+    if (!sourceBlogId) {
+      setNotice({ kind: "error", text: language === "it" ? "Prima indica il blog sul quale sono stati scritti gli articoli." : "First choose the blog where the articles were originally written." });
+      return;
+    }
+    try {
+      const sourceBlog = state?.blogs.find(blog => blog.id === sourceBlogId);
+      const targetBlog = state?.blogs.find(blog => blog.id === blogId);
+      if (!sourceBlog || !targetBlog) throw new Error(language === "it" ? "Blog sorgente o destinazione non disponibile." : "Source or destination blog is unavailable.");
+      setAssociationProgress({ done: 0, total: 1, label: preview[articleIndex]?.title || "Articolo" });
+      const completed = await mapArticleToTarget(articleIndex, sourceBlog, targetBlog);
+      setAssociationProgress({ done: 1, total: 1, label: completed ? (language === "it" ? "Associazione completata" : "Mapping complete") : (language === "it" ? "Associazione non riuscita" : "Mapping failed"), complete: true });
+      window.setTimeout(() => setAssociationProgress(null), 1_500);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      setArticleCategories(current => current.map((categories, index) => index === articleIndex ? { ...categories, [blogId]: [] } : categories));
+      setCategoryMapping(current => ({ ...current, [mappingKey]: { state: "error", label: detail } }));
+      console.error("[AutoPost] Associazione categorie non riuscita", { sourceBlogId, targetBlogId: blogId, detail });
+      setNotice({ kind: "error", text: detail });
+    }
+  };
+  const mapTargetBlogForAllArticles = async (blogId: string) => {
+    if (!sourceBlogId || !preview.length || blogId === sourceBlogId) return;
+    setArticleBlogIds(current => current.map(ids => ids.includes(blogId) ? ids : [...ids, blogId]));
+    setAssociationProgress({ done: 0, total: preview.length, label: language === "it" ? "Preparazione categorie…" : "Preparing categories…" });
+    try {
+      const sourceBlog = state?.blogs.find(blog => blog.id === sourceBlogId);
+      const targetBlog = state?.blogs.find(blog => blog.id === blogId);
+      if (!sourceBlog || !targetBlog) throw new Error(language === "it" ? "Blog sorgente o destinazione non disponibile." : "Source or destination blog is unavailable.");
+      let completed = 0;
+      let failures = 0;
+      for (let index = 0; index < preview.length; index += 1) {
+        const article = preview[index];
+        if (!article) continue;
+        setAssociationProgress({ done: completed, total: preview.length, label: article.title });
+        const succeeded = await mapArticleToTarget(index, sourceBlog, targetBlog);
+        if (!succeeded) failures += 1;
+        completed += 1;
+        setAssociationProgress({ done: completed, total: preview.length, label: article.title });
+      }
+      const completionLabel = failures
+        ? (language === "it" ? `Completata con ${failures} errori per ${targetBlog.name}` : `Completed with ${failures} errors for ${targetBlog.name}`)
+        : (language === "it" ? `Associazione completata per ${targetBlog.name}` : `Mapping completed for ${targetBlog.name}`);
+      setAssociationProgress({ done: completed, total: preview.length, label: completionLabel, complete: true });
+      window.setTimeout(() => setAssociationProgress(null), 1_800);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      setAssociationProgress({ done: 0, total: preview.length, label: detail, complete: true });
+      setNotice({ kind: "error", text: detail });
+    }
   };
   const setCategoriesForArticle = (articleIndex: number, blogId: string, categoryIds: number[]) => {
     setArticleCategories((current) => current.map((categories, index) => index === articleIndex ? { ...categories, [blogId]: categoryIds } : categories));
@@ -171,6 +336,7 @@ export function AutoPostApp({ onHome }: { onHome: () => void }) {
   const nextLabel = nextSeconds === null ? "—" : nextSeconds < 60 ? `${nextSeconds}s` : `${Math.floor(nextSeconds / 60)}m ${nextSeconds % 60}s`;
   const stats = useMemo(() => Object.values(state?.stats || {}).sort((a, b) => b.publishCount - a.publishCount), [state]);
   const categoryBlog = state?.blogs.find((blog) => blog.id === categoryBlogId);
+  const associationBusy = Boolean(associationProgress && !associationProgress.complete);
 
   return <div className="autopost-shell" data-ui-copy>
     <header className="autopost-topbar">
@@ -199,7 +365,20 @@ export function AutoPostApp({ onHome }: { onHome: () => void }) {
           </article>
           <article className="autopost-format-card"><span>JSON</span><h2>{t.exactExample}</h2><p>{t.formatDescription}</p><pre><code>{EXAMPLE_JSON}</code></pre><div className="autopost-example-actions"><button onClick={() => void navigator.clipboard.writeText(EXAMPLE_JSON).then(() => setNotice({ kind: "ok", text: language === "it" ? "Esempio copiato." : "Example copied." }))}>{t.copyExample}</button><a href="/autopost-example-articles.json" download>{t.format}</a></div><ul><li>{t.spotifyTypes}</li><li>{t.youtubeTypes}</li><li>{t.responsiveLayout}</li></ul></article>
         </div>
-        {preview.length > 0 && <section className="autopost-preview-section"><header><div><small>{fileName}</small><h2>{preview.length} {t.ready.toLowerCase()}</h2></div><button className="autopost-primary" disabled={Boolean(busy) || articleBlogIds.some((ids) => !ids.length)} onClick={() => void run("import", async () => { const result = await api.import(articleDocument, articleBlogIds, articleCategories); setState(result.state); setArticleDocument(null); setPreview([]); setArticleBlogIds([]); setArticleCategories([]); setFileName(""); setPastedJson(""); setNotice({ kind: "ok", text: `${result.imported} ${t.imported}.` }); setTab("queue"); })}>{t.addQueue}</button></header><div className="autopost-article-preview-grid">{preview.map((article, index) => <article key={`${article.title}-${index}`}><small>#{String(index + 1).padStart(2, "0")}</small><h3>{article.title}</h3><p>{article.content.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").slice(0, 150)}</p><div>{article.media.length ? article.media.map((media) => <MediaBadge key={`${media.provider}-${media.id}`} media={media} language={language} />) : <span className="autopost-muted">{t.noEmbed}</span>}</div><div className="autopost-article-targets"><strong>{language === "it" ? "Pubblica su" : "Publish to"}</strong><div className="autopost-target-blog-list">{state?.blogs.map((blog) => <label key={blog.id}><input type="checkbox" checked={articleBlogIds[index]?.includes(blog.id) || false} onChange={() => toggleArticleBlog(index, blog.id)} />{blog.name}</label>)}</div>{articleBlogIds[index]?.map((blogId) => { const blog = state?.blogs.find((entry) => entry.id === blogId); return blog ? <label className="autopost-category-picker" key={blogId}><span>{blog.name} · {language === "it" ? "categorie" : "categories"}</span><select multiple value={(articleCategories[index]?.[blogId] || []).map(String)} onChange={(event) => setCategoriesForArticle(index, blogId, Array.from(event.currentTarget.selectedOptions, (option) => Number(option.value)))}>{blog.categories.map((category) => <option key={category.id} value={category.id}>{category.name} (#{category.id})</option>)}</select></label> : null; })}</div></article>)}</div></section>}
+        {preview.length > 0 && <section className="autopost-preview-section">
+          <header><div><small>{fileName}</small><h2>{preview.length} {t.ready.toLowerCase()}</h2></div><button className="autopost-primary" disabled={Boolean(busy) || associationBusy || !sourceBlogId || articleBlogIds.some(ids => !ids.length) || Object.values(categoryMapping).some(mapping => mapping.state === "loading")} onClick={() => void run("import", async () => { const result = await api.import(articleDocument, articleBlogIds, articleCategories); setState(result.state); setArticleDocument(null); setPreview([]); setArticleBlogIds([]); setArticleCategories([]); setSourceBlogId(""); setCategoryMapping({}); setFileName(""); setPastedJson(""); setNotice({ kind: "ok", text: `${result.imported} ${t.imported}.` }); setTab("queue"); })}>{t.addQueue}</button></header>
+          <div className="autopost-taxonomy-assistant">
+            <div><small>SMART TAXONOMY</small><strong>{language === "it" ? "Su quale blog sono stati scritti questi articoli?" : "Which blog were these articles written for?"}</strong><p>{categoryAssociationMode === "vector" ? (language === "it" ? `Gli ID originali restano sul blog sorgente. Per gli altri blog un modello locale multilingua sceglie la categoria con il coseno maggiore; sotto ${formatCosine(categoryVectorThreshold)} usa Uncategorized. Il valore è il coseno massimo sui passaggi dell’articolo, non una probabilità.` : `Original IDs remain on the source blog. For other blogs, a local multilingual model selects the category with the highest cosine; below ${formatCosine(categoryVectorThreshold)} it uses Uncategorized. This is the maximum cosine over article passages, not a probability.`) : (language === "it" ? "Gli ID originali restano sul blog sorgente. Per gli altri blog usa il provider LLM configurato; puoi sempre correggere il risultato." : "Original IDs stay on the source blog. Other blogs use the configured LLM provider; you can always edit the result.")}</p></div>
+            <label>{language === "it" ? "Blog sorgente" : "Source blog"}<select aria-label={language === "it" ? "Blog sorgente" : "Source blog"} disabled={associationBusy} value={sourceBlogId} onChange={event => void chooseSourceBlog(event.target.value)}><option value="">{language === "it" ? "Seleziona il blog…" : "Choose a blog…"}</option>{state?.blogs.map(blog => <option key={blog.id} value={blog.id}>{blog.name}</option>)}</select></label>
+            <label>{language === "it" ? "Metodo associazione" : "Mapping method"}<select aria-label={language === "it" ? "Metodo associazione" : "Mapping method"} disabled={associationBusy} value={categoryAssociationMode} onChange={event => changeCategoryAssociationMode(event.target.value as CategoryAssociationMode)}><option value="vector">Vector DB · locale</option><option value="llm">LLM · API configurata</option></select></label>
+            {categoryAssociationMode === "vector" ? <label>{language === "it" ? "Categorie sopra soglia" : "Categories above threshold"}<select aria-label={language === "it" ? "Categorie sopra soglia" : "Categories above threshold"} disabled={associationBusy} value={categorySelectionMode} onChange={event => changeCategorySelectionMode(event.target.value as CategorySelectionMode)}><option value="first">FIRST · {language === "it" ? "solo la migliore" : "best one only"}</option><option value="all">ALL · {language === "it" ? "tutte" : "all"}</option></select></label> : null}
+            {categoryAssociationMode === "vector" ? <label className="autopost-vector-threshold"><span>{language === "it" ? "Soglia coseno" : "Cosine threshold"}<b>{formatCosine(categoryVectorThreshold)}</b></span><input aria-label={language === "it" ? "Soglia coseno" : "Cosine threshold"} type="range" min="0" max="1" step="0.01" disabled={associationBusy} value={categoryVectorThreshold} onChange={event => changeCategoryVectorThreshold(Number(event.target.value))} /><small>{language === "it" ? "Salvata in locale · applicata alle nuove associazioni" : "Saved locally · applied to new mappings"}</small></label> : null}
+            <span className={`autopost-llm-pill ${categoryAssociationMode === "vector" || llmStatus ? "autopost-is-ready" : ""}`}><i />{categoryAssociationMode === "vector" ? `${CATEGORY_VECTOR_MODEL_LABEL} · locale · soglia ${formatCosine(categoryVectorThreshold)}` : llmStatus ? `${llmStatus.label} · ${llmStatus.model}` : language === "it" ? "Configura un LLM API in Studio" : "Configure an API LLM in Studio"}</span>
+          </div>
+          {sourceBlogId && <div className="autopost-bulk-mapping"><span>{language === "it" ? "Associa un blog a tutti gli articoli" : "Map one blog across all articles"}</span>{state?.blogs.filter(blog => blog.id !== sourceBlogId).map(blog => <button key={blog.id} disabled={associationBusy} onClick={() => void mapTargetBlogForAllArticles(blog.id)}>{language === "it" ? `Associa tutti · ${blog.name}` : `Map all · ${blog.name}`}</button>)}</div>}
+          {associationProgress && <div className={`autopost-association-progress ${associationProgress.complete ? "autopost-is-complete" : ""}`} role="status" aria-live="polite"><div className="autopost-association-orbit"><i /><i /><i /></div><div><strong>{categoryAssociationMode === "vector" ? "Vector DB locale" : "LLM"} · {associationProgress.done}/{associationProgress.total}</strong><span>{associationProgress.label}</span><div className="autopost-association-track"><i style={{ width: `${Math.round((associationProgress.done / Math.max(1, associationProgress.total)) * 100)}%` }} /></div></div><b>{Math.round((associationProgress.done / Math.max(1, associationProgress.total)) * 100)}%</b></div>}
+          <div className="autopost-article-preview-grid">{preview.map((article, index) => <article key={`${article.title}-${index}`}><small>#{String(index + 1).padStart(2, "0")}</small><h3>{article.title}</h3><p>{article.content.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").slice(0, 150)}</p><div>{article.media.length ? article.media.map(media => <MediaBadge key={`${media.provider}-${media.id}`} media={media} language={language} />) : <span className="autopost-muted">{t.noEmbed}</span>}</div><div className="autopost-article-targets"><strong>{language === "it" ? "Pubblica su" : "Publish to"}</strong><div className="autopost-target-blog-list">{state?.blogs.map(blog => { const mapping = categoryMapping[`${index}:${blog.id}`]; return <label key={blog.id} className={mapping?.state === "loading" ? "autopost-is-mapping" : ""}><input type="checkbox" disabled={!sourceBlogId || associationBusy || mapping?.state === "loading"} checked={articleBlogIds[index]?.includes(blog.id) || false} onChange={() => void toggleArticleBlog(index, blog.id)} />{blog.name}{blog.id === sourceBlogId ? <em>{language === "it" ? "origine" : "source"}</em> : mapping?.state === "loading" ? <em>{categoryAssociationMode === "vector" ? "VECTOR…" : "AI…"}</em> : null}</label>; })}</div>{articleBlogIds[index]?.map(blogId => { const blog = state?.blogs.find(entry => entry.id === blogId); const mapping = categoryMapping[`${index}:${blogId}`]; return blog ? <label className="autopost-category-picker" key={blogId}><span>{blog.name} · {language === "it" ? "categorie" : "categories"}{mapping?.label ? <em className={`autopost-mapping-result autopost-is-${mapping?.state}`}>{mapping?.label}</em> : null}{mapping?.feedback?.ranking?.length ? <VectorRanking ranking={mapping?.feedback.ranking} language={language} /> : null}</span><select multiple disabled={associationBusy || mapping?.state === "loading"} value={(articleCategories[index]?.[blogId] || []).map(String)} onChange={event => setCategoriesForArticle(index, blogId, Array.from(event.currentTarget.selectedOptions, option => Number(option.value)))}>{blog.categories.map(category => <option key={category.id} value={category.id}>{category.name} (#{category.id})</option>)}</select></label> : null; })}</div></article>)}</div>
+        </section>}
       </section>}
       {tab === "queue" && <section className="autopost-page autopost-queue-page">
         <div className="autopost-page-heading"><div><span>02 / QUEUE</span><h1>{t.queue}</h1><p>{t.queueIntro}</p></div><div className="autopost-metrics"><div><strong>{state?.summary.queued || 0}</strong><span>{t.queued}</span></div><div><strong>{state?.summary.published || 0}</strong><span>{t.published}</span></div><div><strong>{state?.summary.failed || 0}</strong><span>{t.failed}</span></div></div></div>
