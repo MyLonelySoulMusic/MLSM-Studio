@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } f
 import { createPortal } from "react-dom";
 import type { RhythmBallProject } from "@rbs/project-schema";
 import { createStaticWatermarkCompositor, normalizedWatermarkRegion, watermarkContextPixelRect, watermarkPixelRect } from "../services/static-watermark-renderer";
+import { createStaticWatermarkReferenceAligner } from "../services/static-watermark-alignment";
+import { cleanReferenceTime } from "../services/static-watermark-time";
 import { OPEN_STATIC_WATERMARK_DETAIL_PREVIEW } from "../services/static-watermark-detail-preview";
 import { useProjectStore } from "../store/project-store";
 
@@ -29,11 +31,14 @@ export function StaticWatermarkPreview({ settings, currentTime, playing }: { set
   const canvas = useRef<HTMLCanvasElement>(null);
   const detailCanvas = useRef<HTMLCanvasElement>(null);
   const video = useRef<HTMLVideoElement>(null);
+  const referenceVideo = useRef<HTMLVideoElement>(null);
   const reference = useRef<HTMLImageElement | null>(null);
   const compositor = useRef<ReturnType<typeof createStaticWatermarkCompositor> | null>(null);
+  const aligner = useRef<ReturnType<typeof createStaticWatermarkReferenceAligner> | null>(null);
   const dragStart = useRef<{ x: number; y: number } | null>(null);
   const update = useProjectStore((state) => state.updateStaticWatermark);
   const [ready, setReady] = useState(false);
+  const [referenceVideoReady, setReferenceVideoReady] = useState(false);
   const [referenceRevision, setReferenceRevision] = useState(0);
   const [detailOpen, setDetailOpen] = useState(false);
 
@@ -49,18 +54,37 @@ export function StaticWatermarkPreview({ settings, currentTime, playing }: { set
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [detailOpen]);
 
-  useEffect(() => { let active = true; void loadImage(settings.referenceImageUrl).then((image) => { if (active) { reference.current = image; setReferenceRevision((value) => value + 1); } }); return () => { active = false; }; }, [settings.referenceImageUrl]);
+  useEffect(() => { let active = true; void loadImage(settings.referenceKind === "image" ? settings.referenceImageUrl : null).then((image) => { if (active) { reference.current = image; setReferenceRevision((value) => value + 1); } }); return () => { active = false; }; }, [settings.referenceImageUrl, settings.referenceKind]);
   useEffect(() => {
     const item = video.current;
     if (!item || !settings.videoUrl) return;
     item.src = settings.videoUrl; item.load(); setReady(false);
   }, [settings.videoUrl]);
   useEffect(() => {
+    const item = referenceVideo.current;
+    if (!item) return;
+    if (settings.referenceKind !== "video" || !settings.referenceVideoUrl) {
+      if (item.getAttribute("src")) { item.pause(); item.removeAttribute("src"); item.load(); }
+      setReferenceVideoReady(false); return;
+    }
+    item.src = settings.referenceVideoUrl; item.load(); setReferenceVideoReady(false);
+  }, [settings.referenceKind, settings.referenceVideoUrl]);
+  useEffect(() => { aligner.current?.reset(); }, [settings.referenceKind, settings.referenceVideoUrl, settings.referenceTimeOffsetSeconds]);
+  useEffect(() => {
     const item = video.current;
     if (!item || !ready) return;
     if (Math.abs(item.currentTime - currentTime) > (playing ? .12 : .015)) item.currentTime = Math.max(0, Math.min(item.duration || currentTime, currentTime));
     if (playing) void item.play().catch(() => undefined); else item.pause();
   }, [currentTime, playing, ready]);
+  useEffect(() => {
+    const item = referenceVideo.current;
+    if (!item || !referenceVideoReady || settings.referenceKind !== "video") return;
+    const referenceDuration = item.duration || settings.referenceVideoDurationSeconds;
+    const wanted = cleanReferenceTime(video.current?.currentTime ?? currentTime, settings.referenceTimeOffsetSeconds, referenceDuration);
+    if (wanted === null) { item.pause(); return; }
+    if (!item.seeking && Math.abs(item.currentTime - wanted) > .5 / (settings.referenceFrameRate || 30)) item.currentTime = wanted;
+    if (playing) void item.play().catch(() => undefined); else item.pause();
+  }, [currentTime, playing, referenceVideoReady, settings.referenceKind, settings.referenceTimeOffsetSeconds, settings.referenceVideoDurationSeconds, settings.referenceFrameRate]);
   useEffect(() => {
     const surface = canvas.current; const item = video.current;
     if (!surface || !item || !ready) return;
@@ -69,12 +93,25 @@ export function StaticWatermarkPreview({ settings, currentTime, playing }: { set
     const nativeHeight = item.videoHeight || settings.videoHeight || 1920;
     const previewScale = Math.min(1, 1600 / Math.max(nativeWidth, nativeHeight));
     const width = Math.max(2, Math.round(nativeWidth * previewScale)); const height = Math.max(2, Math.round(nativeHeight * previewScale));
-    if (surface.width !== width || surface.height !== height) { surface.width = width; surface.height = height; compositor.current = createStaticWatermarkCompositor(width, height); }
+    if (surface.width !== width || surface.height !== height) { surface.width = width; surface.height = height; compositor.current = createStaticWatermarkCompositor(width, height); aligner.current = createStaticWatermarkReferenceAligner(width, height); }
     const context = surface.getContext("2d", { alpha: false });
     if (!context) return;
     const draw = () => {
       if (item.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
-        if (reference.current) compositor.current?.render(context, item, reference.current, settings);
+        const videoReference = settings.referenceKind === "video" && referenceVideoReady ? referenceVideo.current : null;
+        const wanted = videoReference ? cleanReferenceTime(item.currentTime, settings.referenceTimeOffsetSeconds, videoReference.duration || settings.referenceVideoDurationSeconds) : null;
+        // A seek updates currentTime before the decoded image is available.
+        // Keep the last complete composite until BOTH images represent the same time.
+        if (videoReference && wanted !== null && (item.seeking || videoReference.seeking || videoReference.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || Math.abs(videoReference.currentTime - wanted) > .5 / (settings.referenceFrameRate || 30))) {
+          if (!videoReference.seeking && Math.abs(videoReference.currentTime - wanted) > .5 / (settings.referenceFrameRate || 30)) videoReference.currentTime = wanted;
+          if (playing) frame = requestAnimationFrame(draw);
+          return;
+        }
+        if (videoReference && wanted !== null) {
+          context.drawImage(item, 0, 0, width, height);
+          const aligned = aligner.current?.align(item, videoReference, settings);
+          if (aligned) compositor.current?.applyPatch(context, aligned.canvas, { ...settings, referenceFit: "stretch", referenceScale: 1, referenceOffsetX: 0, referenceOffsetY: 0 });
+        } else if (reference.current) compositor.current?.render(context, item, reference.current, settings);
         else context.drawImage(item, 0, 0, width, height);
         const detail = detailCanvas.current;
         if (detailOpen && detail) {
@@ -102,7 +139,7 @@ export function StaticWatermarkPreview({ settings, currentTime, playing }: { set
     };
     draw();
     return () => cancelAnimationFrame(frame);
-  }, [currentTime, detailOpen, playing, ready, referenceRevision, settings]);
+  }, [currentTime, detailOpen, playing, ready, referenceRevision, referenceVideoReady, settings]);
 
   const point = (event: ReactPointerEvent<HTMLCanvasElement>) => { const bounds = event.currentTarget.getBoundingClientRect(); return { x: Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width)), y: Math.max(0, Math.min(1, (event.clientY - bounds.top) / bounds.height)) }; };
   const begin = (event: ReactPointerEvent<HTMLCanvasElement>) => { dragStart.current = point(event); event.currentTarget.setPointerCapture(event.pointerId); };
@@ -113,9 +150,10 @@ export function StaticWatermarkPreview({ settings, currentTime, playing }: { set
   const end = (event: ReactPointerEvent<HTMLCanvasElement>) => { move(event); dragStart.current = null; };
 
   return <><div className="static-watermark-preview">
-    <video ref={video} muted playsInline preload="auto" onLoadedMetadata={() => setReady(true)} onLoadedData={() => setReady(true)} onSeeked={() => setReady(true)} />
+    <video ref={video} muted playsInline preload="auto" onLoadedMetadata={() => setReady(true)} onLoadedData={() => { setReady(true); setReferenceRevision(value => value + 1); }} onSeeked={() => { setReady(true); setReferenceRevision(value => value + 1); }} />
+    <video ref={referenceVideo} muted playsInline preload="auto" onLoadedMetadata={() => setReferenceVideoReady(true)} onLoadedData={() => { setReferenceVideoReady(true); setReferenceRevision(value => value + 1); }} onSeeked={() => { setReferenceVideoReady(true); setReferenceRevision(value => value + 1); }} />
     {settings.videoUrl ? <canvas ref={canvas} aria-label="Preview rimozione watermark" onPointerDown={begin} onPointerMove={move} onPointerUp={end} onPointerCancel={() => { dragStart.current = null; }} /> : <div className="static-watermark-empty"><strong>Carica il video sorgente</strong><span>Qui potrai trascinare una selezione precisa sul watermark.</span></div>}
-    {settings.videoUrl && !settings.referenceImageUrl ? <div className="static-watermark-preview-hint">Carica la fotografia pulita per vedere la sostituzione</div> : null}
+    {settings.videoUrl && !(settings.referenceKind === "video" ? settings.referenceVideoUrl : settings.referenceImageUrl) ? <div className="static-watermark-preview-hint">Carica una fotografia o un video pulito per vedere la sostituzione</div> : null}
   </div>
     {detailOpen ? createPortal(<div className="watermark-detail-overlay" role="dialog" aria-modal="true" aria-label="Anteprima zona rimozione">
       <header><div><strong>Anteprima zona rimozione</strong><span>Correzione al centro con il video circostante, senza bordo di selezione</span></div><button type="button" aria-label="Chiudi anteprima zona rimozione" onClick={() => setDetailOpen(false)}>×</button></header>

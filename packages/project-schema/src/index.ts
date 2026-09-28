@@ -313,10 +313,15 @@ const pixelsSubSchema = z.object({
   subtitlePositionY: z.number().min(15).max(88).default(defaultPixelsSub.subtitlePositionY)
 }).strict();
 const defaultStaticWatermark = {
-  videoUrl: null, videoName: "", videoWidth: 0, videoHeight: 0,
+  videoUrl: null, videoName: "", videoWidth: 0, videoHeight: 0, videoDurationSeconds: 0,
+  referenceKind: "image" as const,
   referenceImageUrl: null, referenceImageName: "",
+  referenceVideoUrl: null, referenceVideoName: "", referenceVideoWidth: 0, referenceVideoHeight: 0, referenceVideoDurationSeconds: 0,
   region: { x: .68, y: .04, width: .27, height: .14 },
   referenceFit: "cover" as const, referenceScale: 1, referenceOffsetX: 0, referenceOffsetY: 0,
+  autoTemporalAlignment: true, referenceTimeOffsetSeconds: 0, temporalSearchSeconds: 8, alignmentConfidence: 0,
+  sourceFrameRate: 0, referenceFrameRate: 0, frameRateBasis: null as "source" | "reference" | null,
+  autoSpatialAlignment: true, alignmentMaxShift: 48, alignmentSmoothing: .82, alignmentMinConfidence: .28,
   feather: 0, patchOpacity: 1, colorMatch: true, colorMatchStrength: .05, guideVisible: true
 };
 const staticWatermarkSchema = z.object({
@@ -324,8 +329,15 @@ const staticWatermarkSchema = z.object({
   videoName: z.string().max(500).default(defaultStaticWatermark.videoName),
   videoWidth: z.number().int().nonnegative().default(defaultStaticWatermark.videoWidth),
   videoHeight: z.number().int().nonnegative().default(defaultStaticWatermark.videoHeight),
+  videoDurationSeconds: z.number().nonnegative().default(defaultStaticWatermark.videoDurationSeconds),
+  referenceKind: z.enum(["image", "video"]).default(defaultStaticWatermark.referenceKind),
   referenceImageUrl: z.string().nullable().default(defaultStaticWatermark.referenceImageUrl),
   referenceImageName: z.string().max(500).default(defaultStaticWatermark.referenceImageName),
+  referenceVideoUrl: z.string().nullable().default(defaultStaticWatermark.referenceVideoUrl),
+  referenceVideoName: z.string().max(500).default(defaultStaticWatermark.referenceVideoName),
+  referenceVideoWidth: z.number().int().nonnegative().default(defaultStaticWatermark.referenceVideoWidth),
+  referenceVideoHeight: z.number().int().nonnegative().default(defaultStaticWatermark.referenceVideoHeight),
+  referenceVideoDurationSeconds: z.number().nonnegative().default(defaultStaticWatermark.referenceVideoDurationSeconds),
   region: z.object({
     x: z.number().min(0).max(1), y: z.number().min(0).max(1),
     width: z.number().min(.005).max(1), height: z.number().min(.005).max(1)
@@ -334,6 +346,17 @@ const staticWatermarkSchema = z.object({
   referenceScale: z.number().min(.5).max(2.5).default(defaultStaticWatermark.referenceScale),
   referenceOffsetX: z.number().min(-1).max(1).default(defaultStaticWatermark.referenceOffsetX),
   referenceOffsetY: z.number().min(-1).max(1).default(defaultStaticWatermark.referenceOffsetY),
+  autoTemporalAlignment: z.boolean().default(defaultStaticWatermark.autoTemporalAlignment),
+  referenceTimeOffsetSeconds: z.number().min(-120).max(120).default(defaultStaticWatermark.referenceTimeOffsetSeconds),
+  temporalSearchSeconds: z.number().min(.5).max(60).default(defaultStaticWatermark.temporalSearchSeconds),
+  alignmentConfidence: z.number().min(0).max(1).default(defaultStaticWatermark.alignmentConfidence),
+  sourceFrameRate: z.number().nonnegative().default(defaultStaticWatermark.sourceFrameRate),
+  referenceFrameRate: z.number().nonnegative().default(defaultStaticWatermark.referenceFrameRate),
+  frameRateBasis: z.enum(["source", "reference"]).nullable().default(defaultStaticWatermark.frameRateBasis),
+  autoSpatialAlignment: z.boolean().default(defaultStaticWatermark.autoSpatialAlignment),
+  alignmentMaxShift: z.number().int().min(0).max(160).default(defaultStaticWatermark.alignmentMaxShift),
+  alignmentSmoothing: z.number().min(0).max(.98).default(defaultStaticWatermark.alignmentSmoothing),
+  alignmentMinConfidence: z.number().min(0).max(1).default(defaultStaticWatermark.alignmentMinConfidence),
   feather: z.number().int().min(0).max(24).default(defaultStaticWatermark.feather),
   patchOpacity: z.number().min(0).max(1).default(defaultStaticWatermark.patchOpacity),
   colorMatch: z.boolean().default(defaultStaticWatermark.colorMatch),

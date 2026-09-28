@@ -7,11 +7,19 @@
 Rimuove un watermark fermo da un video di cui possiedi o sei autorizzato a modificare il contenuto.
 
 1. Carica il video con watermark.
-2. Carica una fotografia pulita della stessa inquadratura.
+2. Scegli come riferimento una fotografia pulita oppure il video originale pulito della stessa sequenza.
 3. Disegna la regione nella preview.
 4. Apri **Anteprima zona rimozione** per vedere anche i pixel confinanti, non soltanto il rettangolo sostituito.
 5. Regola correzione e fusione; i valori iniziali sono conservativi.
 6. Esporta: tutti i frame vengono decodificati, corretti e ricodificati offline.
+
+Con un **video pulito**, MLSM cerca automaticamente l’offset temporale confrontando fotogrammi esterni alla zona del watermark. Durante preview ed export esegue inoltre un riallineamento spaziale per frame, smussando gli spostamenti per evitare tremolii. È possibile disattivare la sincronizzazione automatica, regolare l’offset al millisecondo e definire intervallo di ricerca, spostamento massimo e stabilizzazione.
+
+Se il video con watermark è più lungo del riferimento pulito, i due video vengono ancorati alla partenza a velocità originale: il secondo 10 della sorgente usa il secondo 10 del riferimento, anche con FPS diversi. La durata del riferimento non viene dilatata. Quando manca un fotogramma pulito, la parte corrispondente del video resta originale (watermark incluso); il pannello segnala questo limite. L’offset manuale resta modificabile anche con un riferimento più corto.
+
+Se i frame rate reali sono differenti, prima dell’export una finestra chiede quale cadenza mantenere: quella del video con watermark oppure quella del video pulito. Il video non scelto viene ricampionato sulla timeline scelta. Differenze puramente nominali come 29,97/30 fps vengono considerate compatibili.
+
+Se troppi fotogrammi richiedono un ripiego di allineamento, l’elaborazione viene sospesa e mostra un avviso professionale. L’utente può interrompere oppure continuare dallo stesso punto e ottenere comunque il risultato per valutarlo. L’audio resta quello del video con watermark.
 
 **Sfumatura bordo** parte da `0%`: un valore maggiore interviene esclusivamente sulla stretta fascia esterna della zona trattata. **Intensità correzione** parte circa dal `5%` e armonizza luminosità/colore con il video senza sfocare i pixel puliti inseriti.
 

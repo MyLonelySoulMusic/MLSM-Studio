@@ -83,7 +83,7 @@ Consulta la guida dedicata: [Sound Animation](docs/sound-animation.md).
 
 Strumenti di restauro e miglioramento per fotografie e video.
 
-- **Static Watermark Remover** per contenuti che possiedi o sei autorizzato a modificare;
+- **Static Watermark Remover** per contenuti che possiedi o sei autorizzato a modificare, con riferimento fotografico o video pulito sincronizzato e riallineato fotogramma per fotogramma;
 - **Upscaler** per foto e video con Canvas Enhanced, Real-ESRGAN e RealESRNet;
 - backend locale con selezione automatica CUDA, Metal/MPS o CPU e percorso remoto opzionale Gradio/Colab;
 - **MLX-DLSS 5** opzionale su Apple Silicon, con backend Metal isolato e modello NVIDIA importato dall’utente;

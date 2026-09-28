@@ -1949,6 +1949,26 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .watermark-workflow-step > span { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: #fff; font-weight: 800; }
 .watermark-workflow-step div { display: grid; gap: 3px; }
 .watermark-workflow-step small { color: var(--muted); line-height: 1.35; }
+.watermark-reference-kind { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; padding: 4px; border: 1px solid var(--line); border-radius: 13px; background: var(--panel-raised); }
+.watermark-reference-kind button { min-width: 0; border-color: transparent; background: transparent; color: var(--muted); box-shadow: none; }
+.watermark-reference-kind button.is-active { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); background: color-mix(in srgb, var(--accent) 15%, var(--panel)); color: var(--text); box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 12%, transparent); }
+.watermark-alignment-status { display: grid; grid-template-columns: 9px 1fr; gap: 8px; align-items: start; padding: 10px 11px; border: 1px solid var(--line); border-radius: 11px; background: var(--panel-raised); color: var(--muted); font-size: 11px; line-height: 1.45; }
+.watermark-alignment-status i { width: 8px; height: 8px; margin-top: 3px; border-radius: 50%; background: #8d8992; box-shadow: 0 0 0 3px #8d89921f; }
+.watermark-alignment-status.is-ready { border-color: color-mix(in srgb, #47c795 44%, var(--line)); color: var(--text); }
+.watermark-alignment-status.is-ready i { background: #47c795; box-shadow: 0 0 0 3px #47c79526; }
+.watermark-alignment-status.is-warning { border-color: color-mix(in srgb, #f0ac4d 46%, var(--line)); }
+.watermark-alignment-status.is-warning i { background: #f0ac4d; box-shadow: 0 0 0 3px #f0ac4d24; }
+.watermark-fps-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.watermark-fps-summary span { display: grid; gap: 3px; min-width: 0; padding: 8px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel-raised); color: var(--muted); font-size: 10px; }
+.watermark-fps-summary strong { overflow: hidden; color: var(--text); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.watermark-decision-backdrop { z-index: 12000; }
+.watermark-decision-dialog { width: min(560px, calc(100vw - 32px)); padding: 26px; border-color: color-mix(in srgb, var(--accent) 58%, var(--line)); box-shadow: 0 30px 100px #000c, 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent); }
+.watermark-decision-dialog > strong { color: var(--text); font-size: 24px; line-height: 1.15; }
+.watermark-decision-dialog > p { margin: 0; color: var(--muted); line-height: 1.55; }
+.watermark-decision-kicker { color: var(--accent-strong); font-size: 10px; font-weight: 900; letter-spacing: .18em; }
+.watermark-decision-actions { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 9px; margin-top: 8px; }
+.watermark-decision-actions button { min-height: 46px; }
+@media (max-width: 620px) { .watermark-fps-summary, .watermark-decision-actions { grid-template-columns: 1fr; } }
 .watermark-reference-preview { position: relative; min-height: 118px; border: 1px solid var(--line); border-radius: 12px; background-color: #08080b; background-repeat: no-repeat; background-position: center; background-size: contain; overflow: hidden; }
 .watermark-reference-preview span { position: absolute; inset: auto 7px 7px; padding: 5px 7px; border-radius: 7px; background: #000b; color: #fff; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .watermark-region-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
