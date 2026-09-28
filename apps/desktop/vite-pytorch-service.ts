@@ -133,6 +133,14 @@ export function localPyTorchService(
       };
       server.middlewares.use("/__mlsm/python/upscaler", async (request, response, next) => {
         const pathname = new URL(request.url ?? "/", "http://localhost").pathname;
+        if (pathname === "/status" && request.method === "GET") {
+          const current = await probe();
+          response.statusCode = 200;
+          response.setHeader("Content-Type", "application/json; charset=utf-8");
+          response.setHeader("Cache-Control", "no-store");
+          response.end(JSON.stringify(current));
+          return;
+        }
         if (pathname === "/stop" && request.method === "POST") {
           stopChild();
           response.statusCode = 204;

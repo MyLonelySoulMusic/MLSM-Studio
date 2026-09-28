@@ -113,13 +113,30 @@ function profileUrl(value: string) {
 
 const emptyBlogForm = () => ({ id: "", name: "", siteUrl: "", username: "", password: "", defaultStatus: "publish" as "publish" | "draft" });
 
+function documentWithArticles(document: unknown, articles: ArticleInput[]): unknown {
+  if (Array.isArray(document)) return articles;
+  if (document && typeof document === "object") return { ...document, articles };
+  return { articles };
+}
+
+function remapCategoryMappings(current: Record<string, CategoryMappingState>, retainedIndexes: number[]): Record<string, CategoryMappingState> {
+  const oldToNew = new Map(retainedIndexes.map((oldIndex, newIndex) => [oldIndex, newIndex]));
+  return Object.fromEntries(Object.entries(current).flatMap(([key, value]) => {
+    const separator = key.indexOf(":");
+    const oldIndex = Number(key.slice(0, separator));
+    const newIndex = oldToNew.get(oldIndex);
+    return separator > 0 && newIndex !== undefined ? [[`${newIndex}:${key.slice(separator + 1)}`, value]] : [];
+  }));
+}
+
 export function AutoPostApp({ onHome }: { onHome: () => void }) {
   const [tab, setTab] = useState<Tab>("import");
   const { language, theme, setLanguage, setTheme } = useUiPreferences();
   const [state, setState] = useState<AppState | null>(null);
   const [articleDocument, setArticleDocument] = useState<unknown>(null);
   const [preview, setPreview] = useState<ArticleInput[]>([]);
-  const [previewArticle, setPreviewArticle] = useState<ArticleInput | null>(null);
+  const [previewArticleIndex, setPreviewArticleIndex] = useState<number | null>(null);
+  const [selectedArticleIndexes, setSelectedArticleIndexes] = useState<number[]>([]);
   const [articleBlogIds, setArticleBlogIds] = useState<string[][]>([]);
   const [articleCategories, setArticleCategories] = useState<Array<Record<string, number[]>>>([]);
   const [sourceBlogId, setSourceBlogId] = useState("");
@@ -177,13 +194,36 @@ export function AutoPostApp({ onHome }: { onHome: () => void }) {
   const loadDocument = (value: unknown, name: string) => {
     const parsed = parseArticleDocument(value);
     const onlyBlog = state?.blogs.length === 1 ? state.blogs[0] : undefined;
-    setArticleDocument(value); setPreview(parsed.articles); setPreviewArticle(null); setFileName(name);
+    setArticleDocument(documentWithArticles(value, parsed.articles)); setPreview(parsed.articles); setPreviewArticleIndex(null); setSelectedArticleIndexes([]); setFileName(name);
     setSourceBlogId(onlyBlog?.id || "");
     setArticleBlogIds(parsed.articles.map(() => onlyBlog ? [onlyBlog.id] : []));
     setArticleCategories(parsed.articles.map((article) => onlyBlog ? { [onlyBlog.id]: article.categories } : {}));
     setCategoryMapping({});
     setIntervalValue(parsed.intervalMinutes ?? state?.schedule.intervalMinutes ?? 15);
     setPostsPerRun(parsed.postsPerRun ?? state?.schedule.postsPerRun ?? 1);
+  };
+  const savePreviewArticle = (article: ArticleInput) => {
+    if (previewArticleIndex === null) return;
+    const next = preview.map((entry, index) => index === previewArticleIndex ? article : entry);
+    setPreview(next);
+    setArticleDocument((document: unknown) => documentWithArticles(document, next));
+    setPreviewArticleIndex(null);
+    setNotice({ kind: "ok", text: language === "it" ? "Modifiche salvate nell’articolo da importare." : "Changes saved to the article that will be imported." });
+  };
+  const deleteSelectedArticles = () => {
+    const removed = new Set(selectedArticleIndexes);
+    if (!removed.size) return;
+    const retainedIndexes = preview.map((_, index) => index).filter(index => !removed.has(index));
+    const nextPreview = retainedIndexes.map(index => preview[index]!);
+    setPreview(nextPreview);
+    setArticleDocument((document: unknown) => documentWithArticles(document, nextPreview));
+    setArticleBlogIds(current => retainedIndexes.map(index => current[index] ?? []));
+    setArticleCategories(current => retainedIndexes.map(index => current[index] ?? {}));
+    setCategoryMapping(current => remapCategoryMappings(current, retainedIndexes));
+    setAssociationProgress(null);
+    setPreviewArticleIndex(null);
+    setSelectedArticleIndexes([]);
+    setNotice({ kind: "ok", text: language === "it" ? `${removed.size} ${removed.size === 1 ? "articolo eliminato" : "articoli eliminati"} dall’importazione.` : `${removed.size} ${removed.size === 1 ? "article" : "articles"} removed from this import.` });
   };
   const readFile = async (file?: File) => {
     if (!file) return;
@@ -415,7 +455,7 @@ export function AutoPostApp({ onHome }: { onHome: () => void }) {
           <article className="autopost-format-card"><span>JSON</span><h2>{t.exactExample}</h2><p>{t.formatDescription}</p><pre><code>{EXAMPLE_JSON}</code></pre><div className="autopost-example-actions"><button onClick={() => void navigator.clipboard.writeText(EXAMPLE_JSON).then(() => setNotice({ kind: "ok", text: language === "it" ? "Esempio copiato." : "Example copied." }))}>{t.copyExample}</button><a href="/autopost-example-articles.json" download>{t.format}</a></div><ul><li>{t.spotifyTypes}</li><li>{t.youtubeTypes}</li><li>{t.responsiveLayout}</li></ul></article>
         </div>
         {preview.length > 0 && <section className="autopost-preview-section">
-          <header><div><small>{fileName}</small><h2>{preview.length} {t.ready.toLowerCase()}</h2></div><button className="autopost-primary" disabled={Boolean(busy) || associationBusy || !sourceBlogId || articleBlogIds.some(ids => !ids.length) || Object.values(categoryMapping).some(mapping => mapping.state === "loading")} onClick={() => void run("import", async () => { const result = await api.import(articleDocument, articleBlogIds, articleCategories); setState(result.state); setArticleDocument(null); setPreview([]); setArticleBlogIds([]); setArticleCategories([]); setSourceBlogId(""); setCategoryMapping({}); setFileName(""); setPastedJson(""); setNotice({ kind: "ok", text: `${result.imported} ${t.imported}.` }); setTab("queue"); })}>{t.addQueue}</button></header>
+          <header><div><small>{fileName}</small><h2>{preview.length} {t.ready.toLowerCase()}</h2></div><div className="autopost-preview-actions"><button type="button" onClick={() => setSelectedArticleIndexes(selectedArticleIndexes.length === preview.length ? [] : preview.map((_, index) => index))}>{selectedArticleIndexes.length === preview.length ? (language === "it" ? "Deseleziona tutti" : "Deselect all") : (language === "it" ? "Seleziona tutti" : "Select all")}</button><button type="button" className="autopost-quiet-danger" disabled={!selectedArticleIndexes.length || associationBusy} onClick={deleteSelectedArticles}>{language === "it" ? `Elimina selezionati${selectedArticleIndexes.length ? ` (${selectedArticleIndexes.length})` : ""}` : `Delete selected${selectedArticleIndexes.length ? ` (${selectedArticleIndexes.length})` : ""}`}</button><button className="autopost-primary" disabled={Boolean(busy) || associationBusy || !sourceBlogId || articleBlogIds.some(ids => !ids.length) || Object.values(categoryMapping).some(mapping => mapping.state === "loading")} onClick={() => void run("import", async () => { const result = await api.import(articleDocument, articleBlogIds, articleCategories); setState(result.state); setArticleDocument(null); setPreview([]); setPreviewArticleIndex(null); setSelectedArticleIndexes([]); setArticleBlogIds([]); setArticleCategories([]); setSourceBlogId(""); setCategoryMapping({}); setFileName(""); setPastedJson(""); setNotice({ kind: "ok", text: `${result.imported} ${t.imported}.` }); setTab("queue"); })}>{t.addQueue}</button></div></header>
           <div className="autopost-taxonomy-assistant">
             <div><small>SMART TAXONOMY</small><strong>{language === "it" ? "Su quale blog sono stati scritti questi articoli?" : "Which blog were these articles written for?"}</strong><p>{categoryAssociationMode === "vector" ? (language === "it" ? `Gli ID originali restano sul blog sorgente. Per gli altri blog un modello locale multilingua sceglie la categoria con il coseno maggiore; sotto ${formatCosine(categoryVectorThreshold)} usa Uncategorized. Il valore è il coseno massimo sui passaggi dell’articolo, non una probabilità.` : `Original IDs remain on the source blog. For other blogs, a local multilingual model selects the category with the highest cosine; below ${formatCosine(categoryVectorThreshold)} it uses Uncategorized. This is the maximum cosine over article passages, not a probability.`) : (language === "it" ? "Gli ID originali restano sul blog sorgente. Per gli altri blog usa il provider LLM configurato; puoi sempre correggere il risultato." : "Original IDs stay on the source blog. Other blogs use the configured LLM provider; you can always edit the result.")}</p></div>
             <label>{language === "it" ? "Blog sorgente" : "Source blog"}<select aria-label={language === "it" ? "Blog sorgente" : "Source blog"} disabled={associationBusy} value={sourceBlogId} onChange={event => void chooseSourceBlog(event.target.value)}><option value="">{language === "it" ? "Seleziona il blog…" : "Choose a blog…"}</option>{state?.blogs.map(blog => <option key={blog.id} value={blog.id}>{blog.name}</option>)}</select></label>
@@ -427,10 +467,11 @@ export function AutoPostApp({ onHome }: { onHome: () => void }) {
           {sourceBlogId && <div className="autopost-bulk-mapping"><span>{language === "it" ? "Associa un blog a tutti gli articoli" : "Map one blog across all articles"}</span>{state?.blogs.filter(blog => blog.id !== sourceBlogId).map(blog => <button key={blog.id} disabled={associationBusy} onClick={() => void mapTargetBlogForAllArticles(blog.id)}>{language === "it" ? `Associa tutti · ${blog.name}` : `Map all · ${blog.name}`}</button>)}</div>}
           {associationProgress && <div className={`autopost-association-progress ${associationProgress.complete ? "autopost-is-complete" : ""}`} role="status" aria-live="polite"><div className="autopost-association-orbit"><i /><i /><i /></div><div><strong>{categoryAssociationMode === "vector" ? "Vector DB locale" : "LLM"} · {associationProgress.done}/{associationProgress.total}</strong><span>{associationProgress.label}</span><div className="autopost-association-track"><i style={{ width: `${Math.round((associationProgress.done / Math.max(1, associationProgress.total)) * 100)}%` }} /></div></div><b>{Math.round((associationProgress.done / Math.max(1, associationProgress.total)) * 100)}%</b></div>}
           <div className="autopost-article-preview-grid">{preview.map((article, index) => {
-            return <article key={`${article.title}-${index}`}>
+            return <article key={`${article.title}-${index}`} className={selectedArticleIndexes.includes(index) ? "autopost-is-selected" : ""}>
+              <label className="autopost-article-selector"><input type="checkbox" aria-label={`${language === "it" ? "Seleziona articolo" : "Select article"}: ${article.title}`} checked={selectedArticleIndexes.includes(index)} onChange={() => setSelectedArticleIndexes(current => current.includes(index) ? current.filter(entry => entry !== index) : [...current, index])} /><span>{language === "it" ? "Seleziona" : "Select"}</span></label>
               <ArticleCover article={article} />
               <div className="autopost-article-card-body"><small>#{String(index + 1).padStart(2, "0")}</small><h3>{article.title}</h3><p>{article.content.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").slice(0, 150)}</p>
-                <div className="autopost-article-card-toolbar"><div>{article.media.length ? article.media.map(media => <MediaBadge key={`${media.provider}-${media.id}`} media={media} language={language} />) : <span className="autopost-muted">{t.noEmbed}</span>}</div><button type="button" onClick={() => setPreviewArticle(article)}>{language === "it" ? "Anteprima" : "Preview"}</button></div>
+                <div className="autopost-article-card-toolbar"><div>{article.media.length ? article.media.map(media => <MediaBadge key={`${media.provider}-${media.id}`} media={media} language={language} />) : <span className="autopost-muted">{t.noEmbed}</span>}</div><button type="button" onClick={() => setPreviewArticleIndex(index)}>{language === "it" ? "Modifica e anteprima" : "Edit and preview"}</button></div>
                 <div className="autopost-article-targets"><strong>{language === "it" ? "Pubblica su" : "Publish to"}</strong><div className="autopost-target-blog-list">{state?.blogs.map(blog => { const mapping = categoryMapping[`${index}:${blog.id}`]; return <label key={blog.id} className={mapping?.state === "loading" ? "autopost-is-mapping" : ""}><input type="checkbox" disabled={!sourceBlogId || associationBusy || mapping?.state === "loading"} checked={articleBlogIds[index]?.includes(blog.id) || false} onChange={() => void toggleArticleBlog(index, blog.id)} />{blog.name}{blog.id === sourceBlogId ? <em>{language === "it" ? "origine" : "source"}</em> : mapping?.state === "loading" ? <em>{categoryAssociationMode === "vector" ? "VECTOR…" : "AI…"}</em> : null}</label>; })}</div>{articleBlogIds[index]?.map(blogId => { const blog = state?.blogs.find(entry => entry.id === blogId); const mapping = categoryMapping[`${index}:${blogId}`]; return blog ? <label className="autopost-category-picker" key={blogId}><span>{blog.name} · {language === "it" ? "categorie" : "categories"}{mapping?.label ? <em className={`autopost-mapping-result autopost-is-${mapping?.state}`}>{mapping?.label}</em> : null}{mapping?.feedback?.ranking?.length ? <VectorRanking ranking={mapping?.feedback.ranking} language={language} /> : null}</span><select multiple disabled={associationBusy || mapping?.state === "loading"} value={(articleCategories[index]?.[blogId] || []).map(String)} onChange={event => setCategoriesForArticle(index, blogId, Array.from(event.currentTarget.selectedOptions, option => Number(option.value)))}>{blog.categories.map(category => <option key={category.id} value={category.id}>{category.name} (#{category.id})</option>)}</select></label> : null; })}</div>
               </div>
             </article>;
@@ -468,7 +509,7 @@ export function AutoPostApp({ onHome }: { onHome: () => void }) {
         <div className="autopost-security-note"><svg viewBox="0 0 24 24"><path d="M6 10V7a6 6 0 0 1 12 0v3M5 10h14v11H5Z" /></svg><div><strong>{t.credentialTitle}</strong><p>{t.credentialText}</p><small>{t.localData}: {state?.dataDirectory || "—"}</small></div></div>
       </section>}
     </main>
-    {previewArticle && <ArticlePreviewModal article={previewArticle} language={language} blogName={state?.blogs.find(blog => blog.id === sourceBlogId)?.name} onClose={() => setPreviewArticle(null)} />}
+    {previewArticleIndex !== null && preview[previewArticleIndex] && <ArticlePreviewModal article={preview[previewArticleIndex]} language={language} blogName={state?.blogs.find(blog => blog.id === sourceBlogId)?.name} onClose={() => setPreviewArticleIndex(null)} onSave={savePreviewArticle} />}
     {notice && <div className={`autopost-toast autopost-is-${notice.kind}`} role="status"><span>{notice.kind === "ok" ? "✓" : "!"}</span><p>{notice.text}</p><button aria-label={t.close} onClick={() => setNotice(null)}>×</button></div>}
     {busy && <div className="autopost-busy-line" />}
   </div>;

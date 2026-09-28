@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const { getLlmSettings, settingsRequest, clearCacheEntry } = vi.hoisted(() => ({ getLlmSettings: vi.fn(async () => ({
+const { getLlmSettings, settingsRequest, clearCacheEntry, scanInstallation, readAllServiceStatuses, testServiceCycle } = vi.hoisted(() => ({ getLlmSettings: vi.fn(async () => ({
   activeProvider: "nvidia" as const,
   providers: {
     nvidia: { configured: true, enabled: true, model: "moonshotai/kimi-k3", keySource: "environment" as const, endpoint: "https://integrate.api.nvidia.com/v1/chat/completions", provider: "nvidia" as const },
@@ -9,7 +9,15 @@ const { getLlmSettings, settingsRequest, clearCacheEntry } = vi.hoisted(() => ({
     gemini: { configured: false, enabled: true, model: "gemini-3.8-flash", keySource: "none" as const, endpoint: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", provider: "gemini" as const },
     xai: { configured: false, enabled: true, model: "grok-4.6", keySource: "none" as const, endpoint: "https://api.x.ai/v1/chat/completions", provider: "xai" as const },
   },
-})), settingsRequest: vi.fn(), clearCacheEntry: vi.fn<(entry: unknown) => Promise<void>>().mockResolvedValue(undefined) }));
+})), settingsRequest: vi.fn(), clearCacheEntry: vi.fn<(entry: unknown) => Promise<void>>().mockResolvedValue(undefined),
+  scanInstallation: vi.fn(async () => ({ ok: false, platform: "darwin", arch: "arm64", checks: { node: { ok: true, detail: "v22.12.0" }, python311: { ok: false, detail: "Python 3.11 non disponibile" } } })),
+  readAllServiceStatuses: vi.fn(async () => [
+    { id: "upscaler", running: false, compatible: false, detail: "Endpoint arrestato" },
+    { id: "quantizer", running: true, compatible: true, detail: "Motore audio interno pronto" },
+    { id: "autopost", running: true, compatible: true, detail: "Endpoint pronto" },
+  ]),
+  testServiceCycle: vi.fn(async () => []),
+}));
 
 vi.mock("../services/ui-preferences", () => ({ useUiPreferences: () => ({ language: "it" }) }));
 vi.mock("../services/task-history", () => ({
@@ -27,6 +35,16 @@ vi.mock("../services/studio-settings", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../services/studio-settings")>();
   return { ...actual, getLlmSettings, saveLlmSettings: vi.fn(), settingsRequest };
 });
+vi.mock("../services/system-restore", () => ({
+  scanInstallation,
+  readAllServiceStatuses,
+  readRepairJob: vi.fn(),
+  restartStudio: vi.fn(),
+  setAllServicesRunning: vi.fn(async () => []),
+  setServiceRunning: vi.fn(),
+  startRepair: vi.fn(),
+  testServiceCycle,
+}));
 
 import { StudioSettings } from "./StudioSettings";
 
@@ -40,6 +58,9 @@ describe("StudioSettings", () => {
     cleanup();
     clearCacheEntry.mockClear();
     settingsRequest.mockReset();
+    scanInstallation.mockClear();
+    readAllServiceStatuses.mockClear();
+    testServiceCycle.mockClear();
   });
 
   it("mostra esito, modello, latenza ed errore del test di connessione", async () => {
@@ -84,5 +105,18 @@ describe("StudioSettings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Conferma pulizia" }));
     await waitFor(() => expect(clearCacheEntry).toHaveBeenCalledWith(expect.objectContaining({ id: "upscaler-local", kind: "disk" })));
     expect(await screen.findByText("Pulizia completata")).toBeInTheDocument();
+  });
+
+  it("diagnostica installazione e prova il ciclo degli endpoint da Restore", async () => {
+    openSettings();
+    await screen.findByRole("dialog", { name: "Impostazioni" });
+    fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+    expect(await screen.findByRole("heading", { name: "Diagnostica e ripristina MLSM Studio" })).toBeInTheDocument();
+    expect(await screen.findByText("1 controlli da correggere")).toBeInTheDocument();
+    expect(screen.getByText("Python 3.11 non disponibile")).toBeInTheDocument();
+    expect(screen.getByText("Upscaler · Frame Booster")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Test ciclo completo" }));
+    await waitFor(() => expect(testServiceCycle).toHaveBeenCalledTimes(1));
+    expect(readAllServiceStatuses).toHaveBeenCalled();
   });
 });

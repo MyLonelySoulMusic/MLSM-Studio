@@ -6,6 +6,13 @@ const allowedImageUrl = (value: string): string => {
   return /^(https?:|blob:|data:image\/)/i.test(candidate) ? candidate : "";
 };
 
+const editableImageUrl = (value: string): string => {
+  const candidate = value.trim();
+  if (!candidate) return "";
+  if (!/^https?:\/\//i.test(candidate)) throw new Error("L’immagine deve usare un link http:// o https:// valido.");
+  return candidate;
+};
+
 export function articleImageUrl(article: ArticleInput): string {
   if (typeof DOMParser !== "undefined") {
     const document = new DOMParser().parseFromString(article.content, "text/html");
@@ -22,6 +29,38 @@ export function articleImageUrl(article: ArticleInput): string {
   }
   const match = article.content.match(/<img\b[^>]*(?:src|data-src|data-lazy-src)\s*=\s*["']([^"']+)["']/i);
   return allowedImageUrl(match?.[1] ?? "") || article.media.find(item => item.thumbnailUrl)?.thumbnailUrl || "";
+}
+
+export function replaceArticleImage(content: string, nextImageUrl: string): string {
+  const imageUrl = editableImageUrl(nextImageUrl);
+  if (typeof DOMParser !== "undefined") {
+    const document = new DOMParser().parseFromString(content, "text/html");
+    const image = document.querySelector("img");
+    if (!imageUrl) {
+      image?.closest("figure")?.remove();
+      if (image?.isConnected) image.remove();
+      return document.body.innerHTML;
+    }
+    if (image) {
+      image.setAttribute("src", imageUrl);
+      image.removeAttribute("srcset");
+      image.removeAttribute("data-src");
+      image.removeAttribute("data-lazy-src");
+    } else {
+      const figure = document.createElement("figure");
+      const insertedImage = document.createElement("img");
+      insertedImage.setAttribute("src", imageUrl);
+      insertedImage.setAttribute("alt", "");
+      figure.appendChild(insertedImage);
+      document.body.prepend(figure);
+    }
+    return document.body.innerHTML;
+  }
+  if (!imageUrl) return content.replace(/<figure\b[^>]*>\s*<img\b[\s\S]*?<\/figure>/i, "").replace(/<img\b[^>]*>/i, "");
+  const escapedUrl = imageUrl.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+  return /<img\b/i.test(content)
+    ? content.replace(/<img\b[^>]*>/i, `<img src="${escapedUrl}" alt="">`)
+    : `<figure><img src="${escapedUrl}" alt=""></figure>${content}`;
 }
 
 function safeArticleContent(content: string): string {

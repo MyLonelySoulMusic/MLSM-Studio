@@ -8,7 +8,12 @@ const apiReady = async () => {
 /** The web dev server owns AutoPost in browser mode; Tauri starts the bundled
  * local service on demand. Both use the legacy ~/.mlsm-autopost data folder. */
 export function ensureAutoPostService(): Promise<void> {
-  if (!("__TAURI_INTERNALS__" in window)) return Promise.resolve();
+  if (!("__TAURI_INTERNALS__" in window)) {
+    startup ??= fetch("/__mlsm/autopost/start", { method: "POST" }).then(response => {
+      if (!response.ok) throw new Error(`AutoPost HTTP ${response.status}`);
+    }).catch(error => { startup = null; throw error; });
+    return startup;
+  }
   startup ??= (async () => {
     const { invoke } = await import("@tauri-apps/api/core");
     await invoke("ensure_autopost_service");

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ArticleInput } from "./types";
-import { articleImageUrl, articlePreviewDocument } from "./article-preview";
+import { articleImageUrl, articlePreviewDocument, replaceArticleImage } from "./article-preview";
 
 const article = (content: string): ArticleInput => ({ title: "Suno & musica", content, excerpt: "Riassunto", slug: "suno", categories: [], tags: [], media: [] });
 
@@ -20,5 +20,12 @@ describe("AutoPost article preview", () => {
 
   it("rejects javascript image URLs", () => {
     expect(articleImageUrl(article('<img src="javascript:alert(1)">'))).toBe("");
+  });
+
+  it("replaces, adds and removes the main image without losing the article text", () => {
+    expect(replaceArticleImage('<figure><img src="https://old.example/image.jpg"></figure><p>Testo</p>', "https://new.example/image.jpg")).toContain("https://new.example/image.jpg");
+    expect(replaceArticleImage("<p>Testo</p>", "https://new.example/image.jpg")).toContain("<figure>");
+    expect(replaceArticleImage('<figure><img src="https://old.example/image.jpg"></figure><p>Testo</p>', "")).toBe("<p>Testo</p>");
+    expect(() => replaceArticleImage("<p>Testo</p>", "javascript:alert(1)")).toThrow(/http/);
   });
 });

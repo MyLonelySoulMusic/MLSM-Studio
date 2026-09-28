@@ -67,12 +67,68 @@ describe("AutoPost integrato", () => {
 
     const cover = document.querySelector<HTMLImageElement>(".autopost-article-cover");
     expect(cover?.src).toBe("https://cdn.example/suno.jpg");
-    fireEvent.click(screen.getByRole("button", { name: "Anteprima" }));
+    fireEvent.click(screen.getByRole("button", { name: "Modifica e anteprima" }));
     expect(screen.getByRole("dialog", { name: "Suno v6" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Salva modifiche" })).toBeEnabled();
+    expect(document.body.style.overflow).toBe("hidden");
+    expect(document.querySelector<HTMLElement>(".autopost-workspace")?.style.overflow).toBe("");
     const frame = screen.getByTitle("Anteprima: Suno v6");
     expect(frame.getAttribute("srcdoc")).toContain("Testo completo dell’articolo.");
     fireEvent.click(screen.getByRole("button", { name: "Chiudi anteprima" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(document.body.style.overflow).toBe("");
+  });
+
+  it("elimina uno o più articoli e importa soltanto quelli rimasti", async () => {
+    apiMock.import.mockResolvedValue({ imported: 1, state });
+    render(<AutoPostApp onHome={vi.fn()} />);
+    await screen.findByText("Blog principale");
+    const articles = [
+      { title: "Primo articolo", content: "<p>Primo testo</p>", categories: [7] },
+      { title: "Articolo da mantenere", content: "<p>Testo centrale</p>", categories: [7] },
+      { title: "Terzo articolo", content: "<p>Terzo testo</p>", categories: [7] },
+    ];
+    fireEvent.change(screen.getByLabelText("Incolla qui il JSON degli articoli"), { target: { value: JSON.stringify({ intervalMinutes: 12, articles }) } });
+    fireEvent.click(screen.getByRole("button", { name: "Analizza JSON" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Seleziona articolo: Primo articolo" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Seleziona articolo: Terzo articolo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Elimina selezionati (2)" }));
+
+    expect(screen.queryByRole("heading", { name: "Primo articolo" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Articolo da mantenere" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Terzo articolo" })).not.toBeInTheDocument();
+    const importButton = screen.getByRole("button", { name: "Aggiungi alla coda" });
+    await waitFor(() => expect(importButton).toBeEnabled());
+    fireEvent.click(importButton);
+    await waitFor(() => expect(apiMock.import).toHaveBeenCalledOnce());
+    expect(apiMock.import.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ intervalMinutes: 12, articles: [expect.objectContaining({ title: "Articolo da mantenere" })] }));
+  });
+
+  it("modifica testo e immagine dall'anteprima e invia le modifiche alla coda", async () => {
+    apiMock.import.mockResolvedValue({ imported: 1, state });
+    render(<AutoPostApp onHome={vi.fn()} />);
+    await screen.findByText("Blog principale");
+    const articleDocument = { articles: [{ title: "Titolo originale", content: '<figure><img src="https://cdn.example/old.jpg"></figure><p>Testo originale</p>', excerpt: "Riassunto originale", categories: [7] }] };
+    fireEvent.change(screen.getByLabelText("Incolla qui il JSON degli articoli"), { target: { value: JSON.stringify(articleDocument) } });
+    fireEvent.click(screen.getByRole("button", { name: "Analizza JSON" }));
+    fireEvent.click(screen.getByRole("button", { name: "Modifica e anteprima" }));
+
+    fireEvent.change(screen.getByLabelText("Titolo articolo"), { target: { value: "Titolo aggiornato" } });
+    fireEvent.change(screen.getByLabelText("Riassunto articolo"), { target: { value: "Riassunto aggiornato" } });
+    fireEvent.change(screen.getByLabelText("Link immagine principale"), { target: { value: "https://cdn.example/new.jpg" } });
+    const editor = screen.getByRole("textbox", { name: "Testo articolo" });
+    editor.innerHTML = "<p>Testo aggiornato e corretto</p>";
+    fireEvent.input(editor);
+    fireEvent.click(screen.getByRole("button", { name: "Salva modifiche" }));
+
+    expect(screen.getByRole("heading", { name: "Titolo aggiornato" })).toBeInTheDocument();
+    expect(document.querySelector<HTMLImageElement>(".autopost-article-cover")?.src).toBe("https://cdn.example/new.jpg");
+    const importButton = screen.getByRole("button", { name: "Aggiungi alla coda" });
+    await waitFor(() => expect(importButton).toBeEnabled());
+    fireEvent.click(importButton);
+    await waitFor(() => expect(apiMock.import).toHaveBeenCalledOnce());
+    expect(apiMock.import.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ articles: [expect.objectContaining({ title: "Titolo aggiornato", excerpt: "Riassunto aggiornato", content: expect.stringContaining("Testo aggiornato e corretto") })] }));
+    expect(apiMock.import.mock.calls[0]?.[0].articles[0].content).toContain("https://cdn.example/new.jpg");
   });
 
   it("legge le categorie WordPress all'apertura e a ogni cambio blog", async () => {

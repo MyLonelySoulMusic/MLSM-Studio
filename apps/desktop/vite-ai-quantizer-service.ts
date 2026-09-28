@@ -5,6 +5,7 @@ import type { ServerResponse } from "node:http";
 import { extname, resolve, sep } from "node:path";
 import type { Readable } from "node:stream";
 import type { Plugin, ViteDevServer } from "vite";
+import { terminateVerifiedListener } from "./vite-process-control";
 
 export const aiQuantizerRoutePrefix = "/music/ai-quantizer";
 const healthUrl = "http://127.0.0.1:4173/api/health";
@@ -168,11 +169,12 @@ export function localAiQuantizerService(): Plugin {
     } catch { owned.kill("SIGTERM"); }
   };
 
-  const stopEngine = () => {
+  const stopEngine = (includeVerifiedOrphans = false) => {
     requested = false;
     const owned = child;
     child = null;
     terminateProcessTree(owned);
+    if (!owned && includeVerifiedOrphans) terminateVerifiedListener(4173, paths.server);
     phase = "idle";
     phaseDetail = "";
     progress = 0;
@@ -196,8 +198,25 @@ export function localAiQuantizerService(): Plugin {
 
       server.middlewares.use(aiQuantizerRoutePrefix, async (request, response, next) => {
         const pathname = new URL(request.url ?? "/", "http://localhost").pathname;
+        if (pathname === "/api/lifecycle/status" && request.method === "GET") {
+          const current = await probeBackend();
+          if (current.compatible) {
+            phase = "ready";
+            phaseDetail = "Motore audio interno pronto.";
+            progress = 100;
+          } else if (!current.running && phase === "ready") {
+            phase = "idle";
+            phaseDetail = "";
+            progress = 0;
+          }
+          return sendJson(response, 200, { ...current, phase, detail: phaseDetail, progress });
+        }
+        if (pathname === "/api/lifecycle/start" && request.method === "POST") {
+          const current = await ensureEngine(server);
+          return sendJson(response, current.compatible ? 200 : 202, current.compatible ? current.health : aiQuantizerBootstrapPayload(phase, phaseDetail, progress, logs));
+        }
         if (pathname === "/api/lifecycle/stop" && request.method === "POST") {
-          stopEngine();
+          stopEngine(true);
           response.statusCode = 204;
           response.end();
           return;

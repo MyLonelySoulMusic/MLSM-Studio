@@ -15,6 +15,7 @@ import {
 import { clearCacheEntry, listBrowserCaches, listDiskCaches, type CacheEntry } from "../services/cache-inventory";
 import { clearTaskHistory, hasActiveTasks, readTaskHistory, TASK_HISTORY_EVENT } from "../services/task-history";
 import { useUiPreferences } from "../services/ui-preferences";
+import { RestoreSettingsPanel } from "./RestoreSettingsPanel";
 
 const OPEN_EVENT = "mlsm:open-settings";
 
@@ -25,6 +26,7 @@ const copy = {
     keys: "API e modelli",
     history: "Attività",
     cache: "Spazio e cache",
+    restore: "Restore",
     close: "Chiudi",
     model: "Modello LLM",
     enabled: "Abilita questo provider",
@@ -71,6 +73,7 @@ const copy = {
     keys: "APIs & models",
     history: "Activity",
     cache: "Storage & cache",
+    restore: "Restore",
     close: "Close",
     model: "LLM model",
     enabled: "Enable this provider",
@@ -126,9 +129,10 @@ function ProviderLogo({ provider }: { provider: LlmProvider }) {
   return <span className="provider-logo provider-logo-openai" aria-hidden="true">OpenAI</span>;
 }
 
-function NavIcon({ id }: { id: "keys" | "history" | "cache" }) {
+function NavIcon({ id }: { id: "keys" | "history" | "cache" | "restore" }) {
   if (id === "keys") return <span aria-hidden="true">⌁</span>;
   if (id === "history") return <span aria-hidden="true">◷</span>;
+  if (id === "restore") return <span aria-hidden="true">↻</span>;
   return <span aria-hidden="true">◫</span>;
 }
 
@@ -157,7 +161,7 @@ export function StudioSettings() {
 function SettingsDialog({ onClose }: { onClose: () => void }) {
   const { language } = useUiPreferences();
   const t = copy[language];
-  const [tab, setTab] = useState<"keys" | "history" | "cache">("keys");
+  const [tab, setTab] = useState<"keys" | "history" | "cache" | "restore">("keys");
   const [settings, setSettings] = useState<LlmSettings | null>(null);
   const [provider, setProvider] = useState<LlmProvider>("nvidia");
   const [activeProvider, setActiveProvider] = useState<LlmProvider | "local">("nvidia");
@@ -282,9 +286,9 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
         <button className="settings-close" aria-label={t.close} onClick={onClose}>×</button>
       </header>
       <div className="studio-settings-body">
-        <nav aria-label={t.title}>{(["keys", "history", "cache"] as const).map((id) => <button key={id} aria-current={tab === id ? "page" : undefined} onClick={() => { setTab(id); setMessage(""); if (id === "cache") void run(refreshCaches); }}><NavIcon id={id} /><span>{t[id]}</span></button>)}</nav>
+        <nav aria-label={t.title}>{(["keys", "history", "cache", "restore"] as const).map((id) => <button key={id} aria-current={tab === id ? "page" : undefined} onClick={() => { setTab(id); setMessage(""); if (id === "cache") void run(refreshCaches); }}><NavIcon id={id} /><span>{t[id]}</span></button>)}</nav>
         <main>
-          <div className="settings-section-heading"><span>{tab === "keys" ? "01" : tab === "history" ? "02" : "03"}</span><h2>{t[tab]}</h2></div>
+          <div className="settings-section-heading"><span>{tab === "keys" ? "01" : tab === "history" ? "02" : tab === "cache" ? "03" : "04"}</span><h2>{t[tab]}</h2></div>
           {message ? <p className={`settings-feedback ${messageKind === "error" ? "is-error" : "is-success"}`} role="status">{message}</p> : null}
 
           {tab === "keys" ? <div className="settings-api-layout">
@@ -334,6 +338,8 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
           {tab === "history" ? <section className="settings-simple-section"><div className="settings-list-toolbar"><p>{language === "it" ? "Operazioni recenti eseguite in MLSM Studio." : "Recent operations run in MLSM Studio."}</p><button disabled={busy || !tasks.length} onClick={() => { clearTaskHistory(); setTasks(readTaskHistory()); }}>{t.clearHistory}</button></div>{!tasks.length ? <div className="settings-empty-state"><span aria-hidden="true">✓</span><strong>{t.empty}</strong></div> : <ol className="settings-history">{tasks.map((task) => <li key={task.id}><strong>{task.label}</strong><span>{t[task.status]} · {new Date(task.startedAt).toLocaleString(language)}{task.finishedAt ? ` · ${((task.finishedAt - task.startedAt) / 1000).toFixed(1)} s` : ""}</span>{task.detail ? <small>{task.detail}</small> : null}</li>)}</ol>}</section> : null}
 
           {tab === "cache" ? <section className="settings-simple-section"><div className="settings-list-toolbar"><p>{t.cacheHint}</p><button disabled={busy} onClick={() => void run(refreshCaches)}>{t.refresh}</button></div>{hasActiveTasks() ? <p className="settings-feedback is-error">{t.busy}</p> : null}<div className="settings-caches">{caches.map((entry) => <article key={`${entry.kind}:${entry.id}`}><div className="settings-cache-icon" aria-hidden="true">{entry.kind === "disk" ? "▣" : "◈"}</div><div><strong>{entry.label}</strong><small>{entry.location}</small><span>{entry.bytes === null ? t.unknown : `${(entry.bytes / 1024 / 1024).toFixed(1)} MiB`}{entry.entries !== undefined ? ` · ${entry.entries} ${t.files}` : ""}</span></div>{pending?.id === entry.id && pending.kind === entry.kind ? <div className="settings-actions"><button className="is-danger" disabled={busy} onClick={() => void run(async () => { await clearCacheEntry(entry); setPending(null); await refreshCaches(); succeed(t.done); })}>{t.confirm}</button><button onClick={() => setPending(null)}>{t.cancel}</button></div> : <button disabled={busy || hasActiveTasks()} onClick={() => setPending(entry)}>{t.clear}</button>}</article>)}</div>{!busy && !caches.length ? <div className="settings-empty-state"><span aria-hidden="true">↻</span><strong>{language === "it" ? "Premi Aggiorna elenco per misurare le cache." : "Select Refresh list to measure caches."}</strong></div> : null}</section> : null}
+
+          {tab === "restore" ? <RestoreSettingsPanel language={language} /> : null}
 
           {busy ? <p className="settings-busy" role="status"><i />{t.running}…</p> : null}
         </main>
