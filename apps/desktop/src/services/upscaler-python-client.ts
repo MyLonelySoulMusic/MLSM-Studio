@@ -4,10 +4,11 @@ import { canvasImageSourceSize } from "./canvas-image-source";
 import { activeRemoteUpscalerEndpoints, normalizeRemoteUpscalerEndpoint, usesRemoteUpscaler } from "./remote-upscaler-client";
 import { pythonServiceLifecycleRevision, waitForAreaPythonServicesShutdown } from "./python-service-lifecycle";
 import { getMlxDlssReplacementAudio } from "./mlx-dlss-audio-file";
+import { localUpscalerApiBaseUrl } from "./local-python-api";
 
 type Settings = RhythmBallProject["animation"]["upscaler"];
 export type RemoteVideoCheckpointPolicy = "resume" | "restart";
-export const pythonUpscalerBaseUrl = "http://127.0.0.1:8765";
+export const pythonUpscalerBaseUrl = localUpscalerApiBaseUrl();
 export const UPSCALER_REMOTE_CACHE_CLEARED_EVENT = "upscaler:remote-cache-cleared";
 export interface PythonUpscalerHealth {
   ok: boolean;
@@ -131,7 +132,7 @@ export function pythonUpscalerRuntimeDiagnostic(): PythonUpscalerRuntimeDiagnost
 }
 
 async function probePythonUpscalerHealth(timeoutMs = 2_500, verbose = true): Promise<PythonUpscalerHealth | null> {
-  if (verbose) setRuntimeDiagnostic("probing", `Verifica http://127.0.0.1:8765/health · timeout ${timeoutMs} ms.`);
+  if (verbose) setRuntimeDiagnostic("probing", `Verifica ${pythonUpscalerBaseUrl}/health · timeout ${timeoutMs} ms.`);
   try {
     const response = await fetch(`${pythonUpscalerBaseUrl}/health`, { signal: AbortSignal.timeout(timeoutMs) });
     if (!response.ok) {
@@ -194,13 +195,15 @@ async function probeOrStartPythonUpscaler(): Promise<PythonUpscalerHealth | null
   if (!await ensurePythonUpscalerService()) return null;
   // Importing Torch/OpenCV can take a few seconds. Keep this wait inside the
   // shared health promise so repeated clicks cannot spawn duplicate services.
-  for (let attempt = 0; attempt < 40; attempt += 1) {
+  // A first Windows start can spend tens of seconds importing Torch/OpenCV.
+  // Process creation is not readiness; keep one shared bounded wait alive.
+  for (let attempt = 0; attempt < 240; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 250));
     const health = await probePythonUpscalerHealth(800, false);
     if (health) return health;
   }
   const previous = pythonUpscalerRuntimeDiagnostic();
-  setRuntimeDiagnostic("error", "Il processo è stato richiesto ma /health non ha risposto entro 10 secondi. Controlla il log del backend.", previous);
+  setRuntimeDiagnostic("error", "Il processo è stato richiesto ma /health non ha risposto entro 60 secondi. Controlla il log del backend.", previous);
   return null;
 }
 

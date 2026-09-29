@@ -74,12 +74,12 @@ describe("Frame Booster interpolation request", () => {
     expect(ensurePythonUpscalerService).toHaveBeenCalledTimes(1);
   });
 
-  it("stops polling when the shared Python backend cannot be started", async () => {
+  it("keeps probing until the deadline when the first start request fails", async () => {
     ensurePythonUpscalerService.mockResolvedValue(false);
     const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("connection refused"));
 
     await expect(waitForFrameInterpolationHealth({ timeoutMs: 2_000 })).resolves.toBeNull();
-    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls.length).toBeGreaterThan(1);
     expect(ensurePythonUpscalerService).toHaveBeenCalledTimes(1);
   });
 
@@ -91,6 +91,6 @@ describe("Frame Booster interpolation request", () => {
     const file = new File(["video"], "base.mp4", { type: "video/mp4" });
 
     await expect(probeFrameInterpolationSource(file)).resolves.toMatchObject(metadata);
-    expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:8765/interpolation/probe", expect.objectContaining({ method: "POST", body: expect.any(FormData) }));
+    expect(fetch).toHaveBeenCalledWith("/__mlsm/upscaler-api/interpolation/probe", expect.objectContaining({ method: "POST", body: expect.any(FormData) }));
   });
 });

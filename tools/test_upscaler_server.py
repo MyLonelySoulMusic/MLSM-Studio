@@ -33,6 +33,17 @@ from tools.upscaler_server import (
 
 
 class FfprobeGeometryTests(unittest.TestCase):
+    def test_windows_media_tools_are_resolved_from_winget_links_without_path(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="mlsm-winget-") as temporary:
+            links = Path(temporary) / "Microsoft" / "WinGet" / "Links"
+            links.mkdir(parents=True)
+            executable = links / "ffmpeg.exe"
+            executable.write_bytes(b"fixture")
+            with mock.patch.object(upscaler_server.sys, "platform", "win32"), mock.patch.dict(
+                upscaler_server.os.environ, {"LOCALAPPDATA": temporary}, clear=False
+            ):
+                self.assertEqual(upscaler_server._windows_media_tool("ffmpeg"), str(executable))
+
     def test_local_cors_accepts_windows_and_macos_tauri_origins(self) -> None:
         allowed = upscaler_server.LOCAL_APP_ORIGIN_REGEX
         for origin in ("http://tauri.localhost", "https://tauri.localhost", "tauri://localhost", "http://localhost:1420"):

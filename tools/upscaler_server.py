@@ -560,9 +560,20 @@ def download(model: str) -> None:
             status[model] = {"phase": "error", "progress": 0, "error": str(error)}
 
 
+def _windows_media_tool(name: str) -> str | None:
+    if sys.platform != "win32":
+        return None
+    executable = f"{name}.exe"
+    candidates = [
+        Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WinGet" / "Links" / executable,
+        Path("C:/Tools/ffmpeg/bin") / executable,
+    ]
+    return next((str(candidate) for candidate in candidates if candidate.is_file()), None)
+
+
 def ffmpeg_binary() -> str | None:
-    """ffmpeg is resolved from PATH: the service never bundles or downloads a binary."""
-    return os.environ.get("DSAS_FFMPEG") or shutil.which("ffmpeg")
+    """Resolve FFmpeg across interactive shells, WinGet and packaged desktop starts."""
+    return os.environ.get("DSAS_FFMPEG") or shutil.which("ffmpeg") or _windows_media_tool("ffmpeg")
 
 
 def ffprobe_binary() -> str | None:
@@ -571,7 +582,7 @@ def ffprobe_binary() -> str | None:
         return configured
     binary = ffmpeg_binary()
     sibling = Path(binary).with_name("ffprobe") if binary else None
-    return str(sibling) if sibling and sibling.exists() else shutil.which("ffprobe")
+    return str(sibling) if sibling and sibling.exists() else shutil.which("ffprobe") or _windows_media_tool("ffprobe")
 
 
 def upscaler_ffmpeg_prefix(binary: str) -> list[str]:

@@ -23,7 +23,7 @@ describe("Video Editor · stato del servizio locale di interpolazione", () => {
     globalThis.fetch = (async (url: string) => { requested.push(url); return jsonResponse({ ok: true, interpolation: { ffmpeg: true, rife: false, device: "mps" } }); }) as unknown as typeof fetch;
     const health = await videoEditorInterpolationHealth();
     expect(requested[0]).toBe(`${videoEditorInterpolationBaseUrl}/interpolation/health`);
-    expect(videoEditorInterpolationBaseUrl).toBe("http://127.0.0.1:8765");
+    expect(videoEditorInterpolationBaseUrl).toBe("/__mlsm/upscaler-api");
     expect(health).toEqual({ available: true, ffmpeg: true, rife: false, device: "mps" });
   });
 

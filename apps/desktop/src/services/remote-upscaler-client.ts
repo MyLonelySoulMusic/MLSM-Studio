@@ -1,9 +1,10 @@
 import type { RhythmBallProject } from "@rbs/project-schema";
 import type { ModelLoadProgress } from "./upscaler-ai";
 import { canvasImageSourceSize } from "./canvas-image-source";
+import { localUpscalerApiBaseUrl } from "./local-python-api";
 
 type Settings = RhythmBallProject["animation"]["upscaler"];
-const remoteCoordinatorBaseUrl = "http://127.0.0.1:8765";
+const remoteCoordinatorBaseUrl = localUpscalerApiBaseUrl();
 
 export interface RemoteUpscalerModel { name: string; scale: number; description: string; default: boolean }
 export interface RemoteUpscalerEndpointStatus { url: string; ok: boolean; models: RemoteUpscalerModel[]; error?: string }

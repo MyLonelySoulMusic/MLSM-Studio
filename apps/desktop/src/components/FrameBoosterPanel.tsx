@@ -57,12 +57,12 @@ export function FrameBoosterPanel(): ReactElement {
     const owner = ++healthOperation.current;
     setChecking(true);
     try {
-      const result = await waitForFrameInterpolationHealth({ timeoutMs: 15_000, signal: controller.signal });
+      const result = await waitForFrameInterpolationHealth({ timeoutMs: 60_000, signal: controller.signal });
       if (!mounted.current || healthOperation.current !== owner) return;
       setCapabilities(result);
       const diagnostic = pythonUpscalerRuntimeDiagnostic();
       setRuntimeDiagnostic(diagnostic);
-      setRuntimeError(result ? null : `Il backend non è partito entro 15 secondi. ${diagnostic.message}`);
+      setRuntimeError(result ? null : `Il backend non è partito entro 60 secondi. ${diagnostic.message}`);
     } finally {
       if (mounted.current && healthOperation.current === owner) {
         healthController.current = null;

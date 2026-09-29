@@ -285,6 +285,8 @@ fn ensure_upscaler_service(
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
+    if let Some(ffmpeg) = find_tool("ffmpeg") { command.env("DSAS_FFMPEG", ffmpeg); }
+    if let Some(ffprobe) = find_tool("ffprobe") { command.env("DSAS_FFPROBE", ffprobe); }
     configure_upscaler_command(&mut command);
     let process = command.spawn()
         .map_err(|error| ProjectIoError::UpscalerRuntime(error.to_string()))?;
@@ -387,6 +389,15 @@ fn find_tool(name: &str) -> Option<PathBuf> {
     let executable = if cfg!(windows) { format!("{name}.exe") } else { name.to_owned() };
     if let Some(paths) = std::env::var_os("PATH") {
         for directory in std::env::split_paths(&paths) { let candidate = directory.join(&executable); if candidate.is_file() { return Some(candidate); } }
+    }
+    #[cfg(windows)]
+    {
+        let mut candidates = Vec::new();
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            candidates.push(PathBuf::from(local).join("Microsoft/WinGet/Links").join(&executable));
+        }
+        candidates.push(PathBuf::from("C:/Tools/ffmpeg/bin").join(&executable));
+        if let Some(candidate) = candidates.into_iter().find(|candidate| candidate.is_file()) { return Some(candidate); }
     }
     ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].iter().map(|directory| Path::new(directory).join(&executable)).find(|candidate| candidate.is_file())
 }

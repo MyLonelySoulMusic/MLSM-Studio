@@ -4,6 +4,8 @@
  * due esiste nel browser, quindi vive nello stesso servizio Python locale già usato
  * dall’Upscaler. Il servizio va avviato dall’utente e non parte mai da solo.
  */
+import { localUpscalerApiBaseUrl } from "./local-python-api";
+
 export type VideoEditorInterpolationMethod = "blend" | "motion" | "rife";
 
 export interface VideoEditorInterpolationHealth {
@@ -48,8 +50,7 @@ export interface VideoEditorInterpolationResult {
   backend: string;
 }
 
-const port = 8765;
-export const videoEditorInterpolationBaseUrl = `http://127.0.0.1:${port}`;
+export const videoEditorInterpolationBaseUrl = localUpscalerApiBaseUrl();
 /** Guida mostrata quando il servizio non risponde: la stessa dell’Upscaler, per non moltiplicare i riti. */
 export const videoEditorInterpolationCommand = "npm run upscaler:server";
 

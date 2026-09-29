@@ -25,7 +25,7 @@ describe("remote upscaler client", () => {
     const catalog = { ok: true, endpoints: [{ url: "https://a.gradio.live", ok: true, models: [] }], models: [{ name: "x4", scale: 4, description: "", default: true }], defaultModel: "x4" };
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(catalog), { status: 200 }));
     await expect(discoverRemoteUpscalerModels(["https://a.gradio.live"])).resolves.toEqual({ ...catalog, transport: "coordinator" });
-    expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:8765/upscale/remote/catalog", expect.objectContaining({ method: "POST", body: JSON.stringify({ endpoints: ["https://a.gradio.live"] }) }));
+    expect(fetchMock).toHaveBeenCalledWith("/__mlsm/upscaler-api/upscale/remote/catalog", expect.objectContaining({ method: "POST", body: JSON.stringify({ endpoints: ["https://a.gradio.live"] }) }));
   });
 
   it("propaga il dettaglio del backend quando la discovery fallisce", async () => {
@@ -53,7 +53,7 @@ describe("remote upscaler client", () => {
       endpoints: [{ url: "https://live.gradio.live", ok: true }]
     });
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
-      "http://127.0.0.1:8765/upscale/remote/catalog",
+      "/__mlsm/upscaler-api/upscale/remote/catalog",
       "https://live.gradio.live/gradio_api/call/upscale_models",
       "https://live.gradio.live/gradio_api/call/upscale_models/catalog-123"
     ]);

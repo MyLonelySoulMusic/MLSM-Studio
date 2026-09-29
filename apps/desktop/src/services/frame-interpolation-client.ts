@@ -2,6 +2,7 @@ import { trackTask } from "./task-history";
 export function frameInterpolationJob(...args: Parameters<typeof frameInterpolationJobImpl>): ReturnType<typeof frameInterpolationJobImpl> { return trackTask("Frame Booster", () => frameInterpolationJobImpl(...args)); }
 import type { FrameInterpolationMediaAudit } from "./frame-interpolation-audit";
 import { ensurePythonUpscalerService, pythonUpscalerRuntimeDiagnostic, reportUpscalerDiagnostic } from "./upscaler-python-client";
+import { localUpscalerApiBaseUrl } from "./local-python-api";
 
 export type FrameInterpolationMethod = "blend" | "motion" | "motion-obmc";
 export type FrameInterpolationPhase = "uploading" | "queued" | "probing" | "preparing" | "interpolating" | "remuxing" | "verifying" | "downloading" | "ready" | "error" | "cancelled";
@@ -51,7 +52,7 @@ export interface FrameInterpolationRequest {
 
 export interface FrameInterpolationResult { blob: Blob; status: FrameInterpolationJobStatus; }
 
-export const frameInterpolationBaseUrl = "http://127.0.0.1:8765";
+export const frameInterpolationBaseUrl = localUpscalerApiBaseUrl();
 export const frameInterpolationCommand = "npm run upscaler:server";
 
 function frameBoosterConnectionError(action: string, cause?: unknown): Error {
@@ -79,20 +80,18 @@ export async function frameInterpolationHealth(refresh = false, timeoutMs = 8_00
 }
 
 export async function waitForFrameInterpolationHealth(options: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<FrameInterpolationCapabilities | null> {
-  const timeoutMs = Math.max(1_000, options.timeoutMs ?? 15_000);
+  const timeoutMs = Math.max(1_000, options.timeoutMs ?? 60_000);
   const deadline = Date.now() + timeoutMs;
-  let startRequested = false;
+  let lastStartRequest = 0;
   do {
     if (options.signal?.aborted) return null;
     const remaining = deadline - Date.now();
     const capabilities = await frameInterpolationHealth(true, Math.max(250, Math.min(2_500, remaining)));
     if (capabilities) return capabilities;
-    if (!startRequested) {
-      startRequested = true;
-      if (!await ensurePythonUpscalerService() || options.signal?.aborted) {
-        console.error("[MLSM Frame Booster] backend start failed", pythonUpscalerRuntimeDiagnostic());
-        return null;
-      }
+    if (Date.now() - lastStartRequest >= 2_000) {
+      lastStartRequest = Date.now();
+      if (!await ensurePythonUpscalerService()) console.warn("[MLSM Frame Booster] backend start request failed; retrying until deadline", pythonUpscalerRuntimeDiagnostic());
+      if (options.signal?.aborted) return null;
     }
     if (Date.now() >= deadline || options.signal?.aborted) return null;
     await new Promise<void>((resolve) => {
@@ -209,9 +208,9 @@ export function createFrameInterpolationFormData(options: Omit<FrameInterpolatio
 
 async function frameInterpolationJobImpl(options: FrameInterpolationRequest): Promise<FrameInterpolationResult> {
   if (options.signal.aborted) throw new DOMException("Operazione annullata", "AbortError");
-  const capabilities = await waitForFrameInterpolationHealth({ timeoutMs: 15_000, signal: options.signal });
+  const capabilities = await waitForFrameInterpolationHealth({ timeoutMs: 60_000, signal: options.signal });
   if (options.signal.aborted) throw new DOMException("Operazione annullata", "AbortError");
-  if (!capabilities?.ffmpeg || capabilities.jobs === false) throw new Error("Il backend Frame Booster non è disponibile. Verifica Python 3.11, l’ambiente .venv e FFmpeg, quindi riprova.");
+  if (!capabilities?.ffmpeg || capabilities.jobs === false) throw frameBoosterConnectionError("Avvio interpolazione non riuscito");
   const clientId = options.clientId ?? globalThis.crypto?.randomUUID?.() ?? `frame-booster-${Date.now()}`;
   const form = createFrameInterpolationFormData(options, clientId);
   let status: FrameInterpolationJobStatus | undefined; let cleanup = false;

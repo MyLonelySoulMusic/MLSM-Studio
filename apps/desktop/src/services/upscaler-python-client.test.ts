@@ -120,7 +120,7 @@ describe("routing Upscaler PyTorch", () => {
       .mockResolvedValueOnce(new Response(JSON.stringify({ removedJobs: 4, removedBytes: 1024 }), { status: 200 }));
     await expect(getRemoteUpscalerVideoCache()).resolves.toEqual({ jobs: 4, bytes: 1024, activeJobs: 0 });
     await expect(clearRemoteUpscalerVideoCache()).resolves.toEqual({ removedJobs: 4, removedBytes: 1024 });
-    expect(fetch.mock.calls[0]?.[0]).toBe("http://127.0.0.1:8765/upscale/remote/video/cache");
+    expect(fetch.mock.calls[0]?.[0]).toBe("/__mlsm/upscaler-api/upscale/remote/video/cache");
     expect(fetch.mock.calls[1]?.[1]).toMatchObject({ method: "DELETE" });
   });
 
@@ -133,7 +133,7 @@ describe("routing Upscaler PyTorch", () => {
     const jobs = [{ id: "job-active", phase: "upscaling", phaseLabel: "Segmenti remoti", sourceName: "old.mp4", remote: true, cancelRequested: false }];
     const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response(JSON.stringify({ jobs }), { status: 200 }));
     await expect(activeUpscalerVideoJobs()).resolves.toEqual(jobs);
-    expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:8765/upscale/video/jobs/active", undefined);
+    expect(fetch).toHaveBeenCalledWith("/__mlsm/upscaler-api/upscale/video/jobs/active", undefined);
   });
 
   it("non apre l'upload se un altro job è ancora attivo", async () => {
@@ -153,7 +153,7 @@ describe("routing Upscaler PyTorch", () => {
       settings, quality: "maximum", signal: new AbortController().signal, onStatus: vi.fn(),
     })).rejects.toThrow(/old-job.*non è stato copiato nuovamente/);
     expect(xhr).not.toHaveBeenCalled();
-    expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:8765/upscale/video/jobs/active", expect.anything());
+    expect(fetch).toHaveBeenCalledWith("/__mlsm/upscaler-api/upscale/video/jobs/active", expect.anything());
   });
 
   it("non invia il vecchio video se la sorgente viene sostituita durante l'health check", async () => {
