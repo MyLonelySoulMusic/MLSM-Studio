@@ -580,6 +580,14 @@
     var(--panel);
   box-shadow: 0 15px 42px var(--shadow), inset 0 1px color-mix(in srgb, #fff 38%, transparent);
   transition: transform .22s cubic-bezier(.16, 1, .3, 1), border-color .22s ease, box-shadow .22s ease;
+  cursor: pointer;
+  touch-action: pan-y;
+}
+
+/* The card is the only interactive target. Its artwork and copy must never
+ * split hit-testing into smaller zones or capture wheel/touch scrolling. */
+.studio-area-card > * {
+  pointer-events: none;
 }
 
 .studio-area-card::before {

@@ -17,6 +17,8 @@ export const artistSocialLinks: readonly ArtistSocialLink[] = [
 ];
 
 export const artistMedia = {
+  website: "https://mylonelysoulmusic.altervista.org/",
+  journal: "https://mylonelysoulmusic.altervista.org/journal/",
   youtubePlaylist: "https://www.youtube-nocookie.com/embed/videoseries?list=PLM_wfIXb_aOg",
   youtubePlaylistLink: "https://youtube.com/playlist?list=PLM_wfIXb_aOg",
   spotifyPlaylist: "https://open.spotify.com/embed/playlist/74PKRqLbaRT5ghhuyoGovF?utm_source=generator&theme=0",

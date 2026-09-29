@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
 import { useProjectStore } from "../store/project-store";
 import { useAudioStore } from "../store/audio-store";
 import { createProject } from "@rbs/project-schema";
@@ -38,6 +39,12 @@ describe("StudioHome", () => {
     expect(onEnterArea).toHaveBeenLastCalledWith("stickman");
     fireEvent.click(screen.getByRole("button", { name: /Reports/ }));
     expect(onEnterArea).toHaveBeenLastCalledWith("reports");
+  });
+
+  it("usa l'intera card come unico target senza bloccare lo scorrimento verticale", () => {
+    const css = readFileSync("apps/desktop/src/workspace-finish.css", "utf8");
+    expect(css).toMatch(/\.studio-area-card\s*\{[^}]*touch-action:\s*pan-y;/s);
+    expect(css).toMatch(/\.studio-area-card\s*>\s*\*\s*\{[^}]*pointer-events:\s*none;/s);
   });
 
   it("apre ogni area come workspace pulito senza dati del Video Editor in Pro Subtitles",()=>{
