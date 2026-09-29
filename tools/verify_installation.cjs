@@ -6,6 +6,7 @@ const { resolve } = require("node:path");
 const { python311Probe } = require("./setup_python_runtime.cjs");
 const { resolveTool } = require("./platform_tools.cjs");
 const { verifyNodeDependencies } = require("./verify_node_dependencies.cjs");
+const { npmInvocation } = require("./npm_invocation.cjs");
 
 const root = resolve(__dirname, "..");
 function versionTuple(value) { return String(value).replace(/^v/, "").split(".").slice(0, 3).map((part) => Number.parseInt(part, 10) || 0); }
@@ -14,10 +15,14 @@ function versionAtLeast(actual, expected) {
   for (let i = 0; i < 3; i += 1) { if (a[i] !== b[i]) return a[i] > b[i]; }
   return true;
 }
-function probe(command, args = [], validate = () => true) {
-  const result = spawnSync(command, args, { cwd: root, encoding: "utf8" });
+function probe(command, args = [], validate = () => true, options = {}, execute = spawnSync) {
+  const result = execute(command, args, { cwd: root, encoding: "utf8", timeout: 120000, windowsHide: true, env: { ...process.env, PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" }, ...options });
   const ok = result.status === 0 && validate(`${result.stdout || ""}${result.stderr || ""}`);
-  return { ok, detail: (result.stdout || result.stderr || "").trim().split(/\r?\n/)[0] || (ok ? "pronto" : "non disponibile") };
+  return { ok, detail: result.error ? `${command}: ${result.error.code || "errore"} · ${result.error.message}` : (ok ? (result.stdout || result.stderr || "").trim().split(/\r?\n/)[0] || "pronto" : (result.stderr || result.stdout || `Uscita ${result.status ?? result.signal ?? "sconosciuta"}`).trim().slice(-2000)) };
+}
+function probeNpm(platform = process.platform, options = {}, execute = spawnSync) {
+  const invocation = npmInvocation(["--version"], { ...options, platform });
+  return probe(invocation.command, invocation.args, value => /^\d+\.\d+\.\d+/m.test(value), invocation.options, execute);
 }
 function systemPython311(platform = process.platform) {
   const candidates = process.env.MLSM_PYTHON
@@ -40,7 +45,7 @@ function collect(platform = process.platform) {
   const venv = (name) => resolve(root, name, platform === "win32" ? "Scripts/python.exe" : "bin/python");
   return {
     node: probe(process.execPath, ["--version"], (v) => versionAtLeast(v, "22.12.0")),
-    npm: probe(resolveTool("npm", platform), ["--version"]),
+    npm: probeNpm(platform),
     npmDependencies: verifyNodeDependencies(),
     python311: systemPython311(platform),
     ffmpeg: probe(resolveTool("ffmpeg", platform), ["-version"]),
@@ -61,8 +66,8 @@ if (require.main === module) {
   else {
     console.log(`MLSM Studio · verifica ${process.platform}/${process.arch}`);
     for (const [name, result] of Object.entries(checks)) console.log(`${result.ok ? "✓" : "✗"} ${name}: ${result.detail}`);
-    console.log(ok ? "Installazione completa." : "Installazione incompleta: riesegui l’installer della piattaforma.");
+    console.log(ok ? "Installazione completa." : "Installazione incompleta: esegui node tools/repair_installation.cjs per riparare solo i componenti non pronti.");
   }
   process.exitCode = ok ? 0 : 1;
 }
-module.exports = { collect, systemPython311, versionAtLeast, versionTuple };
+module.exports = { collect, probe, probeNpm, systemPython311, versionAtLeast, versionTuple };

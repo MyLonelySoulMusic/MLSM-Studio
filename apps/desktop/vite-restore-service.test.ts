@@ -1,17 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { restoreInstallerInvocation } from "./vite-restore-service";
 
-describe("Restore service platform installer", () => {
-  it("seleziona l'installer macOS senza dipendere dalla shell utente", () => {
-    const invocation = restoreInstallerInvocation("darwin");
-    expect(invocation.command).toBe("bash");
-    expect(invocation.args.at(-1)).toMatch(/scripts\/macos\/install\.sh$/);
-  });
-
-  it("seleziona l'installer Windows tramite cmd.exe", () => {
-    const invocation = restoreInstallerInvocation("win32");
-    expect(invocation.command).toBe("cmd.exe");
-    expect(invocation.args).toEqual(expect.arrayContaining(["/d", "/s", "/c"]));
-    expect(invocation.args.at(-1)).toMatch(/^call ".*scripts\/windows\/install\.bat"$/);
+describe("Restore service targeted repair", () => {
+  it("usa Node direttamente su entrambe le piattaforme, senza quoting shell", () => {
+    const invocation = restoreInstallerInvocation();
+    expect(invocation.command).toBe(process.execPath);
+    expect(invocation.args).toHaveLength(1);
+    expect(invocation.args[0]).toMatch(/tools[\\/]repair_installation\.cjs$/);
+    expect(invocation.args[0]).not.toContain('"');
   });
 });

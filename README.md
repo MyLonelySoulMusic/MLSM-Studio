@@ -184,7 +184,7 @@ Gli installer preparano automaticamente quasi tutto il necessario. Prima di iniz
 
 Il setup installa o verifica:
 
-- Node.js 22 (`>= 22.12`) e le dipendenze npm esatte del lockfile;
+- Node.js (`>= 22.12`) e le dipendenze npm esatte del lockfile;
 - **Python 3.11** e quattro virtual environment isolati;
 - FFmpeg e FFprobe;
 - Rubber Band;
@@ -234,6 +234,22 @@ npm run install:verify
 ```
 
 La verifica controlla Node, dipendenze JavaScript, Python 3.11, virtual environment, import Python, FFmpeg/FFprobe, Rubber Band e toolchain richiesta. L’installer mostra il messaggio di completamento solo dopo che questi controlli hanno avuto esito positivo.
+
+### Ripristino mirato
+
+Il pannello **Impostazioni → Restore** verifica prima ogni componente e ripara soltanto i controlli falliti; quelli già pronti vengono saltati. Dalla root del repository puoi vedere il piano senza modificare nulla:
+
+```bash
+node tools/repair_installation.cjs --dry-run
+```
+
+Per eseguire la riparazione, ometti `--dry-run`:
+
+```bash
+node tools/repair_installation.cjs
+```
+
+Al termine viene eseguita una nuova verifica. Il comando usa Node direttamente: per riparare i soli ambienti Python non richiede npm e non reinstalla i runtime già pronti. I log mostrano ogni componente saltato, riparato o ancora non disponibile.
 
 ## Primo avvio
 

@@ -76,6 +76,13 @@ describe("installer multipiattaforma", () => {
     expect(script).toContain("SetEnvironmentVariable('Path', $updated, 'User')");
     expect(script.toLowerCase()).not.toContain("setx");
   });
+  it("preserva Node nel PATH della sessione e quota il valore override di Visual Studio", () => {
+    const script = readFileSync(platformScript("windows", "install.bat"), "utf8");
+    expect(script).toContain('set "SESSION_PATH=%PATH%"');
+    expect(script).toContain('set "PATH=%SESSION_PATH%;');
+    expect(script).toContain('%~3 "%~4" || exit /b 1');
+    expect(script).not.toContain('do set "PATH=%%P"');
+  });
   it("fornisce launcher separati e verificabili senza avviare server", () => {
     const mac = readFileSync(platformScript("macos", "launch.sh"), "utf8");
     const windows = readFileSync(platformScript("windows", "launch.bat"), "utf8");

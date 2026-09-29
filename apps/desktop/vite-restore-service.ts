@@ -31,16 +31,13 @@ function runCaptured(command: string, args: string[]) {
     child.stdout.on("data", (chunk: string) => { stdout += chunk; });
     child.stderr.on("data", (chunk: string) => { stderr += chunk; });
     child.once("error", reject);
-    child.once("exit", code => done({ code: code ?? 1, stdout, stderr }));
+    child.once("close", code => done({ code: code ?? 1, stdout, stderr }));
   });
 }
 
-export function restoreInstallerInvocation(platform = process.platform) {
-  if (platform === "win32") {
-    const installer = resolve(projectRoot, "scripts/windows/install.bat");
-    return { command: "cmd.exe", args: ["/d", "/s", "/c", `call "${installer}"`] };
-  }
-  return { command: "bash", args: [resolve(projectRoot, "scripts/macos/install.sh")] };
+export function restoreInstallerInvocation() {
+  // No shell, nested quotes or batch wrappers: paths with spaces stay one argument.
+  return { command: process.execPath, args: [resolve(projectRoot, "tools/repair_installation.cjs")] };
 }
 
 function restartInvocation(platform = process.platform) {
@@ -73,9 +70,8 @@ export function studioRestoreService(): Plugin {
     if (!clean) return;
     job.logs = [...job.logs.slice(-199), clean];
     job.detail = clean;
-    const milestones = ["node", "Python", "FFmpeg", "Rubber", "upscaler", "ai-quantizer", "song-player", "audio-tts", "verify"];
-    const reached = milestones.findIndex(value => clean.toLowerCase().includes(value.toLowerCase()));
-    if (reached >= 0) job.progress = Math.max(job.progress, 8 + reached * 10);
+    const progress = clean.match(/^\[RESTORE_PROGRESS\] (\d+)\|(.*)$/);
+    if (progress) { job.progress = Math.min(99, Number(progress[1])); job.detail = progress[2] ?? clean; }
   };
   return {
     name: "mlsm-studio-restore",
@@ -103,10 +99,11 @@ export function studioRestoreService(): Plugin {
             child.stdin.end();
             attachRepairOutput(child, record);
             child.once("error", error => { job = { ...job, state: "error", detail: error.message }; repairProcess = null; });
-            child.once("exit", code => {
+            child.once("close", code => {
+              if (repairProcess !== child || job.state === "error") return;
               job = code === 0
                 ? { ...job, state: "success", progress: 100, detail: "Ripristino completato. Riavvia MLSM Studio per applicare il nuovo ambiente.", restartRequired: true }
-                : { ...job, state: "error", detail: `Ripristino terminato con codice ${code ?? "sconosciuto"}.` };
+                : { ...job, state: "error", detail: `Ripristino terminato con codice ${code ?? "sconosciuto"}. ${job.logs.at(-1) ?? "Controlla i log."}` };
               repairProcess = null;
             });
             return sendJson(response, 202, job);

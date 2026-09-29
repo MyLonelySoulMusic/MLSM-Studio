@@ -30,8 +30,10 @@ if errorlevel 1 exit /b 1
 
 set "MSYS2_UCRT_BIN=C:\msys64\ucrt64\bin"
 set "WINGET_LINKS=%LOCALAPPDATA%\Microsoft\WinGet\Links"
-for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "[Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')"`) do set "PATH=%%P"
-set "PATH=%ProgramFiles%\nodejs;%USERPROFILE%\.cargo\bin;%WINGET_LINKS%;%LOCALAPPDATA%\Microsoft\WindowsApps;%MSYS2_UCRT_BIN%;%PATH%"
+set "SESSION_PATH=%PATH%"
+set "PERSISTED_PATH="
+for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "[Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')"`) do set "PERSISTED_PATH=%%P"
+set "PATH=%SESSION_PATH%;%ProgramFiles%\nodejs;%USERPROFILE%\.cargo\bin;%WINGET_LINKS%;%LOCALAPPDATA%\Microsoft\WindowsApps;%MSYS2_UCRT_BIN%;%PERSISTED_PATH%"
 if not exist C:\msys64\ucrt64\bin\rubberband.exe (
   if "%DRY_RUN%"=="1" (echo [dry-run] C:\msys64\usr\bin\bash.exe -lc "pacman -Syu --noconfirm ^&^& pacman -S --needed --noconfirm mingw-w64-ucrt-x86_64-rubberband") else (
     C:\msys64\usr\bin\bash.exe -lc "pacman -Syu --noconfirm && pacman -S --needed --noconfirm mingw-w64-ucrt-x86_64-rubberband" || exit /b 4
@@ -81,6 +83,17 @@ exit /b 0
 set "PACKAGE=%~1"
 set "COMMAND=%~2"
 where "%COMMAND%" >nul 2>nul && exit /b 0
-if "%DRY_RUN%"=="1" (echo [dry-run] winget install --exact --id %PACKAGE% %~3 %~4& exit /b 0)
-winget install --exact --id "%PACKAGE%" --silent --accept-package-agreements --accept-source-agreements %~3 %~4 || exit /b 1
+if "%DRY_RUN%"=="1" (
+  if not "%~4"=="" (
+    echo [dry-run] winget install --exact --id %PACKAGE% %~3 "%~4"
+  ) else (
+    echo [dry-run] winget install --exact --id %PACKAGE% %~3
+  )
+  exit /b 0
+)
+if not "%~4"=="" (
+  winget install --exact --id "%PACKAGE%" --silent --accept-package-agreements --accept-source-agreements %~3 "%~4" || exit /b 1
+) else (
+  winget install --exact --id "%PACKAGE%" --silent --accept-package-agreements --accept-source-agreements %~3 || exit /b 1
+)
 exit /b 0

@@ -4,6 +4,7 @@ const { spawnSync } = require("node:child_process");
 const { createHash } = require("node:crypto");
 const { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } = require("node:fs");
 const { dirname, join, relative, resolve } = require("node:path");
+const { npmInvocation } = require("./npm_invocation.cjs");
 
 const projectRoot = resolve(__dirname, "..");
 const STATE_VERSION = 1;
@@ -75,8 +76,8 @@ function spawnInvocation(command, args, platform = process.platform, environment
 function run(root, command, args) {
   const shown = [command, ...args].join(" ");
   console.log(`\n[MLSM launcher] ${shown}`);
-  const invocation = spawnInvocation(command, args);
-  const result = spawnSync(invocation.command, invocation.args, { cwd: root, env: process.env, stdio: "inherit", shell: false });
+  const invocation = /^npm(?:\.cmd)?$/i.test(command) ? npmInvocation(args) : spawnInvocation(command, args);
+  const result = spawnSync(invocation.command, invocation.args, { cwd: root, env: process.env, stdio: "inherit", shell: false, ...invocation.options });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`Comando terminato con codice ${result.status}: ${shown}`);
 }
