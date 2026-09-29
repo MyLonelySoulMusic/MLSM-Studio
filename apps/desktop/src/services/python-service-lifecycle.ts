@@ -12,8 +12,8 @@ export function shutdownAreaPythonServices(reason = "area-boundary"): Promise<vo
   console.info("[MLSM Python lifecycle] shutdown queued", { revision, reason });
   shutdownBarrier = shutdownBarrier.catch(() => undefined).then(async () => {
     const requests: Promise<unknown>[] = [
-      fetch("/__mlsm/python/upscaler/stop", { method: "POST" }).catch(() => undefined),
-      fetch("/music/ai-quantizer/api/lifecycle/stop", { method: "POST" }).catch(() => undefined),
+      fetch("/__mlsm/python/upscaler/stop", { method: "POST", signal: AbortSignal.timeout(5_000) }),
+      fetch("/music/ai-quantizer/api/lifecycle/stop", { method: "POST", signal: AbortSignal.timeout(5_000) }),
     ];
     if ("__TAURI_INTERNALS__" in globalThis) {
       requests.push(import("@tauri-apps/api/core").then(({ invoke }) => invoke("shutdown_area_python_services")));

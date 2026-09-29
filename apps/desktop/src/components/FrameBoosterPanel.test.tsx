@@ -8,6 +8,50 @@ const { waitForFrameInterpolationHealth, probeFrameInterpolationSource } = vi.ho
   waitForFrameInterpolationHealth: vi.fn(),
   probeFrameInterpolationSource: vi.fn(),
 }));
+type RuntimeDiagnosticPayload = {
+  phase: "idle" | "probing" | "starting" | "waiting" | "ready" | "error";
+  message: string;
+  at: string;
+  pid?: number;
+  logPath?: string;
+  recentLogs?: string[];
+};
+const runtimeDiagnostics = vi.hoisted(() => {
+  let current: RuntimeDiagnosticPayload = {
+    phase: "idle",
+    message: "Runtime non ancora richiesto.",
+    at: "2026-01-01T00:00:00.000Z",
+  };
+  const listeners = new Set<(diagnostic: RuntimeDiagnosticPayload) => void>();
+  return {
+    pythonUpscalerRuntimeDiagnostic: vi.fn(() => current),
+    subscribePythonUpscalerRuntimeDiagnostic: vi.fn((listener: (diagnostic: RuntimeDiagnosticPayload) => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    }),
+    emit(next: Partial<RuntimeDiagnosticPayload>) {
+      current = { ...current, ...next };
+      listeners.forEach((listener) => listener(current));
+    },
+    reset() {
+      current = {
+        phase: "idle",
+        message: "Runtime non ancora richiesto.",
+        at: "2026-01-01T00:00:00.000Z",
+      };
+      listeners.clear();
+    },
+    listenerCount: () => listeners.size,
+  };
+});
+vi.mock("../services/upscaler-python-client", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/upscaler-python-client")>();
+  return {
+    ...actual,
+    pythonUpscalerRuntimeDiagnostic: runtimeDiagnostics.pythonUpscalerRuntimeDiagnostic,
+    subscribePythonUpscalerRuntimeDiagnostic: runtimeDiagnostics.subscribePythonUpscalerRuntimeDiagnostic,
+  };
+});
 const shutdownAreaPythonServices = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("../services/frame-interpolation-client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../services/frame-interpolation-client")>();
@@ -28,6 +72,7 @@ describe("FrameBoosterPanel", () => {
   beforeEach(() => {
     useProjectStore.getState().newProject();
     clearFrameBoosterSourceFile();
+    runtimeDiagnostics.reset();
     waitForFrameInterpolationHealth.mockResolvedValue(null);
     probeFrameInterpolationSource.mockResolvedValue({ frameCount: 75, fps: 29.97, durationSeconds: 2.5, width: 1920, height: 1080, hasAudio: true });
     shutdownAreaPythonServices.mockResolvedValue(undefined);
@@ -40,6 +85,8 @@ describe("FrameBoosterPanel", () => {
     clearFrameBoosterSourceFile();
     waitForFrameInterpolationHealth.mockReset();
     probeFrameInterpolationSource.mockReset();
+    runtimeDiagnostics.pythonUpscalerRuntimeDiagnostic.mockClear();
+    runtimeDiagnostics.subscribePythonUpscalerRuntimeDiagnostic.mockClear();
     shutdownAreaPythonServices.mockReset();
     vi.restoreAllMocks();
     Reflect.deleteProperty(URL, "createObjectURL");
@@ -138,6 +185,27 @@ describe("FrameBoosterPanel", () => {
     expect(screen.queryByText("Da verificare")).not.toBeInTheDocument();
   });
 
+  it("shows live startup messages, elapsed time, log path and recent backend logs", async () => {
+    waitForFrameInterpolationHealth.mockReturnValue(new Promise(() => undefined));
+    render(<FrameBoosterPanel />);
+
+    runtimeDiagnostics.emit({
+      phase: "starting",
+      message: "Import Torch/OpenCV in corso…",
+      at: "2026-01-01T00:00:03.000Z",
+      pid: 8124,
+      logPath: "C:\\MLSM\\logs\\upscaler.log",
+      recentLogs: ["[python] avvio", "[python] import torch"],
+    });
+
+    await waitFor(() => expect(screen.getAllByText("Import Torch/OpenCV in corso…").length).toBeGreaterThan(0));
+    expect(screen.getByText(/Avvio del backend · \d+ s/)).toBeVisible();
+    expect(screen.getAllByText("C:\\MLSM\\logs\\upscaler.log").length).toBeGreaterThan(0);
+    expect(screen.getByText("Log recenti (2)")).toBeVisible();
+    expect(screen.getByText((content) => content.includes("[python] import torch"))).toBeInTheDocument();
+    expect(screen.getByRole("progressbar", { name: "Avanzamento avvio backend" })).toBeInTheDocument();
+  });
+
   it("adopts health after the StrictMode cleanup and second setup used by the real app", async () => {
     waitForFrameInterpolationHealth.mockResolvedValue(ffmpegCapabilities);
 
@@ -149,11 +217,26 @@ describe("FrameBoosterPanel", () => {
     expect(waitForFrameInterpolationHealth).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps failure logs readable after startup ends without inventing a 60-second wait", async () => {
+    runtimeDiagnostics.emit({ phase: "error", message: "ModuleNotFoundError: torch", recentLogs: ["Traceback: runtime import failed"], logPath: "logs/upscaler-vite.log" });
+    waitForFrameInterpolationHealth.mockResolvedValue(null);
+    render(<FrameBoosterPanel />);
+    await waitFor(() => expect(screen.queryByRole("progressbar")).not.toBeInTheDocument());
+    expect(screen.getAllByText("ModuleNotFoundError: torch").length).toBeGreaterThan(0);
+    expect(screen.getByText("Traceback: runtime import failed")).toBeInTheDocument();
+    expect(screen.queryByText(/non è partito entro 60 secondi/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Riprova backend" })).toBeEnabled();
+  });
+
   it("stops the owned Python runtime when leaving Frame Booster", () => {
     const view = render(<FrameBoosterPanel />);
 
+    expect(runtimeDiagnostics.listenerCount()).toBe(1);
     view.unmount();
 
     expect(shutdownAreaPythonServices).toHaveBeenCalledTimes(1);
+    expect(runtimeDiagnostics.listenerCount()).toBe(0);
+    runtimeDiagnostics.emit({ phase: "ready", message: "Backend pronto", at: "2026-01-01T00:00:04.000Z" });
+    expect(runtimeDiagnostics.listenerCount()).toBe(0);
   });
 });

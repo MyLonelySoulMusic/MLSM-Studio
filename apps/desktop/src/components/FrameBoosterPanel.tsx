@@ -3,7 +3,11 @@ import { useProjectStore } from "../store/project-store";
 import { registerFrameBoosterSourceFile, releaseFrameBoosterSourceFile } from "../services/frame-booster-source-file";
 import { probeFrameInterpolationSource, waitForFrameInterpolationHealth, type FrameInterpolationCapabilities, type FrameInterpolationMethod } from "../services/frame-interpolation-client";
 import { shutdownAreaPythonServices } from "../services/python-service-lifecycle";
-import { pythonUpscalerRuntimeDiagnostic, type PythonUpscalerRuntimeDiagnostic } from "../services/upscaler-python-client";
+import {
+  pythonUpscalerRuntimeDiagnostic,
+  subscribePythonUpscalerRuntimeDiagnostic,
+  type PythonUpscalerRuntimeDiagnostic,
+} from "../services/upscaler-python-client";
 
 const methodGuidance: Record<FrameInterpolationMethod, { title: string; description: string; ideal: string; avoid: string }> = {
   motion: {
@@ -34,6 +38,21 @@ function fpsLabel(value: number): string {
   return Number(value.toFixed(3)).toString();
 }
 
+const runtimeStartupPhases = new Set<PythonUpscalerRuntimeDiagnostic["phase"]>(["probing", "starting", "waiting"]);
+const runtimePhaseLabels: Record<PythonUpscalerRuntimeDiagnostic["phase"], string> = {
+  idle: "In attesa",
+  probing: "Verifica del runtime",
+  starting: "Avvio del backend",
+  waiting: "Caricamento Python in corso",
+  ready: "Backend pronto",
+  error: "Avvio non riuscito",
+};
+
+function diagnosticTimestamp(value: string): number | null {
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
 export function FrameBoosterPanel(): ReactElement {
   const settings = useProjectStore((state) => state.project.animation.frameBooster);
   const update = useProjectStore((state) => state.updateFrameBooster);
@@ -43,6 +62,8 @@ export function FrameBoosterPanel(): ReactElement {
   const [importError, setImportError] = useState<string | null>(null);
   const [importNotice, setImportNotice] = useState<string | null>(null);
   const [runtimeDiagnostic, setRuntimeDiagnostic] = useState<PythonUpscalerRuntimeDiagnostic>(() => pythonUpscalerRuntimeDiagnostic());
+  const [runtimeCheckStartedAt, setRuntimeCheckStartedAt] = useState<number | null>(null);
+  const [runtimeNow, setRuntimeNow] = useState(() => Date.now());
   const healthOperation = useRef(0);
   const healthController = useRef<AbortController | null>(null);
   const importOperation = useRef(0);
@@ -56,13 +77,20 @@ export function FrameBoosterPanel(): ReactElement {
     healthController.current = controller;
     const owner = ++healthOperation.current;
     setChecking(true);
+    setCapabilities(null);
+    setRuntimeError(null);
+    setRuntimeCheckStartedAt(Date.now());
+    setRuntimeNow(Date.now());
     try {
       const result = await waitForFrameInterpolationHealth({ timeoutMs: 60_000, signal: controller.signal });
       if (!mounted.current || healthOperation.current !== owner) return;
       setCapabilities(result);
       const diagnostic = pythonUpscalerRuntimeDiagnostic();
-      setRuntimeDiagnostic(diagnostic);
-      setRuntimeError(result ? null : `Il backend non è partito entro 60 secondi. ${diagnostic.message}`);
+      setRuntimeDiagnostic(result?.ffmpeg && result.jobs ? { ...diagnostic, phase: "ready" } : diagnostic);
+      setRuntimeError(result ? null : diagnostic.message);
+    } catch (error) {
+      if (controller.signal.aborted || !mounted.current || healthOperation.current !== owner) return;
+      setRuntimeError(`Avvio del backend non riuscito: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       if (mounted.current && healthOperation.current === owner) {
         healthController.current = null;
@@ -74,9 +102,16 @@ export function FrameBoosterPanel(): ReactElement {
   useEffect(() => {
     // React StrictMode esegue setup → cleanup → setup in sviluppo. Il cleanup
     // precedente marca correttamente l'istanza come smontata; il nuovo setup
-    // deve riaprire esplicitamente l'ownership, altrimenti la risposta health
+    // deve riaprire esplicitamente l’ownership, altrimenti la risposta health
     // viene ignorata e `checking` resta true per sempre.
     mounted.current = true;
+    const unsubscribeRuntimeDiagnostic = subscribePythonUpscalerRuntimeDiagnostic((diagnostic) => {
+      if (!mounted.current) return;
+      setRuntimeDiagnostic(diagnostic);
+      if (runtimeStartupPhases.has(diagnostic.phase)) {
+        setRuntimeCheckStartedAt((startedAt) => startedAt ?? diagnosticTimestamp(diagnostic.at) ?? Date.now());
+      }
+    });
     const reset = () => {
       importOperation.current += 1;
       importCleanup.current?.();
@@ -90,6 +125,7 @@ export function FrameBoosterPanel(): ReactElement {
     void check();
     return () => {
       window.removeEventListener("frame-booster:reset", reset);
+      unsubscribeRuntimeDiagnostic();
       mounted.current = false;
       healthController.current?.abort();
       healthController.current = null;
@@ -185,7 +221,19 @@ export function FrameBoosterPanel(): ReactElement {
     });
   };
 
-  const runtimeReady = Boolean(capabilities?.ffmpeg);
+  const runtimeReady = Boolean(capabilities?.ffmpeg && capabilities.jobs && runtimeDiagnostic.phase === "ready");
+  const runtimeStartupActive = checking || runtimeStartupPhases.has(runtimeDiagnostic.phase);
+  const runtimeTerminalMessage = runtimeError ?? (runtimeDiagnostic.phase === "error" ? runtimeDiagnostic.message : null);
+  const runtimeElapsedSeconds = runtimeCheckStartedAt === null
+    ? 0
+    : Math.max(0, Math.floor((runtimeNow - runtimeCheckStartedAt) / 1_000));
+  const runtimeRecentLogs = runtimeDiagnostic.recentLogs ?? [];
+  useEffect(() => {
+    if (!runtimeStartupActive) return;
+    setRuntimeNow(Date.now());
+    const timer = window.setInterval(() => setRuntimeNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [runtimeStartupActive]);
   const selectedMethod: FrameInterpolationMethod = settings.method === "blend" || settings.method === "motion-obmc" ? settings.method : "motion";
   const guidance = methodGuidance[selectedMethod];
   const runtimeLabel = checking ? "Avvio…" : runtimeReady ? "Pronto" : "Non disponibile";
@@ -219,10 +267,28 @@ export function FrameBoosterPanel(): ReactElement {
       <label>Target<select aria-label="Target Frame Booster" value={settings.targetMode} onChange={(event) => update({ targetMode: event.target.value as typeof settings.targetMode })}><option value="multiplier">Moltiplicatore</option><option value="fps">FPS diretto</option></select></label>
       {settings.targetMode === "multiplier" ? <label>Moltiplicatore<select aria-label="Moltiplicatore Frame Booster" value={settings.targetMultiplier} onChange={(event) => update({ targetMultiplier: Number(event.target.value) as typeof settings.targetMultiplier })}>{[2, 3, 4, 5].map((value) => <option key={value} value={value}>{value}×</option>)}</select></label> : <label>FPS target<input aria-label="FPS target Frame Booster" type="number" min="1" max="480" step=".01" value={settings.targetFps} onChange={(event) => update({ targetFps: Number(event.target.value) })} /></label>}
     </div>
-    <div className={`frame-booster-capability ${runtimeReady ? "is-ready" : "is-warning"}`}>
-      <strong>{checking ? "Avvio del runtime…" : capabilities?.ffmpeg ? "FFmpeg pronto" : "Backend non disponibile"}</strong>
-      <span>{runtimeError ?? (capabilities?.ffmpeg ? "Motion AOBMC, Motion OBMC e Frame blend sono pronti." : "Avvio automatico del servizio locale in corso.")}</span>
-      <button type="button" onClick={() => void check()} disabled={checking}>Ricontrolla backend</button>
+    {runtimeStartupActive ? <div className="frame-booster-runtime-startup" role="status" aria-live="polite">
+      <div className="frame-booster-runtime-startup__heading">
+        <span className="frame-booster-runtime-spinner" aria-hidden="true" />
+        <div>
+          <strong>Avvio del backend locale</strong>
+          <span>{runtimePhaseLabels[runtimeDiagnostic.phase]} · {runtimeElapsedSeconds} s</span>
+        </div>
+      </div>
+      <div className="frame-booster-runtime-progress" role="progressbar" aria-label="Avanzamento avvio backend" />
+      <p>{runtimeDiagnostic.message}</p>
+      {runtimeDiagnostic.logPath ? <p className="frame-booster-runtime-log-path">Log: <code>{runtimeDiagnostic.logPath}</code></p> : null}
+      <details className="frame-booster-runtime-logs">
+        <summary>Log recenti ({runtimeRecentLogs.length})</summary>
+        <pre>{runtimeRecentLogs.length > 0 ? runtimeRecentLogs.join("\n") : "Nessun log ricevuto dal backend."}</pre>
+      </details>
+      <button type="button" onClick={() => void check()}>Riprova avvio</button>
+    </div> : null}
+    <div className={`frame-booster-capability ${runtimeReady ? "is-ready" : runtimeTerminalMessage ? "is-error" : "is-warning"}`}>
+      <strong>{runtimeReady ? "FFmpeg pronto" : runtimeTerminalMessage ? "Backend non disponibile" : checking ? "Avvio del runtime…" : "Backend non disponibile"}</strong>
+      <span>{runtimeTerminalMessage ?? (runtimeReady ? "Motion AOBMC, Motion OBMC e Frame blend sono pronti." : "Avvio automatico del servizio locale in corso. I metodi FFmpeg non richiedono download di modelli.")}</span>
+      {runtimeTerminalMessage && runtimeDiagnostic.logPath ? <span>Controlla il log del backend e premi Riprova backend.</span> : null}
+      <button type="button" onClick={() => void check()} disabled={checking}>Riprova backend</button>
     </div>
     <details className="frame-booster-diagnostics">
       <summary>Diagnostica backend</summary>
@@ -232,8 +298,10 @@ export function FrameBoosterPanel(): ReactElement {
         <div><dt>Ultimo evento</dt><dd>{runtimeDiagnostic.message}</dd></div>
         {runtimeDiagnostic.pid ? <div><dt>PID</dt><dd>{runtimeDiagnostic.pid}</dd></div> : null}
         {runtimeDiagnostic.logPath ? <div><dt>Log</dt><dd><code>{runtimeDiagnostic.logPath}</code></dd></div> : null}
+        {runtimeRecentLogs.length > 0 ? <div><dt>Log recenti</dt><dd>{runtimeRecentLogs.length}</dd></div> : null}
         <div><dt>Ora</dt><dd>{runtimeDiagnostic.at}</dd></div>
       </dl>
+      {!runtimeStartupActive && runtimeRecentLogs.length > 0 ? <pre className="frame-booster-runtime-log-output">{runtimeRecentLogs.join("\n")}</pre> : null}
     </details>
   </section>;
 }

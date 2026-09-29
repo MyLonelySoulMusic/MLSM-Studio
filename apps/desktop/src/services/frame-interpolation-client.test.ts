@@ -3,11 +3,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const ensurePythonUpscalerService = vi.hoisted(() => vi.fn());
 const pythonUpscalerRuntimeDiagnostic = vi.hoisted(() => vi.fn(() => ({ phase: "error", message: "backend test non disponibile", at: "2026-01-01T00:00:00.000Z" })));
 const reportUpscalerDiagnostic = vi.hoisted(() => vi.fn());
-vi.mock("./upscaler-python-client", () => ({ ensurePythonUpscalerService, pythonUpscalerRuntimeDiagnostic, reportUpscalerDiagnostic }));
+const refreshPythonUpscalerStartupStatus = vi.hoisted(() => vi.fn().mockResolvedValue("waiting"));
+const setPythonUpscalerRuntimeDiagnostic = vi.hoisted(() => vi.fn());
+vi.mock("./upscaler-python-client", () => ({ ensurePythonUpscalerService, pythonUpscalerRuntimeDiagnostic, reportUpscalerDiagnostic, refreshPythonUpscalerStartupStatus, setPythonUpscalerRuntimeDiagnostic }));
 
 import { createFrameInterpolationFormData, frameInterpolationJob, normalizeFrameInterpolationMethod, probeFrameInterpolationSource, waitForFrameInterpolationHealth } from "./frame-interpolation-client";
 
-afterEach(() => { vi.restoreAllMocks(); ensurePythonUpscalerService.mockReset(); reportUpscalerDiagnostic.mockReset(); });
+afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); ensurePythonUpscalerService.mockReset(); reportUpscalerDiagnostic.mockReset(); refreshPythonUpscalerStartupStatus.mockClear(); setPythonUpscalerRuntimeDiagnostic.mockClear(); });
 
 describe("Frame Booster interpolation request", () => {
   it("sends only the multiplier so the server derives FPS from ffprobe", () => {
@@ -74,13 +76,42 @@ describe("Frame Booster interpolation request", () => {
     expect(ensurePythonUpscalerService).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps probing until the deadline when the first start request fails", async () => {
+  it("stops immediately with the diagnostic when the launcher rejects startup", async () => {
     ensurePythonUpscalerService.mockResolvedValue(false);
     const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("connection refused"));
 
     await expect(waitForFrameInterpolationHealth({ timeoutMs: 2_000 })).resolves.toBeNull();
-    expect(fetch.mock.calls.length).toBeGreaterThan(1);
+    expect(fetch).toHaveBeenCalledTimes(1);
     expect(ensurePythonUpscalerService).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports startup progress and logs while Python is loading before its HTTP port opens", async () => {
+    vi.useFakeTimers();
+    ensurePythonUpscalerService.mockResolvedValue(true);
+    let ready = false;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      if (!ready) throw new TypeError("connection refused");
+      return new Response(JSON.stringify({ interpolation: { ffmpeg: true, jobs: true } }));
+    });
+    const onStatus = vi.fn();
+    const pending = waitForFrameInterpolationHealth({ timeoutMs: 10_000, onStatus });
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(refreshPythonUpscalerStartupStatus).toHaveBeenCalled();
+    expect(ensurePythonUpscalerService).toHaveBeenCalledTimes(1);
+    expect(onStatus).toHaveBeenCalled();
+    ready = true;
+    await vi.advanceTimersByTimeAsync(500);
+    await expect(pending).resolves.toEqual({ ffmpeg: true, jobs: true });
+  });
+
+  it("does not restart a backend after leaving the area during a health request", async () => {
+    const controller = new AbortController();
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      controller.abort();
+      throw new TypeError("connection refused");
+    });
+    await expect(waitForFrameInterpolationHealth({ signal: controller.signal })).resolves.toBeNull();
+    expect(ensurePythonUpscalerService).not.toHaveBeenCalled();
   });
 
   it("probes source FPS immediately through the local backend", async () => {

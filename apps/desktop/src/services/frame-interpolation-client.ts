@@ -1,8 +1,9 @@
 import { trackTask } from "./task-history";
 export function frameInterpolationJob(...args: Parameters<typeof frameInterpolationJobImpl>): ReturnType<typeof frameInterpolationJobImpl> { return trackTask("Frame Booster", () => frameInterpolationJobImpl(...args)); }
 import type { FrameInterpolationMediaAudit } from "./frame-interpolation-audit";
-import { ensurePythonUpscalerService, pythonUpscalerRuntimeDiagnostic, reportUpscalerDiagnostic } from "./upscaler-python-client";
+import { ensurePythonUpscalerService, pythonUpscalerRuntimeDiagnostic, refreshPythonUpscalerStartupStatus, reportUpscalerDiagnostic, setPythonUpscalerRuntimeDiagnostic } from "./upscaler-python-client";
 import { localUpscalerApiBaseUrl } from "./local-python-api";
+import { pythonServiceLifecycleRevision, waitForAreaPythonServicesShutdown } from "./python-service-lifecycle";
 
 export type FrameInterpolationMethod = "blend" | "motion" | "motion-obmc";
 export type FrameInterpolationPhase = "uploading" | "queued" | "probing" | "preparing" | "interpolating" | "remuxing" | "verifying" | "downloading" | "ready" | "error" | "cancelled";
@@ -69,45 +70,78 @@ export function normalizeFrameInterpolationMethod(value: unknown): FrameInterpol
 
 interface HealthPayload { interpolation?: { ffmpeg?: boolean; jobs?: boolean } }
 
-export async function frameInterpolationHealth(refresh = false, timeoutMs = 8_000): Promise<FrameInterpolationCapabilities | null> {
+export async function frameInterpolationHealth(refresh = false, timeoutMs = 8_000, signal?: AbortSignal): Promise<FrameInterpolationCapabilities | null> {
   try {
-    const response = await fetch(`${frameInterpolationBaseUrl}/interpolation/health${refresh ? `?t=${Date.now()}` : ""}`, { signal: AbortSignal.timeout(timeoutMs) });
+    const timeout = AbortSignal.timeout(Math.max(1, timeoutMs));
+    const response = await fetch(`${frameInterpolationBaseUrl}/interpolation/health${refresh ? `?t=${Date.now()}` : ""}`, { signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
     if (!response.ok) return null;
     const payload = await response.json() as HealthPayload;
-    const info = payload.interpolation ?? {};
+    const info = payload.interpolation;
+    if (!info || typeof info.ffmpeg !== "boolean" || typeof info.jobs !== "boolean") return null;
     return { ffmpeg: Boolean(info.ffmpeg), jobs: info.jobs !== false };
   } catch { return null; }
 }
 
-export async function waitForFrameInterpolationHealth(options: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<FrameInterpolationCapabilities | null> {
+export async function waitForFrameInterpolationHealth(options: { timeoutMs?: number; signal?: AbortSignal; onStatus?: (message: string, elapsedSeconds: number) => void } = {}): Promise<FrameInterpolationCapabilities | null> {
   const timeoutMs = Math.max(1_000, options.timeoutMs ?? 60_000);
-  const deadline = Date.now() + timeoutMs;
-  let lastStartRequest = 0;
+  const beganAt = Date.now();
+  const deadline = beganAt + timeoutMs;
+  const revision = pythonServiceLifecycleRevision();
+  const cancelled = () => options.signal?.aborted || revision !== pythonServiceLifecycleRevision();
+  const report = () => options.onStatus?.(pythonUpscalerRuntimeDiagnostic().message, (Date.now() - beganAt) / 1000);
+  if (cancelled()) return null;
+  setPythonUpscalerRuntimeDiagnostic("probing", "Verifica del backend Frame Booster locale…");
+  report();
+  await waitForAreaPythonServicesShutdown();
+  let started = false;
+  let lastStatusRequest = beganAt;
   do {
-    if (options.signal?.aborted) return null;
+    if (cancelled() || Date.now() >= deadline) break;
     const remaining = deadline - Date.now();
-    const capabilities = await frameInterpolationHealth(true, Math.max(250, Math.min(2_500, remaining)));
-    if (capabilities) return capabilities;
-    if (Date.now() - lastStartRequest >= 2_000) {
-      lastStartRequest = Date.now();
-      if (!await ensurePythonUpscalerService()) console.warn("[MLSM Frame Booster] backend start request failed; retrying until deadline", pythonUpscalerRuntimeDiagnostic());
-      if (options.signal?.aborted) return null;
+    const capabilities = await frameInterpolationHealth(true, Math.min(2_500, remaining), options.signal);
+    if (cancelled()) return null;
+    if (capabilities) {
+      setPythonUpscalerRuntimeDiagnostic(capabilities.ffmpeg && capabilities.jobs ? "ready" : "error", capabilities.ffmpeg && capabilities.jobs
+        ? "Frame Booster pronto: FFmpeg e servizio interpolazione disponibili."
+        : "Il backend risponde ma FFmpeg o il servizio interpolazione non sono disponibili. Apri Impostazioni → Restore per verificare il runtime.");
+      report();
+      return capabilities;
     }
-    if (Date.now() >= deadline || options.signal?.aborted) return null;
+    if (Date.now() >= deadline) break;
+    if (!started) {
+      started = await ensurePythonUpscalerService(options.signal, Math.min(10_000, deadline - Date.now()));
+      if (cancelled()) return null;
+      report();
+      if (!started) return null;
+      lastStatusRequest = Date.now();
+    } else if (Date.now() - lastStatusRequest >= 2_000) {
+      lastStatusRequest = Date.now();
+      const phase = await refreshPythonUpscalerStartupStatus(options.signal, Math.min(4_000, deadline - Date.now()));
+      if (cancelled()) return null;
+      report();
+      if (phase === "error") return null;
+    }
+    report();
+    if (Date.now() >= deadline || cancelled()) break;
     await new Promise<void>((resolve) => {
       const abort = () => { clearTimeout(timer); resolve(); };
       const timer = setTimeout(() => {
         options.signal?.removeEventListener("abort", abort);
         resolve();
-      }, 350);
+      }, 750);
       options.signal?.addEventListener("abort", abort, { once: true });
     });
   } while (Date.now() < deadline);
+  if (!cancelled() && pythonUpscalerRuntimeDiagnostic().phase !== "error") {
+    setPythonUpscalerRuntimeDiagnostic("error", `Il backend non è pronto dopo ${Math.round(timeoutMs / 1000)} secondi. Consulta i log di avvio per l’ultimo passaggio eseguito e riprova.`);
+    report();
+  }
   return null;
 }
 
 export async function probeFrameInterpolationSource(file: File, signal?: AbortSignal): Promise<FrameInterpolationMediaAudit> {
-  const capabilities = await waitForFrameInterpolationHealth({ timeoutMs: 15_000, ...(signal ? { signal } : {}) });
+  const capabilities = await waitForFrameInterpolationHealth({ timeoutMs: 60_000, ...(signal ? { signal } : {}) });
+  signal?.throwIfAborted();
   if (!capabilities?.ffmpeg) throw frameBoosterConnectionError("Rilevamento FPS non riuscito");
   const form = new FormData();
   form.set("file", file, file.name || "source.mp4");
@@ -208,7 +242,9 @@ export function createFrameInterpolationFormData(options: Omit<FrameInterpolatio
 
 async function frameInterpolationJobImpl(options: FrameInterpolationRequest): Promise<FrameInterpolationResult> {
   if (options.signal.aborted) throw new DOMException("Operazione annullata", "AbortError");
-  const capabilities = await waitForFrameInterpolationHealth({ timeoutMs: 60_000, signal: options.signal });
+  const capabilities = await waitForFrameInterpolationHealth({ timeoutMs: 60_000, signal: options.signal, onStatus: (phaseLabel, elapsedSeconds) => {
+    options.onStatus?.({ id: "startup", phase: "preparing", phaseLabel, elapsedSeconds, progress: 0, stageProgress: null, currentFrame: 0, totalFrames: 0, indeterminate: true });
+  } });
   if (options.signal.aborted) throw new DOMException("Operazione annullata", "AbortError");
   if (!capabilities?.ffmpeg || capabilities.jobs === false) throw frameBoosterConnectionError("Avvio interpolazione non riuscito");
   const clientId = options.clientId ?? globalThis.crypto?.randomUUID?.() ?? `frame-booster-${Date.now()}`;

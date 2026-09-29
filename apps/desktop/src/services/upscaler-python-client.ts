@@ -32,7 +32,9 @@ export interface PythonUpscalerRuntimeDiagnostic {
   at: string;
   pid?: number;
   logPath?: string;
+  recentLogs?: string[];
 }
+interface ViteUpscalerStatus { started?: boolean; running?: boolean; phase?: string; message?: string; error?: string; pid?: number; logPath?: string; recentLogs?: string[] }
 interface NativeUpscalerServiceStatus { running: boolean; started: boolean; pid?: number | null; logPath?: string | null }
 export interface RemoteUpscalerVideoCacheInfo { jobs: number; bytes: number; activeJobs: number }
 export interface RemoteUpscalerVideoCacheClearResult { removedJobs: number; removedBytes: number }
@@ -117,18 +119,52 @@ let healthPromise: Promise<PythonUpscalerHealth | null> | null = null;
 let healthCheckedAt = 0;
 let healthLifecycleRevision = pythonServiceLifecycleRevision();
 let runtimeDiagnostic: PythonUpscalerRuntimeDiagnostic = { phase: "idle", message: "Runtime non ancora richiesto.", at: new Date().toISOString() };
+const runtimeListeners = new Set<(diagnostic: PythonUpscalerRuntimeDiagnostic) => void>();
 
-function setRuntimeDiagnostic(phase: PythonUpscalerRuntimeDiagnostic["phase"], message: string, details: { pid?: number | null; logPath?: string | null } = {}): void {
+export function setPythonUpscalerRuntimeDiagnostic(phase: PythonUpscalerRuntimeDiagnostic["phase"], message: string, details: { pid?: number | null; logPath?: string | null; recentLogs?: string[] } = {}): void {
   runtimeDiagnostic = {
     phase, message, at: new Date().toISOString(),
     ...(details.pid || runtimeDiagnostic.pid ? { pid: details.pid || runtimeDiagnostic.pid } : {}),
     ...(details.logPath || runtimeDiagnostic.logPath ? { logPath: details.logPath || runtimeDiagnostic.logPath } : {}),
+    recentLogs: [...(details.recentLogs ?? runtimeDiagnostic.recentLogs ?? [])].slice(-40),
   };
   console.info("[MLSM Python runtime]", runtimeDiagnostic);
+  for (const listener of runtimeListeners) listener(pythonUpscalerRuntimeDiagnostic());
 }
+const setRuntimeDiagnostic = setPythonUpscalerRuntimeDiagnostic;
 
 export function pythonUpscalerRuntimeDiagnostic(): PythonUpscalerRuntimeDiagnostic {
-  return { ...runtimeDiagnostic };
+  return { ...runtimeDiagnostic, ...(runtimeDiagnostic.recentLogs ? { recentLogs: [...runtimeDiagnostic.recentLogs] } : {}) };
+}
+
+export function subscribePythonUpscalerRuntimeDiagnostic(listener: (diagnostic: PythonUpscalerRuntimeDiagnostic) => void): () => void {
+  runtimeListeners.add(listener);
+  return () => { runtimeListeners.delete(listener); };
+}
+
+function startupSignal(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
+  const timeout = AbortSignal.timeout(Math.max(1, timeoutMs));
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
+/** Read process output even before Python has bound its HTTP port. */
+export async function refreshPythonUpscalerStartupStatus(signal?: AbortSignal, timeoutMs = 4_000): Promise<string | null> {
+  if ("__TAURI_INTERNALS__" in globalThis || signal?.aborted) return null;
+  try {
+    const response = await fetch("/__mlsm/python/upscaler/status", { signal: startupSignal(signal, timeoutMs), cache: "no-store" });
+    const payload = await response.json() as ViteUpscalerStatus;
+    if (signal?.aborted) return null;
+    if (!response.ok || payload.phase === "error") {
+      setRuntimeDiagnostic("error", payload.error || payload.message || `Stato backend HTTP ${response.status}.`, payload);
+      return "error";
+    }
+    if (typeof payload.running !== "boolean") return null;
+    setRuntimeDiagnostic(payload.running ? "ready" : "waiting", payload.message || "Caricamento del runtime Python locale; attendo la risposta del servizio.", payload);
+    return payload.phase ?? "waiting";
+  } catch (error) {
+    if (!signal?.aborted) setRuntimeDiagnostic("error", `Connessione con MLSM Studio interrotta durante l’avvio. Riavvia il launcher e controlla il terminale. Dettaglio: ${error instanceof Error ? error.message : String(error)}.`);
+    return null;
+  }
 }
 
 async function probePythonUpscalerHealth(timeoutMs = 2_500, verbose = true): Promise<PythonUpscalerHealth | null> {
@@ -140,6 +176,7 @@ async function probePythonUpscalerHealth(timeoutMs = 2_500, verbose = true): Pro
       return null;
     }
     const health = await response.json() as PythonUpscalerHealth;
+    if (health.ok !== true) return null;
     setRuntimeDiagnostic("ready", `Backend pronto · ${health.gpuName || health.recommendedBackend}${health.pid ? ` · PID ${health.pid}` : ""}.`, {
       ...(health.pid ? { pid: health.pid } : {}),
       ...(health.diagnosticLogPath ? { logPath: health.diagnosticLogPath } : {}),
@@ -151,20 +188,26 @@ async function probePythonUpscalerHealth(timeoutMs = 2_500, verbose = true): Pro
   }
 }
 
-async function requestNativeUpscalerStart(): Promise<boolean> {
+async function requestNativeUpscalerStart(signal?: AbortSignal, timeoutMs = 10_000): Promise<boolean> {
+  if (signal?.aborted) return false;
   setRuntimeDiagnostic("starting", "Richiesta di avvio del backend Upscaler / Frame Booster.");
   if (!("__TAURI_INTERNALS__" in globalThis)) {
     try {
-      const response = await fetch("/__mlsm/python/upscaler/start", { method: "POST" });
-      const payload = await response.json().catch(() => null) as { started?: boolean; running?: boolean; error?: string } | null;
-      if (!response.ok) {
-        setRuntimeDiagnostic("error", payload?.error || `Avvio backend rifiutato: HTTP ${response.status}.`);
+      const response = await fetch("/__mlsm/python/upscaler/start", { method: "POST", signal: startupSignal(signal, timeoutMs) });
+      const payload = await response.json().catch(() => null) as ViteUpscalerStatus | null;
+      if (signal?.aborted) return false;
+      if (!response.ok || payload?.phase === "error") {
+        setRuntimeDiagnostic("error", payload?.error || payload?.message || `Avvio backend rifiutato: HTTP ${response.status}.`, payload ?? {});
         return false;
       }
-      setRuntimeDiagnostic("waiting", payload?.running ? "Backend già attivo; attendo la verifica HTTP." : "Processo Python avviato; attendo la verifica HTTP.");
+      if (!payload || typeof payload.running !== "boolean") {
+        setRuntimeDiagnostic("error", "L’endpoint di avvio non ha restituito uno stato valido. Chiudi e riavvia MLSM Studio dal launcher aggiornato.");
+        return false;
+      }
+      setRuntimeDiagnostic("waiting", payload.message || (payload.running ? "Backend già attivo; attendo la verifica HTTP." : "Processo Python avviato; caricamento delle librerie locali. Nessun download modelli in questa fase."), payload);
       return true;
     } catch (error) {
-      setRuntimeDiagnostic("error", `Endpoint di avvio Vite non raggiungibile: ${error instanceof Error ? error.message : String(error)}.`);
+      if (!signal?.aborted) setRuntimeDiagnostic("error", `Endpoint di avvio Vite non raggiungibile: ${error instanceof Error ? error.message : String(error)}. Il processo dell’app potrebbe essersi chiuso: riavvia il launcher e controlla il terminale. Nessun download è stato confermato.`);
       return false;
     }
   }
@@ -183,9 +226,11 @@ async function requestNativeUpscalerStart(): Promise<boolean> {
  * Requests the shared Upscaler / Frame Booster backend only after an area
  * transition has finished stopping the previous Python process tree.
  */
-export async function ensurePythonUpscalerService(): Promise<boolean> {
+export async function ensurePythonUpscalerService(signal?: AbortSignal, timeoutMs = 10_000): Promise<boolean> {
+  const revision = pythonServiceLifecycleRevision();
   await waitForAreaPythonServicesShutdown();
-  return requestNativeUpscalerStart();
+  if (signal?.aborted || revision !== pythonServiceLifecycleRevision()) return false;
+  return requestNativeUpscalerStart(signal, timeoutMs);
 }
 
 async function probeOrStartPythonUpscaler(): Promise<PythonUpscalerHealth | null> {
@@ -197,9 +242,10 @@ async function probeOrStartPythonUpscaler(): Promise<PythonUpscalerHealth | null
   // shared health promise so repeated clicks cannot spawn duplicate services.
   // A first Windows start can spend tens of seconds importing Torch/OpenCV.
   // Process creation is not readiness; keep one shared bounded wait alive.
-  for (let attempt = 0; attempt < 240; attempt += 1) {
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 250));
-    const health = await probePythonUpscalerHealth(800, false);
+    const health = await probePythonUpscalerHealth(Math.max(1, Math.min(800, deadline - Date.now())), false);
     if (health) return health;
   }
   const previous = pythonUpscalerRuntimeDiagnostic();

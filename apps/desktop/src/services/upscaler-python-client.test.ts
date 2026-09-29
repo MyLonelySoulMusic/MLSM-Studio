@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createProject } from "@rbs/project-schema";
 import { activeRemoteUpscalerEndpoints } from "./remote-upscaler-client";
-import { activeUpscalerVideoJobs, buildUpscalerVideoForm, clearRemoteUpscalerVideoCache, generatePythonUpscaledVideo, getRemoteUpscalerVideoCache, preflightRemoteUpscalerVideo, pythonUpscalerHealth, pythonUpscalerSupportsVideoJobs, settingsWithReachableRemoteEndpoints, shouldUsePythonUpscaler, type PythonUpscalerHealth } from "./upscaler-python-client";
+import { activeUpscalerVideoJobs, buildUpscalerVideoForm, clearRemoteUpscalerVideoCache, ensurePythonUpscalerService, generatePythonUpscaledVideo, getRemoteUpscalerVideoCache, preflightRemoteUpscalerVideo, pythonUpscalerHealth, pythonUpscalerRuntimeDiagnostic, pythonUpscalerSupportsVideoJobs, refreshPythonUpscalerStartupStatus, settingsWithReachableRemoteEndpoints, shouldUsePythonUpscaler, subscribePythonUpscalerRuntimeDiagnostic, type PythonUpscalerHealth } from "./upscaler-python-client";
 import { shutdownAreaPythonServices } from "./python-service-lifecycle";
 
 const tauriInvoke = vi.hoisted(() => vi.fn());
@@ -50,6 +50,45 @@ describe("routing Upscaler PyTorch", () => {
     tauriInvoke.mockResolvedValue(undefined);
     await shutdownAreaPythonServices();
     expect(tauriInvoke).toHaveBeenCalledWith("shutdown_area_python_services");
+  });
+
+  it("rifiuta HTML o JSON senza contratto invece di fingere che Python sia partito", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("<html>Vite fallback</html>"))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ unrelated: true })));
+    await expect(ensurePythonUpscalerService()).resolves.toBe(false);
+    await expect(ensurePythonUpscalerService()).resolves.toBe(false);
+    expect(fetch.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
+    expect(pythonUpscalerRuntimeDiagnostic()).toMatchObject({ phase: "error", message: expect.stringContaining("stato valido") });
+  });
+
+  it("trasmette in tempo reale log di startup ed errori anche prima che Python risponda", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({ running: false, started: true, phase: "starting", pid: 42, logPath: "logs/upscaler-vite.log", recentLogs: ["Caricamento PyTorch"] })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ running: false, phase: "error", error: "ModuleNotFoundError: torch", recentLogs: ["ModuleNotFoundError: torch"] })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ running: true, phase: "ready" })));
+    const listener = vi.fn();
+    const unsubscribe = subscribePythonUpscalerRuntimeDiagnostic(listener);
+    await expect(ensurePythonUpscalerService()).resolves.toBe(true);
+    expect(listener).toHaveBeenLastCalledWith(expect.objectContaining({ pid: 42, recentLogs: ["Caricamento PyTorch"] }));
+    await expect(refreshPythonUpscalerStartupStatus()).resolves.toBe("error");
+    expect(listener).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "error", message: "ModuleNotFoundError: torch" }));
+    unsubscribe();
+    listener.mockClear();
+    await refreshPythonUpscalerStartupStatus();
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("non avvia il servizio per una richiesta già annullata", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch");
+    await expect(ensurePythonUpscalerService(AbortSignal.abort())).resolves.toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("distingue la perdita di Vite da un presunto download del modello", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("Failed to fetch"));
+    await expect(ensurePythonUpscalerService()).resolves.toBe(false);
+    expect(pythonUpscalerRuntimeDiagnostic()).toMatchObject({ phase: "error", message: expect.stringContaining("riavvia il launcher") });
   });
 
   it("invia preserve_aspect_ratio insieme alla richiesta video", () => {

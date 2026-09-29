@@ -26,6 +26,11 @@ import uuid
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
+try:
+    from process_liveness import process_is_alive
+except ModuleNotFoundError:  # imported as tools.upscaler_server in tests
+    from tools.process_liveness import process_is_alive
+
 
 def resolve_upscaler_cpu_threads(configured: str | None, logical_cpus: int | None) -> int:
     """Keep video preparation responsive while allowing an explicit override."""
@@ -50,6 +55,9 @@ for _thread_variable in (
     "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS",
 ):
     os.environ[_thread_variable] = str(UPSCALER_CPU_THREADS)
+
+if __name__ == "__main__":
+    print("[MLSM startup] Caricamento OpenCV, NumPy e PyTorch dal runtime locale (nessun download modelli).", flush=True)
 
 import cv2
 import numpy as np
@@ -80,6 +88,8 @@ from fastapi.responses import FileResponse, Response
 from realesrgan import RealESRGANer
 from realesrgan.archs.srvgg_arch import SRVGGNetCompact
 from starlette.background import BackgroundTask
+if __name__ == "__main__":
+    print("[MLSM startup] Dipendenze caricate; inizializzazione servizi video e verifica FFmpeg.", flush=True)
 try:
     from remote_upscaler import (
         RemoteUpscalerError, aggregate_catalog, distribute_frames, distribute_video_chunks,
@@ -482,16 +492,6 @@ def configured_parent_pid() -> int | None:
     except ValueError:
         return None
     return value if value > 0 and value != os.getpid() else None
-
-
-def process_is_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-        return True
-    except PermissionError:
-        return True
-    except (OSError, ProcessLookupError):
-        return False
 
 
 def start_parent_watchdog(parent_pid: int | None) -> threading.Thread | None:
