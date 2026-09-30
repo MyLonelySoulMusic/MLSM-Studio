@@ -225,7 +225,12 @@ export function UpscalerPanel() {
     update({ adjustments: { ...current, [key]: value } });
   }, [update]);
   const effective = hardware ? effectiveUpscalerBackend(settings.backend, hardware) : null;
-  const mlxOffered = hardware?.appleSilicon === true && Boolean(mlx.capabilities?.supported);
+  // Availability in the UI depends on the host, not on the backend already
+  // answering.  The setup modal is precisely how an Apple Silicon user repairs
+  // or completes an unavailable MLX-DLSS installation.  Gating this button on
+  // `capabilities.supported` made the entry point disappear during startup,
+  // after a failed health check, and before the first installation.
+  const mlxOffered = hardware?.appleSilicon === true;
   const mlxModeLabel = mlx.capabilities?.usable ? "MLX-DLSS · pronto" : mlx.capabilities?.installed ? "MLX-DLSS · configura" : "MLX-DLSS · installa";
   const outputMegapixels = settings.finalWidth * settings.finalHeight / 1_000_000;
   const demandingVideoProfile = settings.sourceKind === "video" && Boolean(settings.sourceUrl) && (selectedModel.speed === "slow" || settings.tta || outputMegapixels > 8.4);

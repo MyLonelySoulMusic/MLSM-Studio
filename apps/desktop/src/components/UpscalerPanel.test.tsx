@@ -192,6 +192,7 @@ describe("UpscalerPanel source picker", () => {
     mlxCapabilities.mockReturnValue({ capabilities: null, loading: true, error: "", refresh, setCapabilities: vi.fn() });
     const { rerender } = render(<UpscalerPanel />);
     await waitFor(() => expect(screen.getByRole("option", { name: "MLX-DLSS 5 · configura" })).toBeVisible());
+    expect(screen.getByRole("button", { name: "MLX-DLSS · installa" })).toBeVisible();
     fireEvent.change(screen.getByLabelText("Modello Upscaler"), { target: { value: "mlx-dlss" } });
     expect(screen.getByText("Avvio del servizio Upscaler…")).toBeVisible();
     mlxCapabilities.mockReturnValue({ capabilities: null, loading: false, error: "Servizio non raggiungibile", refresh, setCapabilities: vi.fn() });
