@@ -15,6 +15,9 @@ vi.mock("../stickman/StickmanWorkspace", () => ({
 vi.mock("../reports/ReportsWorkspace", () => ({
   ReportsWorkspace: ({ onHome, viewDashboardId }: { onHome: () => void; viewDashboardId?: string | null }) => <main aria-label="Reports"><span>{viewDashboardId ? `Viewer ${viewDashboardId}` : "Editor Reports"}</span><button type="button" onClick={onHome}>Home Reports</button></main>
 }));
+vi.mock("../postit/PostItWorkspace", () => ({
+  PostItWorkspace: ({ onHome }: { onHome: () => void }) => <main aria-label="Post-it"><button type="button" onClick={onHome}>Home Post-it</button></main>
+}));
 
 describe("StudioExperience", () => {
   beforeEach(() => { localStorage.clear(); window.history.replaceState(null, "", "/"); vi.useFakeTimers(); });
@@ -75,6 +78,16 @@ describe("StudioExperience", () => {
     fireEvent.click(screen.getByRole("button", { name: /Stickman Animations/ }));
     expect(screen.getByRole("main", { name: "Stickman Animations" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Home Stickman Animations" }));
+    expect(screen.getByRole("region", { name: "Aree creative disponibili" })).toBeInTheDocument();
+  });
+
+  it("apre Post-it come area separata e torna alla Home aree", async () => {
+    render(<StudioExperience />);
+    fireEvent.click(screen.getByRole("button", { name: "Entra in MLSM Studio" }));
+    act(() => vi.advanceTimersByTime(850));
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Post-it/ })); });
+    expect(screen.getByRole("main", { name: "Post-it" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Home Post-it" }));
     expect(screen.getByRole("region", { name: "Aree creative disponibili" })).toBeInTheDocument();
   });
 

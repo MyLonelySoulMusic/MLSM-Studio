@@ -18,13 +18,13 @@ const areaCopyKeys = {
   audio: { label: "audio", description: "audioDescription" }
 } as const;
 
-export type StudioAreaDestination = AnimationCategoryId | "autopost" | "stickman" | "reports";
+export type StudioAreaDestination = AnimationCategoryId | "autopost" | "stickman" | "reports" | "postit";
 
 export function StudioHome({ onEnterArea }: { onEnterArea: (category: StudioAreaDestination) => void }) {
   const { language, theme, setLanguage, setTheme } = useUiPreferences(); const copy = uiCopy[language]; const setAnimationMode = useProjectStore((state) => state.setAnimationMode);
   const enter = (categoryId: StudioAreaDestination) => {
     resetWorkspaceForAreaEntry();
-    if (categoryId === "autopost" || categoryId === "stickman" || categoryId === "reports") { onEnterArea(categoryId); return; }
+    if (categoryId === "autopost" || categoryId === "stickman" || categoryId === "reports" || categoryId === "postit") { onEnterArea(categoryId); return; }
     const category = animationCategories.find((item) => item.id === categoryId) ?? animationCategories[0]!;
     const firstMode = getAnimationMode(category.groups[0]!.modeIds[0]!);
     setAnimationMode(firstMode.id, [...firstMode.defaultBaseObjectTypes]); onEnterArea(category.id);
@@ -75,6 +75,13 @@ export function StudioHome({ onEnterArea }: { onEnterArea: (category: StudioArea
             </svg>
           </span>
           <span className="studio-area-card__copy"><small>CSV · Excel · TXT</small><strong>Reports</strong><em>{language === "it" ? "Dai dati alle dashboard. Crea grafici, indicatori e report da condividere." : "Turn data into dashboards. Create charts, metrics and reports to share."}</em></span>
+          <span className="studio-area-card__action">{copy.enterArea}<b>↗</b></span><i className="studio-area-card__shine" aria-hidden="true" />
+        </button>
+        <button className="studio-area-card area-postit" style={{ "--area-index": animationCategories.length + 3 } as CSSProperties} type="button" onClick={() => enter("postit")}>
+          <span className="studio-area-card__number">{String(animationCategories.length + 4).padStart(2, "0")}</span>
+          <span className="studio-area-card__icon"><svg viewBox="0 0 64 64" aria-hidden="true"><path d="M13 10h38v37L40 57H13Z"/><path d="M40 57V46h11M21 22h22M21 31h17M21 40h12"/></svg></span>
+          <span className="studio-area-card__art" aria-hidden="true"><svg className="postit-area-art" viewBox="0 0 560 300"><defs><linearGradient id="postitHomePaper" x1="0" y1="0" x2="1" y2="1"><stop stopColor="var(--panel)"/><stop offset="1" stopColor="var(--accent-soft)"/></linearGradient></defs><path d="M95 52h190v165l-37 36H95Z" fill="url(#postitHomePaper)" stroke="var(--line)"/><path d="M248 253v-36h37" fill="none" stroke="var(--accent)" strokeWidth="5"/><path d="M130 101h117M130 130h91M130 159h106" stroke="var(--ink)" strokeWidth="10" strokeLinecap="round" opacity=".7"/><g fill="none" stroke="var(--accent-strong)" strokeWidth="7"><circle cx="380" cy="78" r="20"/><circle cx="455" cy="148" r="20"/><circle cx="352" cy="224" r="20"/><path d="m396 92 43 42M441 160l-70 52M365 206l7-107" strokeLinecap="round"/></g><g fill="var(--accent-strong)"><circle cx="380" cy="78" r="7"/><circle cx="455" cy="148" r="7"/><circle cx="352" cy="224" r="7"/></g></svg></span>
+          <span className="studio-area-card__copy"><small>{language === "it" ? "Memoria e flussi semantici" : "Semantic memory & flows"}</small><strong>Post-it</strong><em>{language === "it" ? "Salva idee e link, collegali in flussi e ritrovali con ricerca vettoriale locale." : "Save ideas and links, connect them into flows and retrieve them with local vector search."}</em></span>
           <span className="studio-area-card__action">{copy.enterArea}<b>↗</b></span><i className="studio-area-card__shine" aria-hidden="true" />
         </button>
       </section>

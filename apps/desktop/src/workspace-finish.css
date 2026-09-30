@@ -584,6 +584,10 @@
   touch-action: pan-y;
 }
 
+.studio-area-card.area-postit {
+  --card-accent: color-mix(in srgb, var(--accent) 72%, #f2c94c);
+}
+
 /* The card is the only interactive target. Its artwork and copy must never
  * split hit-testing into smaller zones or capture wheel/touch scrolling. */
 .studio-area-card > * {

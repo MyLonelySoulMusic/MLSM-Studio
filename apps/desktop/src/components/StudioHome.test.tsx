@@ -15,7 +15,7 @@ describe("StudioHome", () => {
   it("presenta le aree come ingressi grandi e apre la prima modalità pertinente", () => {
     const onEnterArea = vi.fn();
     render(<StudioHome onEnterArea={onEnterArea} />);
-    expect(within(screen.getByRole("region", { name: "Aree creative disponibili" })).getAllByRole("button")).toHaveLength(animationCategories.length + 3);
+    expect(within(screen.getByRole("region", { name: "Aree creative disponibili" })).getAllByRole("button")).toHaveLength(animationCategories.length + 4);
     expect(screen.getByRole("button", { name: /Sound Animation/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Photo & Video Studio/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Video Editor/ })).toBeInTheDocument();
@@ -24,6 +24,7 @@ describe("StudioHome", () => {
     expect(screen.getByRole("button", { name: /Stickman Animations/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /AutoPost/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Reports/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Post-it/ })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Photo & Video Studio/ }));
     expect(onEnterArea).toHaveBeenCalledWith("photoVideoStudio");
     expect(useProjectStore.getState().project.animation.modeId).toBe("staticWatermark");
@@ -39,6 +40,8 @@ describe("StudioHome", () => {
     expect(onEnterArea).toHaveBeenLastCalledWith("stickman");
     fireEvent.click(screen.getByRole("button", { name: /Reports/ }));
     expect(onEnterArea).toHaveBeenLastCalledWith("reports");
+    fireEvent.click(screen.getByRole("button", { name: /Post-it/ }));
+    expect(onEnterArea).toHaveBeenLastCalledWith("postit");
   });
 
   it("usa l'intera card come unico target senza bloccare lo scorrimento verticale", () => {

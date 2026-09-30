@@ -17,6 +17,7 @@ mod song_player;
 mod audio_tools;
 mod studio_settings;
 mod reports_storage;
+mod postit_favicon;
 
 #[derive(Debug, thiserror::Error)]
 enum ProjectIoError {
@@ -616,6 +617,7 @@ pub fn run() {
             read_project,
             write_project,
             write_report_workbook,
+            postit_favicon::fetch_postit_favicon,
             detect_audio_tools,
             detect_upscaler_hardware,
             ensure_upscaler_service,
