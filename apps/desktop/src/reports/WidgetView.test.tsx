@@ -39,11 +39,11 @@ describe("Reports widget views", () => {
     const { rerender } = render(<WidgetView widget={widget} dataset={dataset} theme={DEFAULT_REPORT_THEME} filters={[]} />);
 
     expect(screen.queryByText("Somma · Valore")).not.toBeInTheDocument();
-    expect(screen.queryByText("3 righe · Campagna")).not.toBeInTheDocument();
+    expect(screen.queryByText((_, element) => Boolean(element?.classList.contains("rpt-kpi-meta")))).not.toBeInTheDocument();
 
     rerender(<WidgetView widget={{ ...widget, showKpiLabel: true, showKpiMeta: true }} dataset={dataset} theme={DEFAULT_REPORT_THEME} filters={[]} />);
     expect(screen.getByText("Somma · Valore")).toBeInTheDocument();
-    expect(screen.getByText("3 righe · Campagna")).toBeInTheDocument();
+    expect(screen.getByText((_, element) => Boolean(element?.classList.contains("rpt-kpi-meta")))).toHaveTextContent("3 righe · Campagna");
   });
 
   it("renders imported notes as plain text without interpreting markup", () => {
@@ -88,7 +88,7 @@ describe("Reports widget views", () => {
     };
     render(<WidgetView widget={widget} dataset={pivotDataset} theme={DEFAULT_REPORT_THEME} filters={[]} />);
 
-    expect(screen.getByRole("table", { name: /Tabella pivot: Data per Canale/ })).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: /Tabella pivot : Data per Canale/ })).toBeInTheDocument();
     expect(screen.getByRole("rowheader", { name: "gen 2026" })).toBeInTheDocument();
     expect(screen.getByRole("rowheader", { name: "feb 2026" })).toBeInTheDocument();
     expect(screen.getAllByText("60").length).toBeGreaterThan(0);

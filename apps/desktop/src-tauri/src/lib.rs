@@ -18,6 +18,7 @@ mod audio_tools;
 mod studio_settings;
 mod reports_storage;
 mod postit_favicon;
+mod streamer_audio;
 
 #[derive(Debug, thiserror::Error)]
 enum ProjectIoError {
@@ -612,6 +613,7 @@ pub fn run() {
         .manage(audio_tools::AudioToolsState::default())
         .manage(UpscalerServiceState::default())
         .manage(AutoPostServiceState::default())
+        .manage(streamer_audio::StreamerCaptureState::default())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             read_project,
@@ -649,6 +651,12 @@ pub fn run() {
             ,audio_tools::audio_list_voices
             ,audio_tools::audio_delete_voice
             ,audio_tools::audio_copy_artifact
+            ,streamer_audio::streamer_capabilities
+            ,streamer_audio::streamer_start_capture
+            ,streamer_audio::streamer_stop_capture
+            ,streamer_audio::streamer_permission_settings
+            ,streamer_audio::streamer_import_audio
+            ,streamer_audio::streamer_oembed
         ])
         .build(tauri::generate_context!())
         .expect("errore durante l'avvio di MLSM Studio");
@@ -657,6 +665,7 @@ pub fn run() {
             app_handle.state::<UpscalerServiceState>().shutdown();
             app_handle.state::<AutoPostServiceState>().shutdown();
             audio_tools::shutdown(app_handle.state::<audio_tools::AudioToolsState>().inner());
+            streamer_audio::shutdown(app_handle.state::<streamer_audio::StreamerCaptureState>().inner());
         }
     });
 }

@@ -698,6 +698,7 @@ version = "0.1.0"
 dependencies = [
  "atomicwrites",
  "base64 0.22.1",
+ "cc",
  "libc",
  "regex",
  "reqwest",

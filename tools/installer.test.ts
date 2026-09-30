@@ -111,7 +111,7 @@ describe("installer multipiattaforma", () => {
   it("usa firma ad-hoc locale senza impedire la futura firma Apple", () => {
     const config = JSON.parse(readFileSync(resolve(root, "apps/desktop/src-tauri/tauri.conf.json"), "utf8"));
     const script = readFileSync(platformScript("macos", "build.sh"), "utf8");
-    expect(config.bundle.macOS).toBeUndefined();
+    expect(config.bundle.macOS).toEqual({ minimumSystemVersion: "12.3", infoPlist: "Info.plist" });
     expect(script).toContain('"signingIdentity":"-"');
     expect(script).toContain("APPLE_CERTIFICATE");
   });

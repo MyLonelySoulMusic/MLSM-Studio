@@ -7,6 +7,7 @@ import { useUpscalerBatchStore } from "../store/upscaler-batch-store";
 const clearRemoteUpscalerVideoCache = vi.hoisted(() => vi.fn().mockResolvedValue({ removedJobs: 0, removedBytes: 0 }));
 vi.mock("../services/upscaler-python-client", () => ({
   clearRemoteUpscalerVideoCache,
+  pythonUpscalerBaseUrl: "/__mlsm/upscaler-api",
   UPSCALER_REMOTE_CACHE_CLEARED_EVENT: "upscaler:remote-cache-cleared"
 }));
 

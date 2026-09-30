@@ -64,7 +64,7 @@ MLSM Studio è progettato attorno a quattro principi:
 
 ## Aree di lavoro
 
-La Home espone nove aree. Il pulsante **Home** riporta alla selezione senza dover riavviare l’app; **Memory**, **Impostazioni**, lingua e tema sono disponibili dalla barra principale.
+La Home espone undici aree. Il pulsante **Home** riporta alla selezione senza dover riavviare l’app; **Memory**, **Impostazioni**, lingua e tema sono disponibili dalla barra principale.
 
 ### 1. Sound Animation
 
@@ -170,6 +170,20 @@ Ambiente visuale in stile BI per costruire dashboard partendo da **CSV, file di 
 - animazioni **Time Series** e **Corsa delle barre**, per periodo o cumulative;
 - salvataggio nell’archivio locale condiviso, import/export JSON e URL di sola visualizzazione;
 - export HTML autonomo con codice `iframe` pronto da copiare. Le mappe esportate usano Leaflet e tile OpenStreetMap e richiedono Internet.
+
+### 10. Post-it
+
+Archivio privato di note, link e flussi: i link restano nei dati locali dell’app, non nel repository. I post-it possono essere collegati in sequenze e ricercati semanticamente.
+
+### 11. Streamer Audio Viewer
+
+Workspace di ascolto e analisi audio stereo. Importa più file locali (anche trascinandoli), aggiungi link Spotify o YouTube, riordina la coda e salvala tra i preferiti. L’avanzamento automatico è opzionale: di default la riproduzione si ferma alla fine di ogni brano. Nessun brano parte da solo all’apertura dell’area.
+
+Il lettore locale invia il PCM decodificato direttamente al motore condiviso di analisi; non richiede permessi di cattura. Per analizzare l’audio proveniente da Spotify, YouTube o altre app, seleziona esplicitamente una sorgente di cattura: **ScreenCaptureKit** su macOS, **WASAPI loopback** su Windows dove disponibile. I player ufficiali forniscono riproduzione e metadati, non il PCM; MLSM non scarica né aggira stream protetti. Il microfono non viene attivato automaticamente.
+
+Gli undici moduli includono spettro stereo, peak e true peak, LUFS, immagine stereo, correlazione di fase, spettrogramma, oscilloscopio, dinamica, distribuzione tonale, informazioni del brano e giradischi. Posizione, dimensione e visibilità dei moduli si salvano localmente. Le misure provengono dal segnale audio reale: se non è disponibile, l’interfaccia indica l’attesa del segnale.
+
+La cattura resta attiva solo nell’area Streamer e si interrompe quando si esce o si preme **Ferma cattura**. I dati PCM acquisiti sono analizzati sul dispositivo; non vengono registrati o inviati a servizi esterni. Nel browser la cattura di sistema è una modalità limitata, disponibile soltanto se il browser espone l’audio condiviso.
 
 ## Installazione
 

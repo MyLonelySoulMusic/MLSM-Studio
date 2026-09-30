@@ -23,13 +23,20 @@ vi.mock("../services/lonely-bot-workflows", async (original) => {
   return { ...actual, runLonelyBotWorkflow: workflows.run };
 });
 
-import { ApplicationAssistant } from "./ApplicationAssistant";
+import { ApplicationAssistant, OPEN_LONELY_BOT_EVENT } from "./ApplicationAssistant";
 
 const context = { modeId: "walkingCube", modeLabel: "Cube Animation", aspectRatio: "9:16", hasAudio: true, analysisReady: true };
 
 describe("ApplicationAssistant", () => {
   beforeEach(() => { Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:test-result") }); Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() }); });
   afterEach(() => { cleanup(); localStorage.clear(); runtime.warm.mockReset(); workflows.run.mockReset(); vi.restoreAllMocks(); });
+
+  it("può nascondere il launcher e aprire comunque Lonely Bot dalla barra superiore", () => {
+    render(<ApplicationAssistant context={context} hideLauncher />);
+    expect(screen.queryByRole("button", { name: "Apri Lonely Bot" })).not.toBeInTheDocument();
+    fireEvent(window, new Event(OPEN_LONELY_BOT_EVENT));
+    expect(screen.getByRole("region", { name: "Lonely Bot" })).toBeInTheDocument();
+  });
 
   it("sblocca subito la chat e persiste il riepilogo della conversazione", async () => {
     runtime.warm.mockResolvedValue(false);

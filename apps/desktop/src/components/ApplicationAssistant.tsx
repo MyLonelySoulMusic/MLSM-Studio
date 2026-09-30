@@ -46,6 +46,7 @@ interface WorkflowState {
 }
 
 const legacyAssistantMemoryKey = "dynamic-sound-animation-studio.assistant-memory.v1";
+export const OPEN_LONELY_BOT_EVENT = "mlsm:open-lonely-bot";
 const welcomeMessage: ChatMessage = {
   id: "assistant-welcome",
   role: "assistant",
@@ -84,7 +85,7 @@ function loadAssistantMemory(): ApplicationAssistantMemory {
 
 function workflowLabel(kind: LonelyBotWorkflowKind): string { return kind === "upscaler" ? "Upscaler" : "Frame Booster"; }
 
-export function ApplicationAssistant({ context, onNavigate }: { context: ApplicationAssistantContext; onNavigate?: (modeId: string) => void }) {
+export function ApplicationAssistant({ context, onNavigate, hideLauncher = false }: { context: ApplicationAssistantContext; onNavigate?: (modeId: string) => void; hideLauncher?: boolean }) {
   const { language } = useUiPreferences();
   const [open, setOpen] = useState(false);
   const [question, setQuestion] = useState("");
@@ -105,6 +106,7 @@ export function ApplicationAssistant({ context, onNavigate }: { context: Applica
   };
 
   useEffect(() => { if (open && scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight; }, [messages, open, running, workflow]);
+  useEffect(() => { const show = () => setOpen(true); window.addEventListener(OPEN_LONELY_BOT_EVENT, show); return () => window.removeEventListener(OPEN_LONELY_BOT_EVENT, show); }, []);
   useEffect(() => { try { localStorage.setItem(APPLICATION_ASSISTANT_MEMORY_KEY, JSON.stringify(memory)); } catch { /* session-only memory */ } }, [memory]);
   useEffect(() => () => { workflowAbort.current?.abort(); releaseArtifacts(); }, []);
 
@@ -191,6 +193,6 @@ export function ApplicationAssistant({ context, onNavigate }: { context: Applica
       {attachments.length ? <div className="assistant-attachments">{attachments.map((file, index) => <span key={`${file.name}-${file.lastModified}-${index}`}>{file.name}<button type="button" aria-label={`Rimuovi ${file.name}`} onClick={() => setAttachments((items) => items.filter((_, itemIndex) => itemIndex !== index))}>×</button></span>)}</div> : null}
       <form onSubmit={(event) => void ask(event)}><input ref={fileInput} type="file" multiple hidden onChange={(event) => { const files = [...(event.target.files ?? [])]; setAttachments((current) => [...current, ...files]); event.target.value = ""; }} /><button className="assistant-attach" type="button" aria-label="Allega file" onClick={() => fileInput.current?.click()}>＋</button><textarea aria-label="Domanda per Lonely Bot" value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Chiedi aiuto o allega i file e avvia un lavoro…" rows={2} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} /><button type="submit" disabled={(!question.trim() && !attachments.length) || running} aria-label="Invia domanda">↑</button></form>
       <footer><span>Locale · memoria: {memory.turnCount} richieste</span><button type="button" aria-label="Azzera memoria Lonely Bot" onClick={() => { workflowAbort.current?.abort(); releaseArtifacts(); setMemory(emptyApplicationAssistantMemory); setMessages([welcomeMessage]); setAttachments([]); setWorkflow(null); localStorage.removeItem(APPLICATION_ASSISTANT_MEMORY_KEY); localStorage.removeItem(legacyAssistantMemoryKey); }}>Azzera memoria</button></footer>
-    </section> : <button className="assistant-launcher" aria-label="Apri Lonely Bot" onClick={() => setOpen(true)}><span>LB</span><strong>Lonely Bot</strong></button>}
+    </section> : hideLauncher ? null : <button className="assistant-launcher" aria-label="Apri Lonely Bot" onClick={() => setOpen(true)}><span>LB</span><strong>Lonely Bot</strong></button>}
   </div>;
 }
