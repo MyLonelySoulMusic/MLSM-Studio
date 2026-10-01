@@ -48,14 +48,14 @@ describe("ApplicationAssistant", () => {
 
     await waitFor(() => expect(within(assistant).getByText(/Questa è la Home di MLSM Studio/)).toBeInTheDocument());
     expect(assistant.querySelector(".assistant.thinking")).toBeNull();
-    expect(within(assistant).getByText("Locale · memoria: 1 richieste")).toBeInTheDocument();
+    expect(within(assistant).getByText("Locale · memoria: 1 richiesta")).toBeInTheDocument();
     expect(localStorage.getItem("dynamic-sound-animation-studio.assistant-memory.v2")).toContain("Come cambio lo sfondo del cubo?");
     expect(runtime.warm).not.toHaveBeenCalled();
 
     unmount();
     render(<ApplicationAssistant context={context} />);
     fireEvent.click(screen.getByRole("button", { name: "Apri Lonely Bot" }));
-    expect(screen.getByText("Locale · memoria: 1 richieste")).toBeInTheDocument();
+    expect(screen.getByText("Locale · memoria: 1 richiesta")).toBeInTheDocument();
   });
 
   it("risponde ai saluti senza mostrare un fallback tecnico", async () => {
@@ -68,7 +68,7 @@ describe("ApplicationAssistant", () => {
 
     await waitFor(() => expect(within(assistant).getByText(/Tutto bene, grazie/)).toBeInTheDocument());
     expect(within(assistant).getAllByText(/NVIDIA · Kimi K3/).length).toBeGreaterThan(0);
-    expect(within(assistant).getByText("Locale · memoria: 1 richieste")).toBeInTheDocument();
+    expect(within(assistant).getByText("Locale · memoria: 1 richiesta")).toBeInTheDocument();
     expect(within(assistant).queryByText(/biglia/)).not.toBeInTheDocument();
     expect(within(assistant).queryByText(/fallback/i)).not.toBeInTheDocument();
   });
@@ -120,5 +120,16 @@ describe("ApplicationAssistant", () => {
     fireEvent.click(await within(assistant).findByRole("button", { name: "Avvia Frame Booster" }));
     await waitFor(() => expect(within(assistant).getByRole("link", { name: "Scarica clip-boosted.mp4" })).toBeInTheDocument());
     expect(workflows.run).toHaveBeenCalledOnce();
+  });
+
+  it("usa copy completo inglese senza traduzioni ibride", () => {
+    localStorage.setItem("dynamic-sound-animation-studio.ui.v1", JSON.stringify({ language: "en", theme: "day" }));
+    render(<ApplicationAssistant context={context} />);
+    fireEvent.click(screen.getByRole("button", { name: "Open Lonely Bot" }));
+    const assistant = screen.getByRole("region", { name: "Lonely Bot" });
+    expect(within(assistant).getByText(/Hi, I’m Lonely Bot/)).toBeInTheDocument();
+    expect(within(assistant).getByLabelText("Question for Lonely Bot")).toHaveAttribute("placeholder", "Ask for help, or attach files and start a job…");
+    expect(within(assistant).getByText("Local · memory: 0 requests")).toBeInTheDocument();
+    expect(within(assistant).getByRole("button", { name: "Clear Lonely Bot memory" })).toHaveTextContent("Clear memory");
   });
 });

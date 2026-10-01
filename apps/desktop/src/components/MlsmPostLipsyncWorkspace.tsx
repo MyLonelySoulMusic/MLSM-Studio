@@ -1,3 +1,4 @@
+import { DiscordLink } from "./DiscordLink";
 import { SettingsButton } from "./StudioSettings";
 import { convertFileSrc, isTauri } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -564,7 +565,7 @@ export function MlsmPostLipsyncWorkspace({ onHome }: { onHome?: () => void }) {
       <button type="button" className="home-button" onClick={onHome} aria-label={t.home}>⌂ <span>{t.home}</span></button>
       <div className="lipsync-workspace__identity"><img src="/mlsm-studio-favicon-192.png" alt="" /><span><strong>MLSM POST LIPSYNC</strong><small>{t.subtitle}</small></span></div>
       <div className="lipsync-workspace__status" data-running={running} data-ready={Boolean(analysis)}><i />{status}</div>
-      <div className="lipsync-workspace__actions"><button type="button" className="lipsync-export-top" disabled={!exporting && (!analysis || !sourceVideo || !targetMaster || running || !exportSafe)} title={analysis && !exportSafe ? t.unsafeExport : undefined} onClick={() => exporting ? exportAbortRef.current?.abort() : void runExport()}>{exporting ? `${t.cancelExport} · ${Math.round(exportProgress * 100)}%` : `${t.exportVideo} ↓`}</button><SettingsButton /><MemoryButton /><SupportArtistButton /><select aria-label={uiCopy[uiLanguage].language} value={uiLanguage} onChange={(event) => setUiLanguage(event.target.value === "en" ? "en" : "it")}><option value="it">IT</option><option value="en">EN</option></select><button type="button" className="theme-toggle" onClick={() => setTheme(theme === "day" ? "night" : "day")}>{theme === "day" ? "☼" : "◐"}</button></div>
+      <div className="lipsync-workspace__actions"><button type="button" className="lipsync-export-top" disabled={!exporting && (!analysis || !sourceVideo || !targetMaster || running || !exportSafe)} title={analysis && !exportSafe ? t.unsafeExport : undefined} onClick={() => exporting ? exportAbortRef.current?.abort() : void runExport()}>{exporting ? `${t.cancelExport} · ${Math.round(exportProgress * 100)}%` : `${t.exportVideo} ↓`}</button><DiscordLink /><SettingsButton /><MemoryButton /><SupportArtistButton /><select aria-label={uiCopy[uiLanguage].language} value={uiLanguage} onChange={(event) => setUiLanguage(event.target.value === "en" ? "en" : "it")}><option value="it">IT</option><option value="en">EN</option></select><button type="button" className="theme-toggle" onClick={() => setTheme(theme === "day" ? "night" : "day")}>{theme === "day" ? "☼" : "◐"}</button></div>
     </header>
     <main className="lipsync-workspace__main">
       <aside className="lipsync-setup">

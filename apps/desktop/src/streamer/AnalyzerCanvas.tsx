@@ -5,6 +5,8 @@ import type { AnalysisFrame } from "./analysis-engine";
 
 export type AnalyzerKind = "spectrum" | "peaks" | "loudness" | "stereo" | "phase" | "spectrogram" | "waveform" | "dynamics" | "tonal";
 const pink = "#e4408e";
+// Exported for deterministic palette tests; the component remains the only UI export used at runtime.
+// eslint-disable-next-line react-refresh/only-export-components
 export const analyzerPalette = (theme: UiTheme) => theme === "night" ? {
   background: "#15151b", secondary: "#f7f3f6", muted: "#bbb3bd", grid: "#39353d", gridStrong: "#5b535e",
   soft: "#2b282f", softAccent: "#513242", guide: "#928792", stereoCenter: "#29232a", stereoMid: "#1b181d", stereoEdge: "#111013"

@@ -1,393 +1,274 @@
 # MLSM Studio
 
-![Schermata di benvenuto di MLSM Studio](docs/screenshots/01-welcome.png)
+**English** · [Italiano](README.it.md)
 
-**MLSM Studio — My Lonely Soul Music Studio** è una suite desktop creativa, local-first e multipiattaforma per produrre contenuti audio, video e data-driven in un unico ambiente. Riunisce visualizer audio-reattivi, montaggio multitraccia, restauro e upscaling, elaborazione musicale, trascrizione, lipsync, automazione editoriale e dashboard interattive.
+![MLSM Studio welcome screen](docs/screenshots/01-welcome.png)
 
-L’applicazione usa un’interfaccia React/Vite dentro una shell Tauri e avvia servizi Python isolati soltanto quando una funzione ne ha bisogno. I media, i progetti, le cache dei modelli e i database applicativi restano sul computer; una connessione esterna viene usata solo per operazioni esplicite come endpoint Gradio/Colab, provider LLM configurati, pubblicazione WordPress, download di modelli o cartografia OpenStreetMap.
+**MLSM Studio — My Lonely Soul Music Studio** is a local-first, cross-platform creative desktop suite for audio, video, music, publishing and data-driven production. It combines reactive visualizers, multitrack editing, restoration and upscaling, audio processing, transcription, lip-sync, WordPress automation, interactive dashboards, knowledge tools and professional audio metering in one coherent interface.
 
-> MLSM Studio è un progetto in evoluzione. Prima di lavorare su materiale importante conserva sempre una copia dei file sorgente e verifica l’output finale.
+The UI is built with React/Vite inside a Tauri shell. Isolated Python services start only when a feature needs them and stop when the user leaves that workspace. Projects, media references, model caches and application databases remain on the computer; network access is limited to explicit operations such as configured AI providers, WordPress publishing, model downloads, Gradio/Colab endpoints and OpenStreetMap tiles.
 
-## Indice
+> MLSM Studio is evolving software. Keep source-media backups and verify final exports before using them in production.
 
-- [Panoramica](#panoramica)
-- [Aree di lavoro](#aree-di-lavoro)
-- [Installazione](#installazione)
-- [Primo avvio](#primo-avvio)
-- [Flusso di lavoro](#flusso-di-lavoro)
-- [Dati, privacy e persistenza](#dati-privacy-e-persistenza)
-- [Architettura](#architettura)
-- [Sviluppo e test](#sviluppo-e-test)
-- [Packaging desktop](#packaging-desktop)
-- [Risoluzione dei problemi](#risoluzione-dei-problemi)
-- [Documentazione tecnica](#documentazione-tecnica)
+## Contents
 
-## Panoramica
+- [Overview](#overview)
+- [Workspaces](#workspaces)
+- [Installation](#installation)
+- [First run](#first-run)
+- [Privacy and persistence](#privacy-and-persistence)
+- [Architecture](#architecture)
+- [Development and tests](#development-and-tests)
+- [Troubleshooting](#troubleshooting)
+- [Technical documentation](#technical-documentation)
+- [My Lonely Soul Music](#my-lonely-soul-music)
 
-MLSM Studio è progettato attorno a quattro principi:
+## Overview
 
-- **un solo ecosistema:** le diverse aree condividono tema, lingua, gestione dei progetti, Memory e componenti di esportazione;
-- **elaborazione locale quando possibile:** FFmpeg, Python, WebAudio, WebCodecs, Metal/MPS, CUDA e CPU vengono selezionati in base al dispositivo e alla modalità;
-- **output verificabile:** gli export video vengono ricostruiti offline, frame per frame, invece di registrare la preview in tempo reale;
-- **runtime isolati:** le dipendenze Python incompatibili tra loro vivono in ambienti separati e non vengono aggiunte al repository.
+MLSM Studio follows four core principles:
 
-![Home con la selezione delle aree di MLSM Studio](docs/screenshots/02-home-areas.png)
+- **one ecosystem:** all workspaces share theme, language, settings, projects, Memory, diagnostics and export conventions;
+- **local processing first:** FFmpeg, Python, WebAudio, WebCodecs, Metal/MPS, CUDA and CPU are selected according to the machine and feature;
+- **verifiable output:** offline render and validation are preferred over recording a live preview;
+- **isolated runtimes:** incompatible Python dependencies live in separate virtual environments and are never committed to the repository.
 
-### Funzioni principali
+![MLSM Studio workspace selection after the entrance animation has completed](docs/screenshots/02-home-areas.png)
 
-| Ambito | Funzioni |
+| Domain | Capabilities |
 | --- | --- |
-| Creazione visuale | Visualizer audio-reattivi, scene 3D, composizioni verticali/orizzontali, sottotitoli cinetici e animazioni narrative. |
-| Foto e video | Rimozione watermark autorizzata, upscaling di immagini e video, batch fotografico e incremento del frame rate. |
-| Montaggio | Timeline multitraccia, compositing, effetti, transizioni, automazioni, regolazione colore e mix audio. |
-| Musica e voce | Quantizzazione, allineamento stem, restauro, mastering, trascrizione Whisper, revisione LLM opzionale e separazione vocale. |
-| Dati | Import CSV/TXT/Excel, campi calcolati, filtri, dashboard multi-tab, mappe, pivot e animazioni temporali. |
-| Pubblicazione | Coda editoriale WordPress, pianificazione, libreria Spotify/YouTube e statistiche di utilizzo. |
-| Memoria locale | Catalogazione semantica e ricerca in linguaggio naturale di file e cartelle senza duplicare gli originali. |
+| Visual creation | Audio-reactive visualizers, 3D scenes, social layouts, kinetic subtitles and narrative animation. |
+| Photo and video | Authorized watermark replacement, image/video upscaling, photo batches and frame interpolation. |
+| Editing | Multitrack timeline, compositing, transitions, automation, colour correction and audio mixing. |
+| Music and voice | Quantization, stem alignment, restoration, mastering, Whisper transcription and vocal separation. |
+| Data | CSV/TXT/Excel, calculated fields, filters, dashboards, maps, pivot tables and animated charts. |
+| Publishing | Multi-site WordPress queues, scheduling, taxonomy mapping, media and activity statistics. |
+| Local knowledge | Semantic Memory, Post-it notes and flows, and intelligent in-app Documentation search. |
 
-### Galleria
+### Gallery
 
 | Sound Animation | Photo & Video Studio |
 | --- | --- |
-| ![Editor Sound Animation](docs/screenshots/03-sound-animation.png) | ![Editor Photo e Video](docs/screenshots/04-photo-video-studio.png) |
+| ![Sound Animation editor](docs/screenshots/03-sound-animation.png) | ![Photo and Video Studio](docs/screenshots/04-photo-video-studio.png) |
 
 | Video Editor | Music · AI Quantizer |
 | --- | --- |
-| ![Video Editor multitraccia](docs/screenshots/05-video-editor.png) | ![Preparazione del runtime AI Quantizer](docs/screenshots/06-ai-quantizer.png) |
+| ![Multitrack Video Editor](docs/screenshots/05-video-editor.png) | ![AI Quantizer runtime preparation](docs/screenshots/06-ai-quantizer.png) |
 
-<details>
-<summary><strong>Memory · archivio semantico locale</strong></summary>
+## Workspaces
 
-![Interfaccia Memory](docs/screenshots/07-memory.png)
-
-</details>
-
-## Aree di lavoro
-
-La Home espone undici aree. Il pulsante **Home** riporta alla selezione senza dover riavviare l’app; **Memory**, **Impostazioni**, lingua e tema sono disponibili dalla barra principale.
+The Home screen exposes twelve dedicated workspaces. **Home** returns to this screen without restarting the application. **Settings**, **Memory**, language, theme, Support and Lonely Bot remain available from the global shell.
 
 ### 1. Sound Animation
 
-L’area creativa per visualizer, storie animate e tipografia sincronizzata alla musica.
+Creates visualizers, stories and typography synchronized to music.
 
-- visualizer come **Instrumental Falling**, **Cover Sphere**, **Stereo Unfold**, **Cube Animation**, **Overlay Spectral**, **Cassette Desk** e **Song Player**;
-- composizione **From 9:16 to 16:9** per trasformare video verticali in layout orizzontali;
-- modalità narrative e personaggi come **Teddy Walk** e **Teddy Sing**;
-- **Comments Invasion**, **Circular Spectrum Auto Detector**, **Pro Subtitles** e **Pixels Subtitles**;
-- analisi di beat, energia, spettro stereo, fonemi e palette;
-- preview sincronizzata, timeline e export offline deterministico.
+- **Instrumental Falling**, **Cover Sphere**, **Stereo Unfold**, **Cube Animation**, **Circular Spectrum Auto Detector** and **Overlay Spectral**;
+- **From 9:16 to 16:9**, **Cassette Desk** and **Song Player**;
+- **Teddy Walk**, **Teddy Sing** and **Comments Invasion**;
+- **Pro Subtitles** and **Pixels Subtitles**, with cue import/generation and per-word styling;
+- beat, energy, stereo spectrum, phoneme and palette analysis;
+- synchronized preview, timeline and deterministic offline export.
 
-Consulta la guida dedicata: [Sound Animation](docs/sound-animation.md).
+See [Sound Animation](docs/sound-animation.md).
 
 ### 2. Photo & Video Studio
 
-Strumenti di restauro e miglioramento per fotografie e video.
+- **Static Watermark Remover** for content you own or are authorized to modify, with a mask, clean image or temporally aligned clean reference video;
+- **Upscaler** with Canvas Enhanced, Real-ESRGAN and RealESRNet, local CUDA/Metal/CPU selection and optional Gradio/Colab endpoints;
+- optional **MLX-DLSS 5** on compatible Apple Silicon, using an isolated Metal backend and user-supplied authorized NVIDIA model;
+- image batches, comparison, blending, colour controls and custom resolution;
+- **Frame Booster** with isolated runtime, explicit startup/model progress, logs, audio preservation and output validation.
 
-- **Static Watermark Remover** per contenuti che possiedi o sei autorizzato a modificare, con riferimento fotografico o video pulito sincronizzato e riallineato fotogramma per fotogramma;
-- **Upscaler** per foto e video con Canvas Enhanced, Real-ESRGAN e RealESRNet;
-- backend locale con selezione automatica CUDA, Metal/MPS o CPU e percorso remoto opzionale Gradio/Colab;
-- **MLX-DLSS 5** opzionale su Apple Silicon, con backend Metal isolato e modello NVIDIA importato dall’utente;
-- batch di fotografie, confronto prima/dopo, regolazioni colore, fusione con l’originale e risoluzione personalizzata;
-- **Frame Booster** con metodi FFmpeg, conservazione dell’audio e verifica di durata, geometria e frame rate.
-
-I pesi proprietari NVIDIA non sono inclusi. La configurazione MLX-DLSS richiede un modello autorizzato, ad esempio `nvngx_dlssnr.dll` per estrarre Neural Rendering; il file viene conservato nel runtime locale e resta fuori da Git.
-
-Consulta la guida dedicata: [Photo & Video Studio](docs/photo-video-studio.md).
+Proprietary NVIDIA weights are not included. A user-authorized source such as `nvngx_dlssnr.dll` or a prepared `.dlssmodel` is stored outside Git. See [Photo & Video Studio](docs/photo-video-studio.md).
 
 ### 3. Video Editor
 
-Editor multitraccia con livelli equivalenti e compositing non distruttivo.
+- media pool with drag-and-drop for video, images and audio;
+- move, trim, split, reverse, snap, reorder and lock;
+- effects, transitions, transforms, opacity, blend modes and colour grading;
+- audio mixing with volume, pan, EQ, compressor, generic fades and parameter envelopes;
+- offline export with dedicated audio mix and optional frame interpolation.
 
-- media bin con drag-and-drop per video, immagini e audio;
-- spostamento, trim, split, reverse, snap, riordino e blocco delle tracce;
-- effetti, transizioni e correzione colore con Inspector contestuale;
-- trasformazioni, opacità, blend mode, velocità e curve di automazione;
-- mix audio con volume, pan, EQ, compressore, fade e inviluppi;
-- export offline con mix audio separato e interpolazione frame opzionale.
-
-Consulta la guida dedicata: [Video Editor](docs/video-editor.md).
+See [Video Editor](docs/video-editor.md).
 
 ### 4. Music · AI Quantizer
 
-Pipeline guidata per preparare master e stem mantenendo il pitch.
+Guided pipeline: **Import → Quantize → Align → Restore → Master → Export**. Every stage must be performed or explicitly skipped. Playback never starts automatically after processing.
 
-Il percorso operativo è **Importa → Quantizza → Allinea → Restauro → Master → Esporta**. Ogni fase deve essere applicata oppure saltata esplicitamente prima di procedere; l’ascolto non parte automaticamente al termine di un’elaborazione.
+- tempo detection and a shared warp map;
+- DAW-style alignment without re-running completed quantization;
+- waveform and marker comparison before and after correction;
+- optional restoration and mastering;
+- separate AI Forensics and visible ZIP preparation progress.
 
-- rilevamento del tempo e mappa di warp condivisa;
-- allineamento DAW senza ripetere la quantizzazione;
-- confronto waveform e marker prima/dopo;
-- restauro e mastering facoltativi;
-- AI Forensics separata dal flusso principale;
-- esportazione ZIP con stato e avanzamento visibili.
+If a reliable strictly increasing beat map cannot be built, the track is reported as non-quantizable instead of exporting shifted timing. See [Music · AI Quantizer](docs/music.md).
 
-Consulta la guida dedicata: [Music · AI Quantizer](docs/music.md).
+### 5. MLSM Post Lipsync
 
-### 5. MLSM POST LIPSYNC
-
-Riallinea un video già cantato alla voce del master definitivo. La pipeline separa la voce, misura la trascrizione temporale, costruisce anchor parola-per-parola e applica una time-map monotona, mantenendo il processo verificabile prima dell’export.
+Realigns an already-performed video to a final vocal or master. It analyzes the voice, builds word anchors, creates a monotonic time map and keeps the result inspectable before export.
 
 ### 6. Audio
 
-Workspace per trascrizione e produzione vocale.
+- local Whisper transcription for audio/video with automatic or explicit language;
+- compatible precision selection on Windows instead of forcing unsupported `float16`;
+- SRT, VTT, TXT and complete Whisper JSON export;
+- optional LLM review, **off by default** and enabled only with reference text;
+- selectable local model or configured API provider;
+- vocal/accompaniment separation with Demucs `htdemucs`.
 
-- trascrizione locale di audio e video con modelli Whisper selezionabili;
-- scelta della lingua oppure riconoscimento automatico;
-- esportazione SRT, VTT, TXT e JSON Whisper completo;
-- revisione LLM **disattivata di default**, attivabile solo dopo aver inserito il testo originale;
-- revisore locale oppure provider API abilitato nelle Impostazioni;
-- separazione della voce dal mix con Demucs `htdemucs` ed export WAV.
+### 7. Stickman Animations
 
-### 7. Stickman
+A collection for stylized scenes. **Bivio** builds a vertical choice-based animation with configurable text, colours, 720p/1080p output and 24/30 fps.
 
-Area dedicata alle animazioni grafiche stilizzate. La modalità **Bivio** usa i colori base MLSM (`#FF4F9A`, `#211B1F` e carta/strada bianca), consente di personalizzare scena e testo ed esporta un video verticale a 720p o 1080p, 24 o 30 fps.
+### 8. AutoPost
 
-### 8. MLSM AutoPost
-
-Automazione editoriale locale per WordPress.
-
-- import o incolla di documenti JSON fino a 500 articoli;
-- assegnazione per articolo a uno o più blog e categorie;
-- coda persistente, pubblicazione immediata o pianificata, pausa, retry e cancellazione completa;
-- gestione multi-sito con Application Password cifrata localmente;
-- libreria musicale Spotify/YouTube con priorità, regole, backup e ripristino;
-- statistiche sugli embed pubblicati e registro attività.
-
-La pubblicazione usa la rete solo verso i siti WordPress configurati e i provider necessari a mostrare i media.
+- paste or import JSON documents with up to 500 articles;
+- preview, edit text/image URL, and remove one or multiple articles;
+- assign each article to one or more blogs and categories;
+- refresh categories from `/wp-json/wp/v2/categories` on open and blog change;
+- map cross-blog categories using a configured LLM or local multilingual MiniLM;
+- adjustable cosine threshold, First/All selection and visible ranking/progress;
+- persistent queue, scheduling, pause, retry and removal;
+- encrypted local Application Password storage, media library and statistics.
 
 ### 9. Reports
 
-Ambiente visuale in stile BI per costruire dashboard partendo da **CSV, file di testo ed Excel**.
+- replace or append compatible CSV/TXT/Excel sources while preserving each contribution;
+- preview and recognizable calculated fields using **MLSM Formula**, including row formulas and aggregate expressions such as `SUM(a) / SUM(b)`;
+- formula assistance from a selected local model or configured API provider;
+- KPI, horizontal/vertical bars, line, area, doughnut, scatter, real maps, tables, pivots, text and **Replicate XLS**;
+- configurable aggregations, formats, X/Y labels, ticks, ordering, grouping, first/last N and filters;
+- **Time Series** and **Bar Race** animations with period/cumulative values, trends, maxima and progressive interpolation;
+- local archive, JSON import/export, read-only URLs and self-contained HTML embed code.
 
-- dataset sostituibili o estendibili tramite append, con gestione dei singoli file sorgente;
-- anteprima dati e campi calcolati tramite **MLSM Formula**, anche con formule aggregate come `SUM(a) / SUM(b)`;
-- assistenza LLM opzionale alla scrittura delle formule;
-- KPI, barre orizzontali e verticali, linee, area, ciambella, dispersione, mappe, tabella, pivot e testo;
-- somma, media, conteggio, distinti, mediana, minimo, massimo, intervallo, varianza e deviazione standard;
-- formati numerici, percentuali e valute, assi e tick configurabili;
-- raggruppamento temporale, ordinamento, prime o ultime N categorie;
-- layout a righe, larghezze manuali, numero personalizzato di elementi e dashboard multi-tab;
-- filtri globali o associati a widget specifici, con valore iniziale e opzione `(All)` configurabili;
-- animazioni **Time Series** e **Corsa delle barre**, per periodo o cumulative;
-- salvataggio nell’archivio locale condiviso, import/export JSON e URL di sola visualizzazione;
-- export HTML autonomo con codice `iframe` pronto da copiare. Le mappe esportate usano Leaflet e tile OpenStreetMap e richiedono Internet.
+Replicate XLS analyzes a workbook template, preserves formatting, empty cells and layout, lets the user annotate ranges, and grows the report with new data.
 
 ### 10. Post-it
 
-Archivio privato di note, link e flussi: i link restano nei dati locali dell’app, non nel repository. I post-it possono essere collegati in sequenze e ricercati semanticamente.
+Private local notes, links and flows. Favicons are cached locally; notes can be edited, deleted, connected into described flows and retrieved through local semantic similarity. Links and data are not committed to the repository.
 
 ### 11. Streamer Audio Viewer
 
-Workspace di ascolto e analisi audio stereo. Importa più file locali (anche trascinandoli), aggiungi link Spotify o YouTube, riordina la coda e salvala tra i preferiti. L’avanzamento automatico è opzionale: di default la riproduzione si ferma alla fine di ogni brano. Nessun brano parte da solo all’apertura dell’area.
+- deletable queue, favourites and configurable automatic/manual advance;
+- turntable/player, uncropped artwork and YouTube artwork cropping;
+- meter, stereo spectrum, LUFS, stereo image, phase correlation, spectrogram, oscilloscope, dynamics and tonal distribution;
+- movable, removable and restorable widgets with a documented default layout;
+- theme-aware full-screen workspace while the player remains visible and audible;
+- direct PCM for local files and explicit ScreenCaptureKit/WASAPI capture for web playback.
 
-Il lettore locale invia il PCM decodificato direttamente al motore condiviso di analisi; non richiede permessi di cattura. Per analizzare l’audio proveniente da Spotify, YouTube o altre app, seleziona esplicitamente una sorgente di cattura: **ScreenCaptureKit** su macOS, **WASAPI loopback** su Windows dove disponibile. I player ufficiali forniscono riproduzione e metadati, non il PCM; MLSM non scarica né aggira stream protetti. Il microfono non viene attivato automaticamente.
+MLSM does not download or bypass protected streams. Captured PCM is analyzed on-device and is not recorded or uploaded.
 
-Gli undici moduli includono spettro stereo, peak e true peak, LUFS, immagine stereo, correlazione di fase, spettrogramma, oscilloscopio, dinamica, distribuzione tonale, informazioni del brano e giradischi. Posizione, dimensione e visibilità dei moduli si salvano localmente. Le misure provengono dal segnale audio reale: se non è disponibile, l’interfaccia indica l’attesa del segnale.
+### 12. Documentation
 
-La cattura resta attiva solo nell’area Streamer e si interrompe quando si esce o si preme **Ferma cattura**. I dati PCM acquisiti sono analizzati sul dispositivo; non vengono registrati o inviati a servizi esterni. Nel browser la cattura di sistema è una modalità limitata, disponibile soltanto se il browser espone l’audio condiviso.
+The bilingual in-app guide documents every workspace and operational flow. Search accepts a control name, a problem or a natural-language goal.
 
-## Installazione
+- lexical results appear immediately;
+- verified multilingual **MiniLM** embeddings rerank results by meaning;
+- WebGPU is used only when available, with verified WASM fallback;
+- the model loads lazily after a search, never at application startup;
+- queries and index stay on-device and are not sent to an external provider;
+- local text search remains available if the model cannot load.
 
-### Requisiti di base
+![Documentation workspace with local intelligent search](docs/screenshots/08-documentation.png)
 
-Gli installer preparano automaticamente quasi tutto il necessario. Prima di iniziare servono:
+## Installation
 
-| Piattaforma | Requisito iniziale |
+| Platform | Initial requirement |
 | --- | --- |
-| macOS | Accesso a Internet e Xcode Command Line Tools. Lo script installa Homebrew se manca. |
-| Windows | Windows Package Manager (`winget`), incluso in **App Installer**, e accesso a Internet. |
+| macOS | Internet access and Xcode Command Line Tools. Homebrew is installed if needed. |
+| Windows | Windows Package Manager (`winget`, supplied by App Installer) and Internet access. |
 
-Il setup installa o verifica:
-
-- Node.js (`>= 22.12`) e le dipendenze npm esatte del lockfile;
-- **Python 3.11** e quattro virtual environment isolati;
-- FFmpeg e FFprobe;
-- Rubber Band;
-- Rust/Cargo e dipendenze Tauri;
-- CMake e Ninja su macOS;
-- WebView2 e Visual Studio Build Tools su Windows.
-
-I modelli AI pesanti non vengono versionati nel repository: vengono scaricati al primo utilizzo quando la licenza lo consente, quindi riutilizzati dalla cache locale.
+Installers verify or install Node.js 22+, exact npm dependencies, Python 3.11, isolated virtual environments, FFmpeg/FFprobe, Rubber Band, Rust/Cargo, Tauri requirements and build tools. Large AI models are downloaded on first use when licenses permit and reused from local cache.
 
 ### macOS
-
-Dalla root del repository:
 
 ```bash
 bash scripts/macos/install.sh
 scripts/macos/launch.sh
 ```
 
-Se macOS apre l’installazione dei Command Line Tools, completala e rilancia `install.sh`. Le funzioni MLX-DLSS richiedono Xcode completo, il compilatore Metal e una copia autorizzata del modello NVIDIA; non sono necessarie per usare il resto dell’app.
+MLX-DLSS additionally requires full Xcode, the Metal toolchain and an authorized NVIDIA model. It is not required by the rest of MLSM Studio.
 
 ### Windows
-
-Dal Prompt dei comandi:
 
 ```bat
 scripts\windows\install.bat
 scripts\windows\launch.bat
 ```
 
-Dopo un `git pull`, il launcher confronta automaticamente manifest e lockfile con l’ultima preparazione riuscita. Se le dipendenze sono cambiate esegue `npm ci --include=dev`; se sono cambiati i sorgenti o manca la build esegue `npm run build`. Al primo avvio successivo all’introduzione di questo controllo il marker non esiste ancora: per sicurezza vengono eseguiti entrambi i comandi. Lo stato è salvato soltanto in `node_modules/.cache/mlsm-studio/` e non viene versionato. Se uno dei due comandi fallisce, l’app non viene avviata e resta visibile l’errore reale.
+After `git pull`, the launcher fingerprints manifest/lockfiles and sources. Missing state is treated as a first run: it safely performs both `npm ci --include=dev` and `npm run build`. State lives under `node_modules/.cache/mlsm-studio/` and is not versioned.
 
-Da PowerShell usa il prefisso `./`:
-
-```powershell
-./scripts/windows/install.bat
-./scripts/windows/launch.bat
-```
-
-Rubber Band viene installato tramite MSYS2 in `C:\msys64\ucrt64\bin`; lo script aggiorna il PATH utente e l’app conosce anche il percorso nativo. Non è necessario creare manualmente `C:\Tools`.
-
-### Verifica dell’installazione
-
-Al termine, oppure per diagnosticare una macchina già configurata:
+### Verify or repair
 
 ```bash
 npm run install:verify
-```
-
-La verifica controlla Node, dipendenze JavaScript, Python 3.11, virtual environment, import Python, FFmpeg/FFprobe, Rubber Band e toolchain richiesta. L’installer mostra il messaggio di completamento solo dopo che questi controlli hanno avuto esito positivo.
-
-### Ripristino mirato
-
-Il pannello **Impostazioni → Restore** verifica prima ogni componente e ripara soltanto i controlli falliti; quelli già pronti vengono saltati. Dalla root del repository puoi vedere il piano senza modificare nulla:
-
-```bash
 node tools/repair_installation.cjs --dry-run
-```
-
-Per eseguire la riparazione, ometti `--dry-run`:
-
-```bash
 node tools/repair_installation.cjs
 ```
 
-Al termine viene eseguita una nuova verifica. Il comando usa Node direttamente: per riparare i soli ambienti Python non richiede npm e non reinstalla i runtime già pronti. I log mostrano ogni componente saltato, riparato o ancora non disponibile.
+**Settings → Restore** performs targeted checks and repairs only missing or failed components.
 
-## Primo avvio
+## First run
 
-1. Avvia MLSM Studio con lo script della tua piattaforma.
-2. Premi **Entra nello Studio** e scegli un’area dalla Home.
-3. Apri **Impostazioni** per selezionare lingua, tema ed eventuali provider LLM.
-4. Importa un media o un dataset; l’app prepara il runtime richiesto e mostra lo stato dell’operazione.
-5. Per i modelli locali, attendi il download iniziale: gli avvii successivi usano la cache.
+1. Launch MLSM Studio with the platform script.
+2. Select **Enter MLSM Studio**, then choose a workspace.
+3. Open **Settings** to choose language, theme and optional AI providers/limits.
+4. Import media or a dataset and start the required action explicitly.
+5. On first use of a local model, wait for download; later runs use the cache.
 
-L’ambiente di sviluppo è disponibile su `http://localhost:1420` quando viene eseguito `npm run dev`. Build e test non lasciano server attivi.
-
-### Runtime Python
-
-| Runtime | Directory | Responsabilità |
+| Runtime | Directory | Responsibility |
 | --- | --- | --- |
-| Upscaler | `.venv` | Real-ESRGAN/RealESRNet, immagini, video e coordinamento dei job remoti. |
-| AI Quantizer | `.venv-ai-quantizer` | Quantizzazione, allineamento, restauro e mastering. |
-| Song Player | `.venv-song-player` | Analisi audio/video e sincronizzazione dedicata. |
-| Audio | `.venv-audio-tts` | Whisper, elaborazione vocale e servizi audio. |
+| Upscaler | `.venv` | Real-ESRGAN/RealESRNet, images, video and remote jobs. |
+| AI Quantizer | `.venv-ai-quantizer` | Quantization, alignment, restoration and mastering. |
+| Song Player | `.venv-song-player` | Dedicated audio/video analysis and synchronization. |
+| Audio | `.venv-audio-tts` | Whisper, voice processing and audio services. |
 
-Tutti gli ambienti usano Python 3.11 e sono esclusi da Git. I processi locali sono gestiti dall’app e vengono avviati per l’area che li richiede, evitando di occupare risorse durante l’intera sessione.
+Services start on demand and stop when their workspace closes.
 
-## Flusso di lavoro
+## Privacy and persistence
 
-Il percorso cambia in base all’area, ma la struttura generale resta coerente:
+MLSM Studio is **local-first**, not “offline at any cost.” Projects, preferences, task history, Reports datasets, Memory vectors, Post-it data, AutoPost queues, virtual environments, local models and caches remain on the machine.
 
-1. **Scegli l’area e la modalità.** Il pannello sinistro contiene sorgenti, strumenti e impostazioni raggruppate.
-2. **Importa i file.** Gli originali non vengono modificati; il progetto conserva riferimenti e metadati.
-3. **Analizza o prepara.** Beat, spettro, trascrizione, modelli e runtime vengono calcolati solo quando necessari.
-4. **Configura e verifica.** Usa preview, Inspector, timeline o canvas della dashboard per controllare il risultato.
-5. **Esporta.** Scegli formato, rapporto, risoluzione e frame rate quando disponibili.
-6. **Controlla il file finale.** Le pipeline offline verificano frame, durata, geometria e audio prima della consegna.
+External access occurs only for explicit operations: dependency/model downloads, selected Gradio/Colab endpoints, configured LLM providers, WordPress publishing, OpenStreetMap tiles, and supported media previews or embeds.
 
-## Dati, privacy e persistenza
+Never commit credentials, proprietary DLLs/models, exports, caches or application databases. Memory stores metadata, embeddings and paths rather than duplicating original media.
 
-MLSM Studio segue un modello **local-first**, non “offline a ogni costo”.
-
-### Cosa resta locale
-
-- progetti, preferenze e cronologia delle attività;
-- dashboard Reports e relativi dataset;
-- database Memory e percorsi dei file catalogati;
-- coda, configurazione e statistiche AutoPost;
-- virtual environment, modelli locali, cache e file temporanei;
-- credenziali salvate tramite i meccanismi previsti dall’app.
-
-### Quando vengono usati servizi esterni
-
-- download iniziale di dipendenze e modelli;
-- endpoint Gradio/Colab scelti nell’Upscaler;
-- provider LLM configurati esplicitamente;
-- pubblicazione e verifica verso blog WordPress;
-- tile OpenStreetMap nelle mappe Reports;
-- anteprime o embed di servizi media quando previsti.
-
-Le directory runtime e i dati utente sono ignorati da Git. Non aggiungere manualmente modelli, DLL proprietarie, cache, credenziali, export o database applicativi al repository.
-
-Memory non duplica i file originali: conserva metadati, embedding e percorso assoluto. Se un originale viene spostato o eliminato, il relativo riferimento deve essere aggiornato o rimosso.
-
-## Architettura
+## Architecture
 
 ```text
 MLSM Studio
-├── apps/desktop/             React, Vite, Tauri e workspace applicativi
-│   ├── src/                  UI, stato, servizi, editor e modalità
-│   └── src-tauri/            Shell desktop, comandi nativi e bundle
-├── packages/                 Schemi e librerie TypeScript condivise
-├── tools/                    Runtime Python/Node e utility operative
-├── scripts/
-│   ├── macos/                Installazione, avvio e packaging macOS
-│   └── windows/              Installazione, avvio e packaging Windows
-├── docs/                     Manuali, architettura e note tecniche
-├── tests/                    Test di integrazione trasversali
-└── assets/, img/, mixamo/    Risorse grafiche e modelli dell’app
+├── apps/desktop/             React, Vite, Tauri and workspaces
+│   ├── src/                  UI, state, services, editors and modes
+│   └── src-tauri/            Native desktop shell and commands
+├── packages/                 Shared TypeScript schemas and libraries
+├── tools/                    Python/Node runtimes and utilities
+├── scripts/macos|windows/    Installation, launch and packaging
+├── docs/                     Guides, screenshots and architecture
+├── tests/                    Cross-cutting integration tests
+└── assets/, img/, mixamo/    Application resources
 ```
 
-### Processi principali
+React/Vite owns UI and browser-based processing; Tauri provides native dialogs/filesystem access; Python services host native ML pipelines; FFmpeg/Rubber Band handle encoding and temporal transforms; workers keep intensive analysis off the UI thread.
 
-| Processo | Ruolo |
-| --- | --- |
-| React/Vite | Interfaccia, stato, preview, timeline, dashboard e modelli web locali. |
-| Tauri | Dialog nativi, filesystem, percorsi applicativi e distribuzione desktop. |
-| Servizi Python | Inferenza e pipeline che richiedono librerie native o modelli dedicati. |
-| FFmpeg/Rubber Band | Decodifica, encoding, mux, trasformazioni temporali e audio. |
-| Worker | Analisi intensive senza bloccare l’interfaccia. |
-
-Zustand separa stato progetto, audio, analisi, scena, export e playback. I media binari restano fuori dal JSON di progetto; il documento conserva impostazioni, timeline, metadati e riferimenti ricollegabili.
-
-## Sviluppo e test
-
-### Avvio rapido
+## Development and tests
 
 ```bash
 npm ci --include=dev
 npm run dev
 ```
 
-### Comandi principali
-
-| Comando | Scopo |
+| Command | Purpose |
 | --- | --- |
-| `npm run dev` | Avvia l’app in sviluppo e i servizi gestiti richiesti. |
-| `npm run build` | Crea la build web senza lasciare server attivi. |
-| `npm run typecheck` | Esegue il controllo TypeScript del workspace. |
-| `npm run lint` | Esegue ESLint con zero warning ammessi. |
-| `npm test` | Esegue la suite Vitest. |
-| `npm run test:coverage` | Esegue i test con copertura. |
-| `npm run install:verify` | Verifica l’installazione locale. |
-| `npm run setup:runtimes` | Prepara tutti e quattro i runtime Python. |
-| `npm run rife:verify` | Verifica artifact, runtime e mini inferenza RIFE reale. |
+| `npm run dev` | Start development UI and managed services. |
+| `npm run build` | Type-check and build the web application. |
+| `npm run typecheck` | Validate workspace TypeScript. |
+| `npm run lint` | Run ESLint with zero warnings. |
+| `npm test` | Run Vitest. |
+| `npm run test:coverage` | Run the coverage suite. |
+| `npm run install:verify` | Verify the installation. |
+| `npm run setup:runtimes` | Prepare all Python runtimes. |
 
-Per preparare o diagnosticare un solo servizio:
-
-```bash
-npm run upscaler:setup
-npm run upscaler:server
-npm run ai-quantizer:setup
-npm run ai-quantizer:server
-npm run song-player:setup
-npm run song-player:worker
-npm run audio-tts:setup
-```
-
-### Gate consigliati prima di una release
+Recommended release gate:
 
 ```bash
 npm run typecheck
@@ -397,75 +278,42 @@ npm run build
 npm run install:verify
 ```
 
-I warning relativi alla dimensione dei bundle Three.js o AI devono essere valutati, ma non sostituiscono l’esito dei test.
+Regenerate screenshots with `node tools/capture_documentation_screenshots.mjs` after a build. The script waits for Home animations to complete.
 
-### Rigenerare gli screenshot
+## Troubleshooting
 
-Dopo una build aggiornata:
-
-```bash
-npm run build
-node tools/capture_documentation_screenshots.mjs
-```
-
-Lo script usa Chrome headless sul build statico, salva le immagini in `docs/screenshots/` e chiude il processo al termine. Non avvia un server permanente.
-
-## Packaging desktop
-
-### macOS
-
-```bash
-npm run package:mac
-bash scripts/macos/build.sh --check
-```
-
-### Windows
-
-```bat
-npm run package:windows
-scripts\windows\build.bat --check
-```
-
-Gli artefatti vengono creati in:
-
-```text
-apps/desktop/src-tauri/target/release/bundle/
-```
-
-La distribuzione pubblica richiede firma Apple Developer o Authenticode. Un pacchetto non firmato può essere compilato e testato, ma il sistema operativo può mostrare un avviso di sicurezza.
-
-## Risoluzione dei problemi
-
-| Problema | Controllo consigliato |
+| Problem | Recommended check |
 | --- | --- |
-| L’installazione termina prima del messaggio “pronto” | Riesegui lo script della piattaforma e poi `npm run install:verify`; non ignorare il primo comando fallito. |
-| Windows non trova `rubberband` | Usa l’installer MLSM: installa MSYS2/Rubber Band e registra `C:\msys64\ucrt64\bin` senza richiedere `C:\Tools`. |
-| Un ambiente usa la versione Python sbagliata | Riesegui l’installer o `npm run setup:runtimes`; gli ambienti non Python 3.11 vengono rigenerati. |
-| Il backend AI non risponde | Esci dall’area e rientra, quindi controlla lo stato mostrato dalla UI e `npm run install:verify`. Avvia il servizio manuale solo per diagnosi. |
-| CUDA segnala DLL mancanti su Windows | Seleziona il fallback CPU compatibile oppure completa il runtime NVIDIA; l’app non deve forzare `float16` su hardware non supportato. |
-| MLX-DLSS non è configurabile | Verifica Apple Silicon, Xcode/Metal e il modello `nvngx_dlssnr.dll` o `.dlssmodel` autorizzato. Il modello non è incluso nel repository. |
-| Un export video occupa molto spazio | Libera spazio temporaneo; i workflow offline possono conservare frame o checkpoint finché il risultato non è verificato. |
-| Le mappe di un report HTML sono vuote | L’HTML esportato richiede accesso a Leaflet e ai tile OpenStreetMap. |
-| Una dashboard non appare su un altro computer | Le dashboard sono locali: esporta il file `.mlsm-report.json` e importalo sull’altra installazione. |
+| Installation stops before ready | Run the platform installer again, then `npm run install:verify`; inspect the first failing command. |
+| A backend does not respond | Leave and re-enter its workspace, inspect startup logs, then use **Settings → Restore**. |
+| Windows reports CUDA DLLs missing | Use CPU fallback or complete the NVIDIA runtime; MLSM must not force `float16`. |
+| MLX-DLSS cannot be configured | Confirm Apple Silicon, Xcode/Metal and an authorized `nvngx_dlssnr.dll` or `.dlssmodel`. |
+| Video export needs substantial storage | Free temporary space; offline pipelines may keep frames until validation succeeds. |
+| An exported map is empty | Leaflet/OpenStreetMap tiles require Internet access. |
+| A dashboard is missing elsewhere | Export `.mlsm-report.json` and import it on the other installation. |
 
-Per dettagli sui tool di piattaforma consulta [Script di installazione e build](scripts/README.md).
+## Technical documentation
 
-## Documentazione tecnica
-
-- [Indice della documentazione](docs/index.md)
-- [Manuale utente](docs/user-guide.md)
+- [Documentation index](docs/index.md)
+- [User guide](docs/user-guide.md)
 - [Sound Animation](docs/sound-animation.md)
 - [Photo & Video Studio](docs/photo-video-studio.md)
 - [Video Editor](docs/video-editor.md)
 - [Music · AI Quantizer](docs/music.md)
 - [Memory](docs/memory.md)
-- [Export offline](docs/export.md)
-- [Analisi audio](docs/audio-analysis.md)
-- [Modelli AI locali](docs/local-models.md)
-- [Formato progetto](docs/project-format.md)
-- [Installazione e sviluppo](docs/development.md)
-- [Script macOS e Windows](scripts/README.md)
-- [Architettura](docs/architecture.md)
+- [Offline export](docs/export.md)
+- [Audio analysis](docs/audio-analysis.md)
+- [Local AI models](docs/local-models.md)
+- [Project format](docs/project-format.md)
+- [Installation and development](docs/development.md)
+- [macOS and Windows scripts](scripts/README.md)
+- [Architecture](docs/architecture.md)
+
+## My Lonely Soul Music
+
+- [Official website](https://mylonelysoulmusic.altervista.org/) · [Lonely’s Journal](https://mylonelysoulmusic.altervista.org/journal/)
+- [YouTube](https://www.youtube.com/@MyLonelySoulMusic) · [Spotify](https://open.spotify.com/intl-it/artist/46IsvOJtw1vXE6nFqHxz3R) · [Apple Music](https://music.apple.com/it/artist/my-lonely-soul-music/6792151463)
+- [TikTok](https://www.tiktok.com/@mylonelysoulmusic) · [Instagram](https://www.instagram.com/mylonelysoulmusic/) · [Email](mailto:mylonelysoulmusic@gmail.com)
 
 ---
 

@@ -1,3 +1,4 @@
+import { DiscordLink } from "../components/DiscordLink";
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type SyntheticEvent } from "react";
 import type { ExportProgress } from "@rbs/export-engine";
 import { uiCopy, useUiPreferences } from "../services/ui-preferences";
@@ -468,7 +469,7 @@ export function StickmanWorkspace({ onHome }: { onHome: () => void }) {
       </div>
       <div className="skm-topbar-mode"><span>{t.eyebrow}</span><strong>{t.areaTitle}</strong></div>
       <div className="skm-topbar-actions">
-        <SettingsButton />
+        <DiscordLink /><SettingsButton />
         <MemoryButton compact />
         <SupportArtistButton compact />
         <label className="skm-language-picker"><span>{t.language}</span><select aria-label={t.language} value={language} onChange={(event) => setLanguage(event.target.value === "en" ? "en" : "it")} disabled={isExporting}><option value="it">IT</option><option value="en">EN</option></select></label>

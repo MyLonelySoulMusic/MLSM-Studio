@@ -12,7 +12,7 @@ describe("localizeUiText", () => {
     expect(localizeUiText("Remove · Rotation speed · Opacity", "it")).toBe("Rimuovi · Velocità rotazione · Opacità");
     expect(localizeUiText("Independent left/right pulses mirror automatically when the source is mono.", "it"))
       .toBe("Gli impulsi sinistro e destro indipendenti vengono specchiati automaticamente con sorgenti mono.");
-    expect(localizeUiText("Requested float16 compute type, but the target device or backend do not support efficient float16 computation.", "it"))
+    expect(localizeUiText("The selected device or backend does not support efficient float16 computation.", "it"))
       .toBe("Il dispositivo o backend selezionato non supporta calcoli float16 efficienti.");
   });
 

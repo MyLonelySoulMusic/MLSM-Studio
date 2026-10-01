@@ -1,3 +1,4 @@
+import { DiscordLink } from "../components/DiscordLink";
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { parseArticleDocument } from "./media.mjs";
 import { api } from "./api";
@@ -423,7 +424,7 @@ export function AutoPostApp({ onHome }: { onHome: () => void }) {
       <Brand />
       <button className="autopost-home" type="button" onClick={onHome} aria-label={language === "it" ? "Torna alle aree" : "Back to areas"}><span aria-hidden="true">⌂</span>{language === "it" ? "Aree" : "Areas"}</button>
       <div className="autopost-topbar-status"><i className={state?.blogs.some((blog) => blog.hasPassword) ? "autopost-is-online" : ""} /><span>{state?.blogs.length ? `${state.blogs.length} ${state.blogs.length === 1 ? "blog" : "blog"} WordPress` : t.notConfigured}</span></div>
-      <div className="autopost-topbar-controls"><label><span>{t.language}</span><select aria-label={t.language} value={language} onChange={(event) => setLanguage(event.target.value as Language)}><option value="it">IT</option><option value="en">EN</option></select></label><button onClick={() => setTheme(theme === "day" ? "night" : "day")} aria-label={theme === "day" ? t.night : t.day}>{theme === "day" ? "☼" : "◐"}<span>{theme === "day" ? t.day : t.night}</span></button></div>
+      <div className="autopost-topbar-controls"><DiscordLink className="autopost-discord-link" /><label><span>{t.language}</span><select aria-label={t.language} value={language} onChange={(event) => setLanguage(event.target.value as Language)}><option value="it">IT</option><option value="en">EN</option></select></label><button onClick={() => setTheme(theme === "day" ? "night" : "day")} aria-label={theme === "day" ? t.night : t.day}>{theme === "day" ? "☼" : "◐"}<span>{theme === "day" ? t.day : t.night}</span></button></div>
     </header>
     <aside className="autopost-sidebar">
       <nav>{(["import", "queue", "library", "stats", "settings"] as Tab[]).map((item) => <button key={item} className={tab === item ? "autopost-active" : ""} onClick={() => setTab(item)}><svg viewBox="0 0 24 24"><NavIcon tab={item} /></svg><span>{t[item]}</span>{item === "queue" && queued > 0 ? <b>{queued}</b> : null}</button>)}</nav>

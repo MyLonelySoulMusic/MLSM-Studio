@@ -1,3 +1,4 @@
+import { DiscordLink } from "./DiscordLink";
 import { SettingsButton } from "./StudioSettings";
 import { uiCopy, useUiPreferences } from "../services/ui-preferences";
 import { SupportArtistButton } from "./ArtistSupport";
@@ -21,7 +22,7 @@ export function Toolbar({ subtitleVideoMode = false, analysisOnlyMode = false, a
       <label><span>{copy.language}</span><select aria-label={copy.language} value={language} onChange={(event) => setLanguage(event.target.value === "en" ? "en" : "it")}><option value="it">IT</option><option value="en">EN</option></select></label>
       <button className="theme-toggle" aria-label={`${copy.appearance}: ${theme === "day" ? copy.day : copy.night}`} aria-pressed={theme === "night"} onClick={() => setTheme(theme === "day" ? "night" : "day")}><span aria-hidden="true">{theme === "day" ? "☼" : "◐"}</span>{theme === "day" ? copy.day : copy.night}</button>
     </div>
-    <SettingsButton /><MemoryButton compact />
+    <DiscordLink /><SettingsButton /><MemoryButton compact />
     <SupportArtistButton compact />
     <button className="export" onClick={onExport} disabled={!canExport}>{copy.export}</button>
   </header>;

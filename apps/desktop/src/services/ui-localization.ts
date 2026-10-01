@@ -6,7 +6,7 @@ import type { UiLanguage } from "./ui-preferences";
  */
 const PAIRS: ReadonlyArray<readonly [string, string]> = [
   ["Questo dispositivo non può eseguire Whisper in modo efficiente con float16. MLSM userà automaticamente una precisione compatibile: riprova la trascrizione.", "This device cannot run Whisper efficiently with float16. MLSM will use a compatible precision automatically; retry the transcription."],
-  ["Il dispositivo o backend selezionato non supporta calcoli float16 efficienti.", "Requested float16 compute type, but the target device or backend do not support efficient float16 computation."],
+  ["Il dispositivo o backend selezionato non supporta calcoli float16 efficienti.", "The selected device or backend does not support efficient float16 computation."],
   ["Disattivato: quando i segmenti Gradio hanno già la risoluzione richiesta vengono uniti senza ricodificare il video e viene ripristinato direttamente l’audio originale.", "Disabled: when Gradio segments already match the requested resolution, they are joined without re-encoding the video and the original audio is restored directly."],
   ["Le regolazioni richiedono una ricodifica completa del video finale. L’avanzamento e il tempo residuo saranno mostrati durante la codifica.", "Adjustments require a full re-encode of the final video. Progress and remaining time will be shown during encoding."],
   ["Applica colore, nitidezza e riduzione rumore al video", "Apply colour, sharpness and noise reduction to the video"],

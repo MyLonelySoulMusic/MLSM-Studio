@@ -1,3 +1,4 @@
+import { DiscordLink } from "./DiscordLink";
 import { useEffect, useRef, useState } from "react";
 import { releaseImportedAudio } from "../services/audio-import";
 import {
@@ -230,7 +231,7 @@ export function AudioWorkspace({ onHome }: { onHome?: () => void }) {
       <div className="brand"><img className="brand-mark" src="/mlsm-studio-favicon-192.png" alt="" /><span className="brand-copy"><strong>MLSM Studio</strong><small>My Lonely Soul Music</small></span></div>
       {onHome ? <button onClick={onHome}>⌂ {t.home}</button> : null}
       <span className="audio-toolbar-spacer" />
-      <SettingsButton />
+      <DiscordLink /><SettingsButton />
       <MemoryButton compact />
       <SupportArtistButton compact />
       <label><span>{uiCopy[uiLanguage].language}</span><select value={uiLanguage} onChange={(event) => setLanguage(event.target.value === "en" ? "en" : "it")}><option value="it">IT</option><option value="en">EN</option></select></label>

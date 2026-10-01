@@ -1,3 +1,4 @@
+import { DiscordLink } from "../components/DiscordLink";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from "react";
 import { AGGREGATION_LABELS_BY_LANGUAGE, CURRENCY_LABELS_BY_LANGUAGE, DEFAULT_MAP_BACKGROUND, DEFAULT_REPORT_THEME, WIDGET_LABELS, WIDGET_LABELS_BY_LANGUAGE, createDashboard, createWidget, defaultDashboardName, reportId, type Aggregation, type BarRaceAnimation, type ReportDashboard, type ReportDataset, type ReportDatasetSource, type ReportField, type ReportFilter, type ReportWidget, type TimeSeriesAnimation, type TimeSeriesChartType, type TimeSeriesValueMode, type WidgetAnimationType, type WidgetType } from "./types";
 import { appendDatasetSource, createDemoDashboard, importReportFile, reconcileReplacementDataset, removeDatasetSource, replaceDatasetSource, REPORT_LIMITS, selectReplacementDataset } from "./data";
@@ -474,7 +475,7 @@ export function ReportsWorkspace({ onHome, viewDashboardId = null, onOpenViewer 
         <span className="rpt-topbar-divider" />
           <button className="rpt-button" onClick={() => setLibraryOpen(true)}><ReportIcon name="folder" />Le mie dashboard<span className="rpt-count">{saved.length}</span></button>
           <button className="rpt-icon-button rpt-reports-settings-button" aria-label={language === "en" ? "Reports settings" : "Impostazioni Reports"} title={language === "en" ? "Reports settings" : "Impostazioni Reports"} onClick={() => setReportsSettingsOpen(true)}><ReportIcon name="settings" /></button>
-        <div className="rpt-topbar-actions">
+        <div className="rpt-topbar-actions"><DiscordLink />
           <button className="rpt-button" onClick={() => jsonInput.current?.click()}><ReportIcon name="upload" />Importa JSON</button>
           <button className="rpt-button" onClick={() => { setBusy(true); void downloadDashboard(dashboard).then(done => { if (done) setStatus("JSON esportato con dati, widget e colori"); }).catch(reason => setError(messageOf(reason))).finally(() => setBusy(false)); }}><ReportIcon name="download" />Esporta JSON</button>
           <button className="rpt-button" onClick={() => { void exportHtml(); }}><ReportIcon name="code" />Esporta HTML</button>

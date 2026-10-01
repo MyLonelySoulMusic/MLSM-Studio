@@ -1,5 +1,10 @@
 # Documentazione MLSM Studio
 
+La stessa guida operativa è disponibile nell’area **Documentation** dell’app in italiano e inglese. La ricerca intelligente usa MiniLM multilingue in locale e mantiene una ricerca testuale immediata come fallback.
+
+- [README English](../README.md)
+- [README Italiano](../README.it.md)
+
 Questa documentazione separa l’uso quotidiano dai dettagli tecnici.
 
 ## Per usare l’app

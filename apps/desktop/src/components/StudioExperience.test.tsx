@@ -21,6 +21,9 @@ vi.mock("../postit/PostItWorkspace", () => ({
 vi.mock("../streamer/StreamerAudioViewer", () => ({
   StreamerAudioViewer: ({ onHome }: { onHome: () => void }) => <main aria-label="Streamer Audio Viewer"><button type="button" onClick={onHome}>Home Streamer Audio Viewer</button></main>
 }));
+vi.mock("../documentation/DocumentationWorkspace", () => ({
+  DocumentationWorkspace: ({ onHome }: { onHome: () => void }) => <main aria-label="Documentation"><button type="button" onClick={onHome}>Home Documentation</button></main>
+}));
 
 describe("StudioExperience", () => {
   beforeEach(() => { localStorage.clear(); window.history.replaceState(null, "", "/"); vi.useFakeTimers(); });
@@ -101,6 +104,16 @@ describe("StudioExperience", () => {
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Streamer Audio Viewer/ })); });
     expect(screen.getByRole("main", { name: "Streamer Audio Viewer" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Home Streamer Audio Viewer" }));
+    expect(screen.getByRole("region", { name: "Aree creative disponibili" })).toBeInTheDocument();
+  });
+
+  it("apre Documentation come area separata e torna alla Home aree", async () => {
+    render(<StudioExperience />);
+    fireEvent.click(screen.getByRole("button", { name: "Entra in MLSM Studio" }));
+    act(() => vi.advanceTimersByTime(850));
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Documentation/ })); });
+    expect(screen.getByRole("main", { name: "Documentation" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Home Documentation" }));
     expect(screen.getByRole("region", { name: "Aree creative disponibili" })).toBeInTheDocument();
   });
 

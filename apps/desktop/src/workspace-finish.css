@@ -563,6 +563,16 @@
 }
 
 /* Home area cards and the compact artwork slot supplied by StudioHome. */
+a.discord-link, a.autopost-discord-link { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; width: 36px; height: 36px; padding: 8px; border: 1px solid color-mix(in srgb, var(--accent) 36%, var(--line)); border-radius: 10px; color: var(--accent-strong); background: var(--panel-raised); text-decoration: none; transition: transform .18s ease, background .18s ease, border-color .18s ease, box-shadow .18s ease; }
+a.discord-link svg, a.autopost-discord-link svg { display: block; width: 20px; height: 20px; }
+a.discord-link:hover, a.autopost-discord-link:hover { color: var(--accent-strong); border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 5px 16px var(--shadow); transform: translateY(-2px); }
+a.discord-link:focus-visible, a.autopost-discord-link:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 3px; }
+@media (prefers-reduced-motion: reduce) { a.discord-link, a.autopost-discord-link { transition: none; } }
+.studio-home__area-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin: 24px 0 20px; }
+.studio-home__usage-sort { display: inline-flex; align-items: center; gap: 10px; min-height: 42px; padding: 10px 16px; border: 1px solid var(--line); border-radius: 12px; color: var(--ink); background: var(--panel); font-size: 12px; font-weight: 750; }
+.studio-home__usage-sort[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.studio-home__usage-sort span { font-size: 18px; color: var(--accent-strong); }
+.studio-home__area-controls > span { color: var(--muted); font-size: 11px; }
 .studio-area-grid {
   gap: clamp(16px, 2vw, 24px);
 }
@@ -586,6 +596,10 @@
 
 .studio-area-card.area-postit {
   --card-accent: color-mix(in srgb, var(--accent) 72%, #f2c94c);
+}
+
+.studio-area-card.area-documentation {
+  --card-accent: color-mix(in srgb, var(--accent) 65%, #57c7d4);
 }
 
 /* The card is the only interactive target. Its artwork and copy must never
