@@ -1,5 +1,5 @@
 import { StrictMode } from "react";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const testState = vi.hoisted(() => ({
@@ -16,7 +16,7 @@ vi.mock("../components/ApplicationAssistant", () => ({ OPEN_LONELY_BOT_EVENT: "m
 vi.mock("./AnalyzerGrid", () => ({ AnalyzerGrid: () => <div aria-label="Analysis grid" /> }));
 vi.mock("./AnalyzerCanvas", () => ({ AnalyzerCanvas: () => null }));
 vi.mock("./VinylTurntable", () => ({ VinylTurntable: () => null }));
-vi.mock("./ProviderPlayer", () => ({ ProviderPlayer: () => null }));
+vi.mock("./ProviderPlayer", () => ({ ProviderPlayer: () => <div aria-label="Provider player" /> }));
 vi.mock("./streamer-providers", () => ({ loadProviderMetadata: vi.fn() }));
 vi.mock("./streamer-audio", () => ({
   captureCapabilities: async () => ({ platform: "browser", systemAudio: false, applicationCapture: false, outputDevices: [], applications: [], permission: "unavailable" }),
@@ -86,14 +86,21 @@ describe("StreamerAudioViewer startup", () => {
     expect(opened).toHaveBeenCalledOnce();
   });
 
-  it("moves the analyzer grid into a separate tab and leaves a status in the main view", async () => {
-    testState.loadQueue.mockResolvedValue({ tracks: [], currentId: null, autoAdvance: false, favorites: [] });
-    const detachedDocument = document.implementation.createHTMLDocument("detached");
-    const detachedWindow = { document: detachedDocument, closed: false, focus: vi.fn(), close: vi.fn(), addEventListener: vi.fn() } as unknown as Window;
-    vi.spyOn(window, "open").mockReturnValue(detachedWindow);
+  it("expands the analyzer grid inside the app and returns with one action", async () => {
+    testState.loadQueue.mockResolvedValue({ tracks: [{ id: "web-1", provider: "youtube", title: "Web stereo", url: "https://www.youtube.com/watch?v=test" }], currentId: "web-1", autoAdvance: false, favorites: [] });
+    const open = vi.spyOn(window, "open");
     render(<StreamerAudioViewer onHome={() => undefined} />);
-    fireEvent.click(screen.getByRole("button", { name: /Espandi widget in un’altra scheda/ }));
-    expect(screen.getByText("Esecuzione spostata in un’altra scheda")).toBeInTheDocument();
-    expect(within(detachedDocument.body).getByLabelText("Analysis grid")).not.toBeNull();
+    const providerPlayer = await screen.findByLabelText("Provider player");
+    fireEvent.click(screen.getByRole("button", { name: /Widget a schermo intero/ }));
+    expect(open).not.toHaveBeenCalled();
+    expect(screen.getByRole("banner", { name: "Analizzatori a schermo intero" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Analysis grid")).toBeInTheDocument();
+    expect(screen.getByLabelText("Provider player")).toBe(providerPlayer);
+    expect(screen.getByRole("button", { name: "Play" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "← MLSM Studio" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Torna alla visualizzazione classica/ }));
+    expect(screen.queryByRole("banner", { name: "Analizzatori a schermo intero" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Provider player")).toBe(providerPlayer);
+    expect(screen.getByRole("button", { name: "← MLSM Studio" })).toBeInTheDocument();
   });
 });

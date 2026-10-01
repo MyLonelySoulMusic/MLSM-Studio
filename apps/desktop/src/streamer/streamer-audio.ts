@@ -2,6 +2,7 @@ import { Channel, convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import tapUrl from "./pcm-tap.worklet?worker&url";
 import type { AnalysisFrame, AnalysisSettings } from "./analysis-engine";
+import { requestBrowserCapture, type CaptureInfo } from "./streamer-capture";
 
 export interface CaptureSource { kind: "system" | "application" | "outputDevice"; id?: string; }
 export interface CaptureCapabilities { platform: string; systemAudio: boolean; applicationCapture: boolean; outputDevices: { id: string; name: string }[]; applications: { id: string; name: string }[]; permission: string; reason?: string; }
@@ -18,12 +19,14 @@ export class StreamerAudioRuntime {
   readonly audio = new Audio();
   frame: AnalysisFrame | null = null; receivedAt = 0;
   private worker = new Worker(new URL("./analysis.worker.ts", import.meta.url), { type: "module" });
-  private context: AudioContext | null = null; private tap: AudioWorkletNode | null = null; private splitter: ChannelSplitterNode | null = null; private output: GainNode | null = null; private silent: GainNode | null = null;
+  private context: AudioContext | null = null; private tap: AudioWorkletNode | null = null; private output: GainNode | null = null; private silent: GainNode | null = null;
   private localSource: MediaElementAudioSourceNode | null = null; private captureNode: MediaStreamAudioSourceNode | null = null;
   private stream: MediaStream | null = null; private unlisten: UnlistenFn | null = null; private route: "local" | "capture" | "none" = "none"; private objectUrl: string | null = null;
-  private generation = 0; private localLoadGeneration = 0; private disposed = false; private nativeCapture = false; private localMono = false; private volume = .8;
+  private generation = 0; private localLoadGeneration = 0; private disposed = false; private nativeCapture = false; private volume = .8;
   private preparation: Promise<void> | null = null;
+  private captureInfo: CaptureInfo | null = null;
   onCaptureStatus: (state: string, message?: string) => void = () => undefined;
+  onCaptureInfo: (info: CaptureInfo | null) => void = () => undefined;
   constructor() {
     this.audio.preload = "metadata";
     this.worker.onmessage = (event: MessageEvent<AnalysisFrame>) => { if (this.disposed) return; this.frame = event.data; this.receivedAt = performance.now(); };
@@ -38,33 +41,48 @@ export class StreamerAudioRuntime {
     if (this.disposed) return;
     if (this.context) { await this.context.resume(); return; }
     const context = new AudioContext({ latencyHint: "playback" }); this.context = context;
-    try { await context.audioWorklet.addModule(tapUrl); if (this.disposed) { await context.close(); return; } this.tap = new AudioWorkletNode(context, "mlsm-stereo-tap", { numberOfInputs: 2, numberOfOutputs: 1, outputChannelCount: [2], channelCount: 1, channelCountMode: "explicit", channelInterpretation: "discrete" }); this.splitter = context.createChannelSplitter(2); this.output = context.createGain(); this.output.gain.value = this.volume; this.output.connect(context.destination); this.silent = context.createGain(); this.silent.gain.value = 0; this.silent.connect(context.destination); this.tap.port.onmessage = (event: MessageEvent<{ pcm: Float32Array; sampleRate: number }>) => { if (this.route === "capture" || (this.route === "local" && !this.audio.paused)) this.push(event.data.pcm, event.data.sampleRate); }; this.localSource = context.createMediaElementSource(this.audio); await context.resume(); }
+    try {
+      await context.audioWorklet.addModule(tapUrl);
+      if (this.disposed) { await context.close(); return; }
+      // Preserve the source's actual channel count, including a physically
+      // mono track. An explicit mono input or a speaker downmix loses L/R.
+      this.tap = new AudioWorkletNode(context, "mlsm-stereo-tap", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2], channelCount: 2, channelCountMode: "max", channelInterpretation: "discrete" });
+      this.output = context.createGain(); this.output.gain.value = this.volume; this.output.connect(context.destination);
+      this.silent = context.createGain(); this.silent.gain.value = 0; this.silent.connect(context.destination);
+      this.tap.port.onmessage = (event: MessageEvent<{ pcm: Float32Array; sampleRate: number; channels: number }>) => {
+        if (this.route === "capture" && this.captureInfo && this.captureInfo.receivedChannels !== event.data.channels) {
+          this.captureInfo = { ...this.captureInfo, receivedChannels: event.data.channels, sampleRate: event.data.sampleRate };
+          this.onCaptureInfo(this.captureInfo);
+          console.info("[Streamer capture] PCM input", this.captureInfo);
+        }
+        if (this.route === "capture" || (this.route === "local" && !this.audio.paused)) this.push(event.data.pcm, event.data.sampleRate);
+      };
+      this.localSource = context.createMediaElementSource(this.audio); await context.resume();
+    }
     catch (error) { this.context = null; await context.close().catch(() => undefined); throw error; }
   }
   configure(settings: AnalysisSettings) { this.worker.postMessage({ type: "settings", settings }); }
   reset() { this.worker.postMessage({ type: "reset" }); this.frame = null; this.receivedAt = 0; }
   setVolume(value: number) { this.volume = value; if (this.output && this.context) this.output.gain.setTargetAtTime(value, this.context.currentTime, .025); }
-  private disconnectRoute() { this.localSource?.disconnect(); this.captureNode?.disconnect(); this.captureNode = null; this.splitter?.disconnect(); this.tap?.disconnect(); }
-  private connectStereoSource(source: AudioNode, destination: AudioNode, mono: boolean) {
-    if (!this.splitter || !this.tap) return;
-    this.tap.port.postMessage({ enabled: true, mono });
-    source.connect(this.splitter);
-    this.splitter.connect(this.tap, 0, 0);
-    if (!mono) this.splitter.connect(this.tap, 1, 1);
+  private disconnectRoute() { this.localSource?.disconnect(); this.captureNode?.disconnect(); this.captureNode = null; this.tap?.disconnect(); }
+  private connectStereoSource(source: AudioNode, destination: AudioNode) {
+    if (!this.tap) return;
+    this.tap.port.postMessage({ enabled: true });
+    source.connect(this.tap);
     this.tap.connect(destination);
   }
   async loadLocal(input: { file?: Blob; nativePath?: string; channels?: number }) {
     const generation = ++this.localLoadGeneration;
     await this.stopCapture();
     if (this.disposed || generation !== this.localLoadGeneration) return;
-    this.audio.pause(); this.disconnectRoute(); this.route = "local"; this.localMono = input.channels === 1;
+    this.audio.pause(); this.disconnectRoute(); this.route = "local";
     if (this.objectUrl) URL.revokeObjectURL(this.objectUrl); this.objectUrl = null;
     if (input.file) { this.objectUrl = URL.createObjectURL(input.file); this.audio.src = this.objectUrl; }
     else if (input.nativePath) this.audio.src = convertFileSrc(input.nativePath);
     else throw new Error("Audio file is no longer available");
     this.audio.load();
   }
-  async playLocal() { await this.prepare(); if (this.disposed || !this.localSource || !this.tap || !this.output) return; this.disconnectRoute(); this.route = "local"; this.connectStereoSource(this.localSource, this.output, this.localMono); await this.audio.play(); }
+  async playLocal() { await this.prepare(); if (this.disposed || !this.localSource || !this.tap || !this.output) return; this.disconnectRoute(); this.route = "local"; this.connectStereoSource(this.localSource, this.output); await this.audio.play(); }
   pause() { this.audio.pause(); }
   stopLocal() { this.audio.pause(); if (Number.isFinite(this.audio.duration)) this.audio.currentTime = 0; }
   seek(value: number) { if (Number.isFinite(this.audio.duration)) this.audio.currentTime = Math.max(0, Math.min(value, this.audio.duration)); }
@@ -80,12 +98,13 @@ export class StreamerAudioRuntime {
         await invoke("streamer_start_capture", { source, onPcm });
         if (generation !== this.generation || this.disposed) { await invoke("streamer_stop_capture"); return; }
       } else {
-        const stream = source.kind === "input" ? await navigator.mediaDevices.getUserMedia({ audio: { ...(source.id ? { deviceId: { exact: source.id } } : {}), channelCount: 2, echoCancellation: false, noiseSuppression: false, autoGainControl: false }, video: false }) : await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+        const { stream, info } = await requestBrowserCapture(source);
         if (generation !== this.generation || this.disposed) { stream.getTracks().forEach(track => track.stop()); return; }
         if (!stream.getAudioTracks().length) { stream.getTracks().forEach(track => track.stop()); throw new Error("No audio was shared by this browser / Nessun audio condiviso dal browser"); }
-        this.stream = stream; await this.prepare();
+        this.stream = stream; this.captureInfo = info; this.onCaptureInfo(info); await this.prepare();
         if (generation !== this.generation || !this.context || !this.tap || !this.silent) { stream.getTracks().forEach(track => track.stop()); return; }
-        this.captureNode = this.context.createMediaStreamSource(stream); this.connectStereoSource(this.captureNode, this.silent, stream.getAudioTracks()[0]?.getSettings().channelCount === 1);
+        this.captureNode = this.context.createMediaStreamSource(stream);
+        this.connectStereoSource(this.captureNode, this.silent);
         for (const track of stream.getTracks()) track.onended = () => { if (generation === this.generation) { void this.stopCapture(); this.onCaptureStatus("error", "Capture source disconnected / Sorgente di acquisizione disconnessa"); } };
       }
       this.onCaptureStatus("active");
@@ -93,6 +112,7 @@ export class StreamerAudioRuntime {
   }
   async stopCapture() {
     ++this.generation; this.unlisten?.(); this.unlisten = null;
+    this.captureInfo = null; this.onCaptureInfo(null);
     if (this.stream) { this.stream.getTracks().forEach(track => { track.onended = null; track.stop(); }); this.stream = null; }
     this.captureNode?.disconnect(); this.captureNode = null;
     if (this.nativeCapture) { this.nativeCapture = false; await invoke("streamer_stop_capture").catch(error => this.onCaptureStatus("error", String(error))); }

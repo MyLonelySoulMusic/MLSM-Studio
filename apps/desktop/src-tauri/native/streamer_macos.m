@@ -29,13 +29,34 @@ typedef void (*MLSMStatusCallback)(void *, int, const char *);
 
 static float mlsm_read_sample(const AudioBufferList *list, const AudioStreamBasicDescription *asbd,
                               UInt32 frame, UInt32 channel) {
-    BOOL planar = (asbd->mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0;
-    UInt32 bufferIndex = planar ? MIN(channel, list->mNumberBuffers - 1) : 0;
-    UInt32 sourceChannels = planar ? 1 : MAX((UInt32)1, asbd->mChannelsPerFrame);
-    UInt32 sampleIndex = planar ? frame : frame * sourceChannels + MIN(channel, sourceChannels - 1);
+    // ScreenCaptureKit may describe non-interleaved PCM while returning either
+    // one multi-channel AudioBuffer or one buffer per channel.  Looking only at
+    // the ASBD flag therefore duplicates buffer 0 into L/R for the first case.
+    // Resolve the physical buffer from AudioBuffer.mNumberChannels instead.
+    UInt32 requested = MIN(channel, MAX((UInt32)1, asbd->mChannelsPerFrame) - 1);
+    UInt32 bufferIndex = 0;
+    UInt32 channelInBuffer = requested;
+    UInt32 channelOffset = 0;
+    for (UInt32 index = 0; index < list->mNumberBuffers; index++) {
+        UInt32 bufferChannels = MAX((UInt32)1, list->mBuffers[index].mNumberChannels);
+        if (requested < channelOffset + bufferChannels) {
+            bufferIndex = index;
+            channelInBuffer = requested - channelOffset;
+            break;
+        }
+        channelOffset += bufferChannels;
+        bufferIndex = index;
+        channelInBuffer = MIN(requested, bufferChannels - 1);
+    }
     const AudioBuffer *buffer = &list->mBuffers[bufferIndex];
     if (!buffer->mData) return 0.0f;
-    UInt32 bytes = asbd->mBytesPerFrame ? asbd->mBytesPerFrame / sourceChannels : asbd->mBitsPerChannel / 8;
+    UInt32 bufferChannels = MAX((UInt32)1, buffer->mNumberChannels);
+    UInt32 bytes = asbd->mBitsPerChannel / 8;
+    if (bytes == 0 && asbd->mBytesPerFrame) {
+        BOOL physicallyPlanar = list->mNumberBuffers > 1 && bufferChannels == 1;
+        bytes = physicallyPlanar ? asbd->mBytesPerFrame : asbd->mBytesPerFrame / bufferChannels;
+    }
+    UInt32 sampleIndex = frame * bufferChannels + MIN(channelInBuffer, bufferChannels - 1);
     if (bytes == 0 || ((uint64_t)sampleIndex + 1) * bytes > buffer->mDataByteSize) return 0.0f;
     const uint8_t *value = (const uint8_t *)buffer->mData + (uint64_t)sampleIndex * bytes;
     if ((asbd->mFormatFlags & kAudioFormatFlagIsFloat) != 0) {
