@@ -10,6 +10,7 @@ const required = {
   vite: "node_modules/vite/bin/vite.js",
   typescript: "node_modules/typescript/bin/tsc",
   react: "node_modules/react/package.json",
+  offlineAacEncoder: "node_modules/@mediabunny/aac-encoder/dist/bundles/mediabunny-aac-encoder.mjs",
   tauriCli: "node_modules/@tauri-apps/cli/tauri.js"
 };
 

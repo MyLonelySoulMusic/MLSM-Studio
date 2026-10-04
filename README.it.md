@@ -79,6 +79,8 @@ L’area creativa per visualizer, storie animate e tipografia sincronizzata alla
 - analisi di beat, energia, spettro stereo, fonemi e palette;
 - preview sincronizzata, timeline e export offline deterministico.
 
+**Compatibilità audio From 9:16 to 16:9:** l’audio già AAC viene copiato senza ricodifica quando la sua timeline lo consente. Per gli altri casi viene usato l’encoder AAC nativo oppure, automaticamente, il [fallback software Mediabunny incluso nell’app](https://mediabunny.dev/guide/extensions/aac-encoder). Su Windows e Mac non servono servizi esterni o installazioni manuali di codec; i canali stereo vengono conservati.
+
 Consulta la guida dedicata: [Sound Animation](docs/sound-animation.md).
 
 ### 2. Photo & Video Studio

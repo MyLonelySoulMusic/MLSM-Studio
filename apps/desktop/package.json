@@ -11,6 +11,7 @@
   "dependencies": {
     "@gradio/client": "^2.5.1",
     "@huggingface/transformers": "^3.8.1",
+    "@mediabunny/aac-encoder": "1.51.0",
     "@rbs/audio-analysis": "0.1.0",
     "@rbs/core": "0.1.0",
     "@rbs/export-engine": "0.1.0",

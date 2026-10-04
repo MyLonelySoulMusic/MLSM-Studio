@@ -69,6 +69,8 @@ Creates visualizers, stories and typography synchronized to music.
 - beat, energy, stereo spectrum, phoneme and palette analysis;
 - synchronized preview, timeline and deterministic offline export.
 
+**From 9:16 to 16:9 audio compatibility:** existing AAC audio is copied without re-encoding whenever its timeline permits. Other audio uses native AAC encoding or the bundled [Mediabunny AAC software encoder](https://mediabunny.dev/guide/extensions/aac-encoder) automatically. No external service or manual codec installation is required on Windows or Mac; stereo channels are preserved.
+
 See [Sound Animation](docs/sound-animation.md).
 
 ### 2. Photo & Video Studio

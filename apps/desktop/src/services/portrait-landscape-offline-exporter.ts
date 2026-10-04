@@ -14,7 +14,6 @@ import {
   QUALITY_HIGH,
   QUALITY_VERY_HIGH,
   StreamTarget,
-  canEncodeAudio,
   canEncodeVideo,
   type Quality,
   type StreamTargetChunk
@@ -24,6 +23,7 @@ import { resolveCoverSpectrum } from "./cover-spectrum";
 import { renderPortraitLandscapeFrame } from "./portrait-landscape-renderer";
 import { subtitleFontWeight } from "./subtitle-fonts";
 import type { ProSubtitleCue, ProSubtitleSettings } from "./pro-subtitles";
+import { prepareOfflineAacAudio } from "./offline-aac-encoder";
 
 type PortraitLandscapeSettings = RhythmBallProject["animation"]["portraitLandscape"];
 
@@ -205,7 +205,10 @@ export async function exportPortraitLandscapeOfflineVideo(settings: PortraitLand
     if (!videoTrack) throw new Error("Il file caricato non contiene una traccia video utilizzabile.");
     const sourceDuration = await videoTrack.computeDuration({ skipLiveWait: true });
     const duration = Math.min(settings.durationSeconds, sourceDuration); const totalFrames = portraitLandscapeOfflineFrameCount(duration, settings.fps);
-    if (audioTrack && !await canEncodeAudio("aac", { bitrate: 320_000 })) throw new Error("L’encoder AAC offline non è disponibile su questo dispositivo.");
+    onProgress({ currentFrame: 0, totalFrames, progress: 0, elapsedMs: performance.now() - startedAt, estimatedRemainingMs: 0, phase: "preparing", phaseLabel: "Preparazione audio offline · fallback AAC automatico", indeterminate: true });
+    const audioPlan = audioTrack ? await waitWithTimeout(prepareOfflineAacAudio(audioTrack), 60_000, "La preparazione dell’audio offline non è terminata entro 60 secondi.", signal) : null;
+    throwIfAborted(signal);
+    console.info("[From 9:16 to 16:9] Audio export", { mode: audioPlan?.mode ?? "silent", duration, fps: settings.fps });
 
     target = await createTarget(fileName, handle, { ...settings, durationSeconds: duration });
     const canvas = document.createElement("canvas"); canvas.width = settings.width; canvas.height = settings.height;
@@ -213,8 +216,8 @@ export async function exportPortraitLandscapeOfflineVideo(settings: PortraitLand
     output = new Output({ format: new Mp4OutputFormat(), target: target.target });
     const videoSource = new CanvasSource(canvas, { codec: "avc", bitrate: quality, alpha: "discard", latencyMode: "quality", hardwareAcceleration: "prefer-hardware", keyFrameInterval: 2, contentHint: "animation" });
     output.addVideoTrack(videoSource, { frameRate: settings.fps });
-    if (audioTrack) {
-      conversion = await Conversion.init({ input, output, tracks: "primary", trim: { start: 0, end: duration }, video: { discard: true }, audio: { codec: "aac", bitrate: 320_000, forceTranscode: true }, composable: true, showWarnings: false });
+    if (audioTrack && audioPlan) {
+      conversion = await Conversion.init({ input, output, tracks: "primary", trim: { start: 0, end: duration }, video: { discard: true }, audio: audioPlan.options, composable: true, showWarnings: false });
       if (!conversion.isValid || !conversion.utilizedTracks.includes(audioTrack)) throw new Error("La traccia audio non può essere codificata senza riproduzione live.");
     }
     const sink = new CanvasSink(videoTrack, { poolSize: 3 });
@@ -223,13 +226,16 @@ export async function exportPortraitLandscapeOfflineVideo(settings: PortraitLand
     signal.addEventListener("abort", abort, { once: true });
     try {
       await waitWithTimeout(output.start(), 60_000, "L’encoder offline non è partito entro 60 secondi.", signal);
-      const audioPromise = conversion?.execute() ?? Promise.resolve(); let encodedFrames = 0; let frameIndex = 0;
+      const audioPromise = conversion?.execute() ?? Promise.resolve();
+      // Audio runs alongside video: mark early failures handled until we await it below.
+      void audioPromise.catch(() => undefined);
+      let encodedFrames = 0; let frameIndex = 0;
       for await (const decoded of sink.canvasesAtTimestamps(timings.map((timing) => timing.sampleTimeSeconds), { skipLiveWait: true })) {
         throwIfAborted(signal); const timing = timings[frameIndex]!; const spectrum = resolveCoverSpectrum(settings.energyFrames, timing.sampleTimeSeconds); const rhythmPulse = resolvePortraitLandscapeRhythmPulse(timing.sampleTimeSeconds, settings.rhythmEvents, spectrum.pulse);
         renderPortraitLandscapeFrame(canvas, { timeSeconds: timing.sampleTimeSeconds, durationSeconds: duration, bpm: settings.bpm, quality: "export", analysisReady: settings.energyFrames.length > 0, audioPulse: spectrum.pulse, rhythmPulse, spectrumBands: spectrum.bands, stereoLeftBands: spectrum.leftBands, stereoRightBands: spectrum.rightBands, videoFrame: decoded?.canvas ?? null, sideImage, coverImage, settings: settings.portraitLandscapeSettings, ...(settings.subtitlesEnabled === undefined ? {} : { subtitlesEnabled: settings.subtitlesEnabled }), ...(settings.subtitleCues === undefined ? {} : { subtitleCues: settings.subtitleCues }), ...(settings.subtitleSettings === undefined ? {} : { subtitleSettings: settings.subtitleSettings }) });
         await waitWithTimeout(videoSource.add(timing.timestampSeconds, timing.durationSeconds), 120_000, `L’encoder è fermo sul frame ${frameIndex + 1}; l’export è stato annullato senza consegnare un file incompleto.`, signal);
         frameIndex += 1; encodedFrames += 1; const elapsedMs = performance.now() - startedAt;
-        onProgress({ currentFrame: encodedFrames, totalFrames, progress: encodedFrames / totalFrames, elapsedMs, estimatedRemainingMs: encodedFrames === totalFrames ? 0 : elapsedMs / encodedFrames * (totalFrames - encodedFrames) });
+        onProgress({ currentFrame: encodedFrames, totalFrames, progress: encodedFrames / totalFrames, elapsedMs, estimatedRemainingMs: encodedFrames === totalFrames ? 0 : elapsedMs / encodedFrames * (totalFrames - encodedFrames), phase: "rendering", phaseLabel: "Rendering offline · H.264", indeterminate: false });
       }
       videoSource.close(); await waitWithTimeout(audioPromise, Math.max(300_000, duration * 4_000), "La codifica audio offline non è terminata.", signal); assertPortraitLandscapeFrameIntegrity(totalFrames, encodedFrames);
       target.prepareCommit(); await waitWithTimeout(output.finalize(), 240_000, "La finalizzazione MP4 non è terminata entro 240 secondi.", signal); finalized = true;
