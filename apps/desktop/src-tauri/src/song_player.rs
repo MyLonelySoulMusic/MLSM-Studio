@@ -761,7 +761,7 @@ fn has_active_job(state: &SharedState) -> bool {
         >= MAX_ACTIVE_JOBS
 }
 
-fn workspace_root() -> PathBuf {
+pub(crate) fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(3)
@@ -808,7 +808,7 @@ fn runtime_root(app: &tauri::AppHandle) -> Result<PathBuf, SongPlayerError> {
     Ok(root)
 }
 
-fn worker_paths(app: &tauri::AppHandle) -> Result<(PathBuf, PathBuf), SongPlayerError> {
+pub(crate) fn worker_paths(app: &tauri::AppHandle) -> Result<(PathBuf, PathBuf), SongPlayerError> {
     let managed_python = venv_python(&runtime_root(app)?);
     let legacy_root = workspace_root().join(".venv-song-player");
     let legacy_python = venv_python(&legacy_root);

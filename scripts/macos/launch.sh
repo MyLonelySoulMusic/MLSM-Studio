@@ -17,6 +17,7 @@ if [[ "${1:-}" == "--check" ]]; then
 fi
 
 if [[ "$(uname -s)" != "Darwin" ]]; then echo "Su Windows usa scripts\\windows\\launch.bat." >&2; exit 2; fi
+node tools/create_branded_launchers.cjs --quiet || echo "Avviso: launcher con logo non aggiornato; puoi rigenerarlo con node tools/create_branded_launchers.cjs" >&2
 node tools/prepare_node_workspace.cjs || { echo "Aggiornamento dipendenze/build non riuscito. Controlla l'errore precedente." >&2; exit 3; }
 
 echo "Avvio MLSM Studio su http://localhost:1421"

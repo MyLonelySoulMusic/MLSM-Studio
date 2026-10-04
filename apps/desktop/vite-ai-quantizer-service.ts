@@ -15,7 +15,7 @@ export function aiQuantizerProjectRoot(cwd = process.cwd()) {
 const projectRoot = aiQuantizerProjectRoot();
 
 const mimeTypes: Record<string, string> = {
-  ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
+  ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".cjs": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8", ".png": "image/png", ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg", ".svg": "image/svg+xml"
 };

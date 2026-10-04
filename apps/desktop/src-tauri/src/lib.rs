@@ -19,6 +19,7 @@ mod studio_settings;
 mod reports_storage;
 mod postit_favicon;
 mod streamer_audio;
+mod streamer_whisper;
 
 #[derive(Debug, thiserror::Error)]
 enum ProjectIoError {
@@ -303,10 +304,12 @@ fn shutdown_area_python_services(
     upscaler: tauri::State<'_, UpscalerServiceState>,
     song_player: tauri::State<'_, song_player::SongPlayerState>,
     audio: tauri::State<'_, audio_tools::AudioToolsState>,
+    whisper: tauri::State<'_, streamer_whisper::StreamerWhisperState>,
 ) {
     upscaler.shutdown();
     song_player::shutdown(song_player.inner());
     audio_tools::shutdown(audio.inner());
+    streamer_whisper::shutdown(whisper.inner());
 }
 
 #[derive(Debug, Serialize)]
@@ -614,6 +617,7 @@ pub fn run() {
         .manage(UpscalerServiceState::default())
         .manage(AutoPostServiceState::default())
         .manage(streamer_audio::StreamerCaptureState::default())
+        .manage(streamer_whisper::StreamerWhisperState::default())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             read_project,
@@ -657,6 +661,9 @@ pub fn run() {
             ,streamer_audio::streamer_permission_settings
             ,streamer_audio::streamer_import_audio
             ,streamer_audio::streamer_oembed
+            ,streamer_whisper::streamer_whisper_start
+            ,streamer_whisper::streamer_whisper_chunk
+            ,streamer_whisper::streamer_whisper_stop
         ])
         .build(tauri::generate_context!())
         .expect("errore durante l'avvio di MLSM Studio");
@@ -666,6 +673,7 @@ pub fn run() {
             app_handle.state::<AutoPostServiceState>().shutdown();
             audio_tools::shutdown(app_handle.state::<audio_tools::AudioToolsState>().inner());
             streamer_audio::shutdown(app_handle.state::<streamer_audio::StreamerCaptureState>().inner());
+            streamer_whisper::shutdown(app_handle.state::<streamer_whisper::StreamerWhisperState>().inner());
         }
     });
 }

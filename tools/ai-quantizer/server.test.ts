@@ -74,6 +74,7 @@ async function loadApi(dataRoot: string, realProcesses = false): Promise<LoadedA
     process: { ...process, env: { ...process.env, AIQ_DATA_ROOT: dataRoot } },
     require: (specifier: string) => specifier === "child_process"
       ? realProcesses ? requireFromTest(specifier) : childProcess
+      : specifier === './public/rhythm.cjs' ? requireFromTest(resolve(serverPath, '../public/rhythm.cjs'))
       : requireFromTest(specifier)
   };
   vm.runInNewContext(isolatedSource, context, { filename: serverPath });
@@ -148,6 +149,22 @@ async function setup(realProcesses = false) {
 }
 
 describe("AI Quantizer modules API", () => {
+  it.each([
+    { targetBpm: 118.81, tempoInterpretation: 'normal', expected: 119 },
+    { targetBpm: 59.405, tempoInterpretation: 'half', expected: 59 }
+  ])('normalizes a saved fractional target when reopening and saving ($tempoInterpretation)', async (settings) => {
+    const { api, project } = await setup();
+    project.settings = { targetBpm: settings.targetBpm, tempoInterpretation: settings.tempoInterpretation };
+    await installProject(currentDataRoot!, project);
+    const response = responseCapture();
+    await api({ method: 'GET' }, response, new URL(`http://localhost/api/projects/${project.id}`));
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body!.toString()).settings.targetBpm).toBe(settings.expected);
+    await callModules(api, project.id, { ai: false });
+    const saved = JSON.parse(await readFile(join(currentDataRoot!, project.id, 'project.json'), 'utf8'));
+    expect(saved.settings.targetBpm).toBe(settings.expected);
+  });
+
   it("accepts only the five boolean module flags and persists partial changes", async () => {
     const { api, project } = await setup();
     const { response, project: saved } = await callModules(api, project.id, {
@@ -212,6 +229,58 @@ describe("AI Quantizer modules API", () => {
     expect(alignmentOnly).toContain("run(FFMPEG");
     expect(alignmentOnly).not.toContain("rubberband");
     expect(alignmentOnly).not.toContain("sharedWarpTimeline");
+  });
+
+  it('rounds half-time targets on the server and renders stereo WAVs at the integer target', async () => {
+    const { api, project } = await setup(true);
+    project.analysis = {
+      beats: Array.from({ length: 24 }, (_, i) => i * .5),
+      downbeats: Array.from({ length: 6 }, (_, i) => i * 2),
+      rhythmVersion: 2
+    };
+    for (const track of project.tracks) {
+      track.duration = 12;
+      const input = join(currentDataRoot!, project.id, String(track.source));
+      await mkdir(resolve(input, '..'), { recursive: true });
+      const generated = spawnSync('ffmpeg', ['-y', '-v', 'error', '-f', 'lavfi', '-i',
+        'aevalsrc=0.2*sin(2*PI*440*t)|0.2*sin(2*PI*660*t):s=44100:d=12', '-c:a', 'pcm_f32le', input]);
+      expect(generated.status).toBe(0);
+    }
+    await writeFile(join(currentDataRoot!, project.id, 'project.json'), JSON.stringify(project));
+    const response = responseCapture();
+    await api(requestWithJson({
+      points: [{ source: 0, target: 0 }, { source: 12, target: 6 }],
+      settings: { targetBpm: 60.5, tempoInterpretation: 'half' },
+      sourceDuration: 12, estimatedBpm: 60,
+      modules: { quantize: true, align: false, restoration: false, mastering: false, ai: false }
+    }), response, new URL(`http://localhost/api/projects/${project.id}/warp-map`));
+    expect(response.statusCode).toBe(200);
+    const mapped = JSON.parse(response.body!.toString());
+    expect(mapped.settings.targetBpm).toBe(61);
+    expect(mapped.warpMap.points.at(-1).target).toBeCloseTo(12 * 120 / 122, 6);
+    await api({ ...requestWithJson({ all: true }), method: 'POST' }, responseCapture(),
+      new URL(`http://localhost/api/projects/${project.id}/process`));
+    const saved = JSON.parse(await readFile(join(currentDataRoot!, project.id, 'project.json'), 'utf8'));
+    for (const track of saved.tracks) {
+      const probe = spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration:stream=channels,sample_rate',
+        '-of', 'json', join(currentDataRoot!, project.id, track.output)], { encoding: 'utf8' });
+      expect(probe.status).toBe(0);
+      const metadata = JSON.parse(probe.stdout);
+      expect(metadata.streams[0]).toMatchObject({ channels: 2, sample_rate: '48000' });
+      expect(Number(metadata.format.duration)).toBeCloseTo(12 * 120 / 122, 4);
+    }
+  }, 15000);
+
+  it('refuses an unreliable analysis even when the client confirms unsafe rendering', async () => {
+    const { api, project } = await setup();
+    project.analysis = { beats: [0, 2.1, 7.8, 19.3, 44, 58], downbeats: [] };
+    project.tracks[0].duration = 60;
+    await writeFile(join(currentDataRoot!, project.id, 'project.json'), JSON.stringify(project));
+    await expect(api(requestWithJson({ points: [{ source: 0, target: 0 }, { source: 60, target: 60 }],
+      settings: { targetBpm: 120 }, modules: { quantize: true }, confirmUnsafe: true }),
+    responseCapture(), new URL(`http://localhost/api/projects/${project.id}/warp-map`))).rejects.toThrow('non è quantizzabile');
+    const saved = JSON.parse(await readFile(join(currentDataRoot!, project.id, 'project.json'), 'utf8'));
+    expect(saved.tracks[0].output).toBe(project.tracks[0].output);
   });
 
   it("applies alignment to existing quantized WAVs and keeps a reusable base", async () => {

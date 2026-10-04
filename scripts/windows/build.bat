@@ -22,5 +22,6 @@ if not "%OS%"=="Windows_NT" (echo Questo script deve essere eseguito su Windows.
 where node >nul 2>nul || (echo Node non trovato: esegui prima scripts\windows\install.bat& exit /b 3)
 where cargo >nul 2>nul || (echo Cargo non trovato: esegui prima scripts\windows\install.bat& exit /b 3)
 node tools\verify_node_dependencies.cjs || (echo Dipendenze npm incomplete: esegui prima scripts\windows\install.bat& exit /b 3)
+node tools\verify_brand_assets.cjs || exit /b 4
 echo Packaging Windows pronto. Nessuna compilazione avviata.
 exit /b 0

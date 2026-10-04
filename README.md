@@ -151,12 +151,21 @@ Private local notes, links and flows. Favicons are cached locally; notes can be 
 
 - deletable queue, favourites and configurable automatic/manual advance;
 - turntable/player, uncropped artwork and YouTube artwork cropping;
+- square YouTube artwork, with 16:9 sides and 4:3 letterboxing removed;
 - meter, stereo spectrum, LUFS, stereo image, phase correlation, spectrogram, oscilloscope, dynamics and tonal distribution;
 - movable, removable and restorable widgets with a documented default layout;
 - theme-aware full-screen workspace while the player remains visible and audible;
 - direct PCM for local files and explicit ScreenCaptureKit/WASAPI capture for web playback.
 
-MLSM does not download or bypass protected streams. Captured PCM is analyzed on-device and is not recorded or uploaded.
+**Reactive ripples** in the analysis toolbar toggles a shared pink water surface. Sudden stereo openings and strong peak/true-peak changes emit wave packets from their widgets; the signed waves interfere before being lit, then fade naturally. The setting is saved locally and also works in full screen. Rendering uses WebGL with a bounded software fallback, respects reduced-motion preferences and never alters playback or audio measurements.
+
+The turntable widget includes local **Whisper-Streaming** transcription: provisional words are revised as more audio arrives, then confirmed. Apple Silicon uses MLX; Windows uses Faster-Whisper with CUDA when supported and an INT8 CPU fallback. The first use prepares the engine and downloads multilingual weights with visible progress. Models and the pinned upstream runtime are cached outside the repository, and audio is never uploaded. Audio waiting for inference is preserved; an explicit error replaces silent dropping if the engine cannot keep up. Singing recognition and latency depend on the track and hardware.
+
+**Record**, next to Play, arms a local video recording: choose the **MLSM Studio tab/window**, then press Play. For YouTube/Spotify, enable system-audio analysis first. Pause pauses the recording; Stop or the end of a non-advancing queue finalizes it. Fullscreen widgets remain audible and are captured normally. Saved takes offer **Save video** (with stereo audio) and **Save WAV audio** (uncompressed Float32 at the received sample rate, before playback volume), and remain available locally when reopening the area. Deleting a take removes its local recording files, not the source track.
+
+Recording uses browser screen-sharing permission in Chrome/Edge on Mac and Windows. Unsupported app webviews show an explicit browser requirement. Video requests up to 4K/60 fps, uses a high-bitrate supported codec (VP9/Opus preferred, with VP8/MP4 fallbacks), and displays the actual captured dimensions, frame rate and encoder bitrate. These settings cannot recover resolution or audio quality absent from the source. Chunks are written to browser-private disk storage, not accumulated indefinitely in RAM or committed to Git. Keep sufficient free disk space and export valuable takes before clearing browser/site data. The separate WAV preserves source samples; its duration excludes periods where no PCM was received.
+
+MLSM does not download or bypass protected streams. Captured PCM is processed on-device, never uploaded, and recorded only after explicit opt-in. Only record sources you are authorized to use.
 
 ### 12. Documentation
 
@@ -197,6 +206,14 @@ scripts\windows\launch.bat
 ```
 
 After `git pull`, the launcher fingerprints manifest/lockfiles and sources. Missing state is treated as a first run: it safely performs both `npm ci --include=dev` and `npm run build`. State lives under `node_modules/.cache/mlsm-studio/` and is not versioned.
+
+### App icons and branded launchers
+
+Native builds explicitly use the original MLSM logo: Retina ICNS for macOS, multi-resolution ICO for Windows and PNG assets for Tauri. Windows NSIS installers and uninstallers also use the logo. Packaging scripts validate the icon files before building. See [Tauri App Icons](https://v2.tauri.app/develop/icons/) for the native format requirements.
+
+Installation and normal launch generate a double-click launcher with the same logo: **`scripts/macos/MLSM Studio.app`** on Mac or **`scripts/windows/MLSM Studio.lnk`** on Windows. To create/update it without starting the app, run `node tools/create_branded_launchers.cjs` from the project root. Original `.sh`/`.bat` launchers remain available, and the graphical launcher delegates to them with visible terminal logs.
+
+These launchers contain machine-specific project paths and are ignored by Git. No Desktop shortcut is created automatically; you can copy the generated launcher there. Regenerate after moving the project. Existing unrelated apps/shortcuts are never overwritten, and launcher-generation failure does not prevent the original scripts from running. Full desktop distributions are still built with `npm run package:mac` (DMG) or `npm run package:windows` (NSIS/MSI); no native package build is triggered by generating a launcher.
 
 ### Verify or repair
 

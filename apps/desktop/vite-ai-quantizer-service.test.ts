@@ -1,9 +1,25 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { describe, expect, it } from "vitest";
-import { aiQuantizerBootstrapPayload, aiQuantizerRuntimePaths } from "./vite-ai-quantizer-service";
+import { describe, expect, it, vi } from "vitest";
+import type { Connect, ViteDevServer } from "vite";
+import { aiQuantizerBootstrapPayload, aiQuantizerRuntimePaths, localAiQuantizerService } from "./vite-ai-quantizer-service";
 
 describe("AI Quantizer runtime interno", () => {
+  it('serves the shared rhythm engine as executable JavaScript without starting Python', async () => {
+    const use = vi.fn();
+    const server = { config: { logger: { info: vi.fn() } }, middlewares: { use } } as unknown as ViteDevServer;
+    const plugin = localAiQuantizerService();
+    const configure = plugin.configureServer;
+    if (typeof configure !== 'function') throw new Error('Expected server configuration hook');
+    await configure.call({} as never, server);
+    const handler = use.mock.calls[0][1] as Connect.NextHandleFunction;
+    const setHeader = vi.fn(), end = vi.fn(), next = vi.fn();
+    await handler({ url: '/rhythm.cjs', method: 'GET' } as Parameters<typeof handler>[0],
+      { setHeader, end } as unknown as Parameters<typeof handler>[1], next);
+    expect(setHeader).toHaveBeenCalledWith('Content-Type', 'text/javascript; charset=utf-8');
+    expect(end.mock.calls[0][0].toString()).toContain('root.AIQrhythm = api');
+    expect(next).not.toHaveBeenCalled();
+  });
   it("risolve backend, UI, ambiente e dati esclusivamente dentro MLSM Studio", () => {
     const root = resolve("/tmp", "mlsm-studio");
     const paths = aiQuantizerRuntimePaths(root);

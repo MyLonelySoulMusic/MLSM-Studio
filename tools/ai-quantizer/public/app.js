@@ -1,4 +1,4 @@
-/* global document, window, fetch, clearTimeout, setTimeout, AudioContext, devicePixelRatio, requestAnimationFrame, Blob */
+/* global document, window, fetch, clearTimeout, setTimeout, AudioContext, devicePixelRatio, requestAnimationFrame, Blob, AIQrhythm */
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 const tr = value => window.AIQ_I18N?.translate(value) || value;
@@ -247,7 +247,13 @@ async function openProject(id) {
   state.map = state.project.warpMap?.points || [];
   $('#emptyState').classList.add('hidden'); $('#workspace').classList.remove('hidden');
   $('#projectName').textContent = state.project.name;
-  $('#targetBpm').value = Math.round(state.project.settings.targetBpm || 120);
+  $('#targetBpm').value = roundBpm(Number(state.project.settings.targetBpm) || 120);
+  $('#tempoInterpretation').value = state.project.settings.tempoInterpretation === 'half' ? 'half' : 'normal';
+  state.targetBpmAutomatic = state.project.settings.targetBpmAutomatic === true;
+  state.normalTargetBpm = Number($('#targetBpm').value) * ($('#tempoInterpretation').value === 'half' ? 2 : 1);
+  setTempoBounds();
+  $('#rhythmStatus').textContent = '';
+  state.rhythm = null;
   $('#alignEnabled').checked = Boolean(state.project.alignment?.enabled);
   $('#alignMode').value = state.project.alignment?.mode || 'auto';
   $('#fadeSeconds').value = state.project.alignment?.fadeSeconds ?? .15;
@@ -325,7 +331,11 @@ async function loadMasterAudio() {
     }
     if (state.project.warpMap?.points?.length) {
       state.map = state.project.warpMap.points;
-      updateMetrics(state.project.warpMap.estimatedBpm);
+      updateMetrics(interpretedBpm());
+      if (state.project.warpMap.rhythmVersion !== AIQrhythm.VERSION) {
+        $('#rhythmStatus').textContent = 'Mappa precedente: esegui Analisi Smart per aggiornarla prima di quantizzare.';
+        state.quantizeDirty = true;
+      }
       draw();
     } else if (!state.project.analysis) await analyze();
   } catch (e) { toast(`Preview non disponibile: ${e.message}`, true); } finally { busy(false); }
@@ -349,47 +359,52 @@ async function analyze() {
     state.master = state.project.tracks.find(t => t.role === 'master');
     state.beats = state.project.analysis.beats;
     state.downbeats = state.project.analysis.downbeats;
-    $('#targetBpm').value = Math.round(state.project.analysis.detectedBpm);
+    state.targetBpmAutomatic = true;
+    $('#targetBpm').value = AIQrhythm.suggestedTargetBpm(state.project.analysis, state.master.duration,
+      $('#tempoInterpretation').value === 'half');
+    state.quantizeDirty = true;
+    state.alignmentConfirmed = false;
+    state.mapVariant = 'source';
+    setVariant('source');
     renderTracks(); renderLoudness(); renderAiDetection();
-    rebuildMap(); toast(`Analisi completata · confidenza ${state.project.analysis.confidence}%`);
+    rebuildMap(); updateWorkflow();
+    toast(state.rhythm.quantizable ? `Analisi completata · confidenza ${state.project.analysis.confidence}%`
+      : 'Il brano non è quantizzabile automaticamente: pulsazione troppo incerta. Puoi saltare la quantizzazione.', !state.rhythm.quantizable);
   } catch (e) { toast(e.message, true); } finally { busy(false); }
 }
 
-function rebuildMap() {
-  const anchors = normalizedBeatAnchors(state.beats);
-  if (anchors.length < 2) return;
-  const targetBpm = Math.round(Math.max(40, Math.min(240, Number($('#targetBpm').value) || 120)));
-  $('#targetBpm').value = targetBpm;
-  const targetBeat = 60 / targetBpm;
-  const first = anchors[0];
-  state.map = [{ source: 0, target: 0 }, ...anchors.map((source, i) => ({
-    source, target: first + i * targetBeat
-  }))];
-  const duration = state.buffer?.duration || state.master.duration;
-  const last = state.map[state.map.length - 1];
-  if (last.source < duration) state.map.push({
-    source: duration, target: last.target + (duration - last.source)
-  });
-  updateMetrics(state.project.analysis?.detectedBpm);
-  draw();
+function interpretedBpm() {
+  const bpm = AIQrhythm.estimateTempo({ beats: state.beats, downbeats: state.downbeats }).bpm;
+  return $('#tempoInterpretation').value === 'half' ? bpm / 2 : bpm;
 }
 
-function normalizedBeatAnchors(input) {
-  const beats = [...new Set(input.map(Number).filter(Number.isFinite))].sort((a, b) => a - b);
-  if (beats.length < 3) return beats;
-  const intervals = beats.slice(1).map((v, i) => v - beats[i]).filter(v => v > .2 && v < 1.5).sort((a, b) => a - b);
-  const period = intervals[Math.floor(intervals.length / 2)];
-  const result = [beats[0]];
-  for (let i = 1; i < beats.length; i++) {
-    const previous = result[result.length - 1], gap = beats[i] - previous;
-    if (gap < period * .52) continue;
-    const steps = Math.max(1, Math.round(gap / period));
-    if (steps > 1 && gap / steps > period * .72 && gap / steps < period * 1.28) {
-      for (let step = 1; step < steps; step++) result.push(previous + gap * step / steps);
-    }
-    result.push(beats[i]);
-  }
-  return result;
+function roundBpm(value) {
+  return Math.round(value);
+}
+
+function setTempoBounds() {
+  const halfTime = $('#tempoInterpretation').value === 'half';
+  $('#targetBpm').min = halfTime ? '20' : '40';
+  $('#targetBpm').max = halfTime ? '120' : '240';
+  $('#targetBpm').step = '1';
+}
+
+function rebuildMap() {
+  if (!state.master) return;
+  const halfTime = $('#tempoInterpretation').value === 'half';
+  setTempoBounds();
+  const targetBpm = roundBpm(Math.max(halfTime ? 20 : 40, Math.min(halfTime ? 120 : 240, Number($('#targetBpm').value) || 120)));
+  $('#targetBpm').value = targetBpm;
+  const duration = state.buffer?.duration || state.master.duration;
+  const analysis = { ...state.project.analysis, beats: state.beats, downbeats: state.downbeats };
+  const sourceBpm = AIQrhythm.estimateTempo(analysis).bpm;
+  state.rhythm = AIQrhythm.buildMap(analysis, duration, sourceBpm, targetBpm * (halfTime ? 2 : 1));
+  state.map = state.rhythm.quantizable ? state.rhythm.points : [];
+  $('#rhythmStatus').textContent = state.rhythm.quantizable
+    ? `Pulsazione utilizzabile: ${Math.round(state.rhythm.coverage * 100)}%. Le zone senza riferimenti seguono solo il cambio BPM globale, senza correzioni locali.`
+    : 'Il brano non è quantizzabile automaticamente: pulsazione troppo incerta. Puoi saltare la quantizzazione.';
+  updateMetrics(interpretedBpm());
+  draw();
 }
 
 function corrections() {
@@ -465,8 +480,9 @@ function sourceToTarget(time, points = state.map) {
 
 function alignmentPlan() {
   const enabled = $('#alignEnabled').checked;
-  const bpm = Math.round(Number($('#targetBpm').value) || 120);
-  const barDuration = 240 / bpm;
+  const bpm = Number($('#targetBpm').value) || 120;
+  const meter = state.project?.analysis?.meter || 4;
+  const barDuration = meter * 60 / bpm;
   const referenceSource = state.downbeats[0] ?? state.beats[0] ?? 0;
   const referenceTarget = $('#moduleQuantize').checked ? sourceToTarget(referenceSource) : referenceSource;
   const lower = Math.floor(referenceTarget / barDuration) * barDuration;
@@ -530,17 +546,26 @@ function drawAlignment() {
 async function saveAndProcess(alignmentReviewed = false) {
   // DOM click events are not a confirmation of the alignment step.
   alignmentReviewed = alignmentReviewed === true;
+  if ($('#moduleQuantize').checked && state.project.analysis
+    && state.project.analysis.rhythmVersion !== AIQrhythm.VERSION)
+    return toast('Mappa precedente: esegui Analisi Smart per aggiornarla prima di quantizzare.', true);
+  if ($('#moduleQuantize').checked && state.project.analysis && !state.rhythm) rebuildMap();
   if (!$('#moduleQuantize').checked && state.master) {
     const duration = state.buffer?.duration || state.master.duration;
     state.map = [{ source: 0, target: 0 }, { source: duration, target: duration }];
   }
-  if (state.map.length < 2) return toast('Analizza prima il brano', true);
+  if (state.map.length < 2) return toast(state.rhythm && !state.rhythm.quantizable
+    ? 'Il brano non è quantizzabile automaticamente: pulsazione troppo incerta. Puoi saltare la quantizzazione.'
+    : 'Analizza prima il brano', true);
   busy(true, 'Quantizzazione di master e stem', 'Applico a tutte le tracce una sola timeline, conservando il pitch.');
   try {
     const warpPayload = confirmUnsafe => ({ points: state.map, estimatedBpm: Number($('#detectedBpm').textContent),
         confidence: state.project.analysis?.confidence, engine: state.project.analysis?.engine, settings: {
-        targetBpm: Math.round(Number($('#targetBpm').value))
-      }, sourceDuration: state.buffer?.duration || state.master.duration,
+        targetBpm: roundBpm(Number($('#targetBpm').value)), tempoInterpretation: $('#tempoInterpretation').value,
+        targetBpmAutomatic: state.targetBpmAutomatic === true
+      }, rhythmVersion: AIQrhythm.VERSION,
+      rhythmBeats: state.beats,
+      sourceDuration: state.buffer?.duration || state.master.duration,
       alignment: alignmentPlan(), modules: moduleFlags(), alignmentReviewed: alignmentReviewed || state.alignmentConfirmed, confirmUnsafe });
     const saveWarpMap = confirmUnsafe => request(`/music/ai-quantizer/api/projects/${state.project.id}/warp-map`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
@@ -892,9 +917,24 @@ $$('[data-map-variant]').forEach(button => button.onclick = () => {
   draw();
 });
 $('#targetBpm').onchange = () => {
+  state.targetBpmAutomatic = false;
+  $('#targetBpm').value = roundBpm(Number($('#targetBpm').value) || 120);
   state.quantizeDirty = true; state.alignmentConfirmed = false;
   if (state.project.workflow) state.project.workflow.alignmentReviewed = false;
   rebuildMap(); updateWorkflow();
+  state.normalTargetBpm = Number($('#targetBpm').value) * ($('#tempoInterpretation').value === 'half' ? 2 : 1);
+};
+$('#tempoInterpretation').onchange = () => {
+  const half = $('#tempoInterpretation').value === 'half';
+  const automatic = state.targetBpmAutomatic === true;
+  const normalTarget = state.normalTargetBpm ?? roundBpm(Number($('#targetBpm').value) * (half ? 1 : 2));
+  $('#targetBpm').value = automatic
+    ? AIQrhythm.suggestedTargetBpm({ ...state.project.analysis, beats: state.beats, downbeats: state.downbeats },
+      state.buffer?.duration || state.master.duration, half)
+    : roundBpm(normalTarget * (half ? .5 : 1));
+  $('#targetBpm').onchange();
+  state.targetBpmAutomatic = automatic;
+  state.normalTargetBpm = normalTarget;
 };
 $('#measureLoudness').onclick = measureLoudness;
 $('#renderMaster').onclick = renderMaster;

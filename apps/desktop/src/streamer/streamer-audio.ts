@@ -25,6 +25,8 @@ export class StreamerAudioRuntime {
   private generation = 0; private localLoadGeneration = 0; private disposed = false; private nativeCapture = false; private volume = .8;
   private preparation: Promise<void> | null = null;
   private captureInfo: CaptureInfo | null = null;
+  private pcmListeners = new Set<(pcm: Float32Array, sampleRate: number) => void>();
+  subscribePcm(listener: (pcm: Float32Array, sampleRate: number) => void) { this.pcmListeners.add(listener); return () => { this.pcmListeners.delete(listener); }; }
   onCaptureStatus: (state: string, message?: string) => void = () => undefined;
   onCaptureInfo: (info: CaptureInfo | null) => void = () => undefined;
   constructor() {
@@ -32,7 +34,14 @@ export class StreamerAudioRuntime {
     this.worker.onmessage = (event: MessageEvent<AnalysisFrame>) => { if (this.disposed) return; this.frame = event.data; this.receivedAt = performance.now(); };
     this.worker.onerror = () => this.onCaptureStatus("error", "Audio analysis worker failed");
   }
-  private push(pcm: Float32Array, sampleRate: number) { if (!this.disposed) this.worker.postMessage({ type: "pcm", pcm, sampleRate }, [pcm.buffer]); }
+  private push(pcm: Float32Array, sampleRate: number) {
+    if (this.disposed) return;
+    for (const listener of this.pcmListeners) {
+      try { listener(pcm, sampleRate); }
+      catch (error) { this.pcmListeners.delete(listener); console.warn("[Streamer] PCM subscriber stopped", error); }
+    }
+    this.worker.postMessage({ type: "pcm", pcm, sampleRate }, [pcm.buffer]);
+  }
   private prepare(): Promise<void> {
     if (!this.preparation) this.preparation = this.prepareOnce().finally(() => { this.preparation = null; });
     return this.preparation;
@@ -118,5 +127,5 @@ export class StreamerAudioRuntime {
     if (this.nativeCapture) { this.nativeCapture = false; await invoke("streamer_stop_capture").catch(error => this.onCaptureStatus("error", String(error))); }
     if (this.route === "capture") { this.route = "none"; this.tap?.disconnect(); this.onCaptureStatus("stopped"); }
   }
-  async dispose() { this.disposed = true; ++this.localLoadGeneration; this.audio.pause(); this.audio.removeAttribute("src"); this.audio.load(); await this.stopCapture(); this.disconnectRoute(); this.worker.terminate(); await this.preparation?.catch(() => undefined); await this.context?.close().catch(() => undefined); if (this.objectUrl) URL.revokeObjectURL(this.objectUrl); }
+  async dispose() { this.disposed = true; this.pcmListeners.clear(); ++this.localLoadGeneration; this.audio.pause(); this.audio.removeAttribute("src"); this.audio.load(); await this.stopCapture(); this.disconnectRoute(); this.worker.terminate(); await this.preparation?.catch(() => undefined); await this.context?.close().catch(() => undefined); if (this.objectUrl) URL.revokeObjectURL(this.objectUrl); }
 }

@@ -4,12 +4,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const html = readFileSync(resolve('tools/ai-quantizer/public/index.html'), 'utf8');
 const script = readFileSync(resolve('tools/ai-quantizer/public/app.js'), 'utf8');
+const rhythmScript = readFileSync(resolve('tools/ai-quantizer/public/rhythm.cjs'), 'utf8');
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
 function boot() {
   document.body.innerHTML = new DOMParser().parseFromString(html, 'text/html').body.innerHTML;
+  new Function(rhythmScript)();
   const fetcher = vi.fn(async (url: string) => new Response(JSON.stringify(url.endsWith('/health') ? { ok: true } : []), { headers: { 'content-type': 'application/json' } }));
-  const app = new Function('fetch', 'requestAnimationFrame', `${script}\nreturn { state, showModule, updateWorkflow, downloadArchive, setVariant, setRestoreVariant, draw, sourceToTarget, saveAndProcess, applyAlignment, openProject, persistModuleChoice, createProject, openProjectDialog };`)(fetcher, (callback: () => void) => callback());
+  const app = new Function('fetch', 'requestAnimationFrame', `${script}\nreturn { state, rebuildMap, interpretedBpm, showModule, updateWorkflow, downloadArchive, setVariant, setRestoreVariant, draw, sourceToTarget, saveAndProcess, applyAlignment, openProject, persistModuleChoice, createProject, openProjectDialog };`)(fetcher, (callback: () => void) => callback());
   const master = { id: 'track1', name: 'Song.wav', role: 'master', source: 'input.wav', duration: 3, output: 'output.wav', outputDuration: 3, processedAt: '2026-09-20T10:00:00Z' };
   app.state.project = { id: 'project1', name: 'Song', tracks: [master], settings: { targetBpm: 120 }, modules: { quantize: true, align: true, restoration: true, mastering: true, ai: false }, warpMap: { points: [{ source: 0, target: 0 }, { source: 1.1, target: 1 }, { source: 2.1, target: 2 }, { source: 3, target: 3 }] } };
   app.state.master = master;
@@ -30,6 +32,61 @@ beforeEach(() => {
 afterEach(async () => { await tick(); vi.restoreAllMocks(); document.body.innerHTML = ''; });
 
 describe('Music guided workflow', () => {
+  it('uses beat spacing instead of an inconsistent bar-derived BPM and preserves duration in half-time', () => {
+    const { app } = boot();
+    app.state.beats = Array.from({ length: 24 }, (_, i) => i * .5);
+    app.state.buffer.duration = 12;
+    app.state.master.duration = 12;
+    app.state.project.analysis = { detectedBpm: 240, confidence: 90 };
+    expect(app.interpretedBpm()).toBe(120);
+    app.rebuildMap();
+    const normal = JSON.parse(JSON.stringify(app.state.map));
+    expect(normal.at(-1)).toEqual({ source: 12, target: 12 });
+    expect(normal.filter((point: { source: number }) => point.source === 0)).toHaveLength(1);
+    const mode = document.querySelector('#tempoInterpretation') as HTMLSelectElement;
+    mode.value = 'half'; mode.dispatchEvent(new Event('change'));
+    expect(app.interpretedBpm()).toBe(60);
+    expect((document.querySelector('#targetBpm') as HTMLInputElement).value).toBe('60');
+    expect(app.state.map).toEqual(normal);
+    mode.value = 'normal'; mode.dispatchEvent(new Event('change'));
+    expect(app.state.map).toEqual(normal);
+  });
+
+  it.each([143, 142.87, 118.81])('keeps manual target %s integer in normal and half-time modes', (bpm) => {
+    const { app } = boot();
+    app.state.beats = Array.from({ length: 30 }, (_, i) => i * 60 / bpm);
+    app.state.master.duration = app.state.buffer.duration = 13;
+    app.state.project.analysis = { detectedBpm: 143, confidence: 90 };
+    const target = document.querySelector('#targetBpm') as HTMLInputElement;
+    target.value = String(bpm);
+    target.dispatchEvent(new Event('change'));
+    expect(target.value).toBe(String(Math.round(bpm)));
+    expect(target.step).toBe('1');
+    const normal = JSON.parse(JSON.stringify(app.state.map));
+    const mode = document.querySelector('#tempoInterpretation') as HTMLSelectElement;
+    mode.value = 'half'; mode.dispatchEvent(new Event('change'));
+    expect(target.value).toBe(String(Math.round(Math.round(bpm) / 2)));
+    expect(target.step).toBe('1');
+    mode.value = 'normal'; mode.dispatchEvent(new Event('change'));
+    expect(target.value).toBe(String(Math.round(bpm)));
+    expect(app.state.map).toEqual(normal);
+  });
+
+  it('recomputes an automatic half-time target from the original mean rather than halving its rounded integer', () => {
+    const { app } = boot();
+    app.state.beats = Array.from({ length: 40 }, (_, i) => i * 60 / 142.8);
+    app.state.master.duration = app.state.buffer.duration = 18;
+    app.state.targetBpmAutomatic = true;
+    (document.querySelector('#targetBpm') as HTMLInputElement).value = '143';
+    const mode = document.querySelector('#tempoInterpretation') as HTMLSelectElement;
+    mode.value = 'half'; mode.dispatchEvent(new Event('change'));
+    expect((document.querySelector('#targetBpm') as HTMLInputElement).value).toBe('71');
+    expect(app.state.targetBpmAutomatic).toBe(true);
+    mode.value = 'normal'; mode.dispatchEvent(new Event('change'));
+    expect((document.querySelector('#targetBpm') as HTMLInputElement).value).toBe('143');
+    expect(app.state.targetBpmAutomatic).toBe(true);
+  });
+
   it('keeps navigation separate from processing toggles and preserves every unique control', () => {
     boot();
     const ids = [...document.querySelectorAll('[id]')].map(node => node.id);
@@ -186,7 +243,8 @@ describe('Music guided workflow', () => {
   it('rebuilds beat corrections when re-enabling quantization after skipping it', async () => {
     const { app, fetcher } = boot();
     await tick();
-    app.state.beats = [0.5, 1.05, 1.6, 2.15];
+    app.state.beats = Array.from({ length: 30 }, (_, i) => .5 + i * .55);
+    app.state.master.duration = app.state.buffer.duration = 18;
     app.state.map = [{ source: 0, target: 0 }, { source: 3, target: 3 }];
     app.state.project.modules.quantize = false;
     const result = JSON.parse(JSON.stringify(app.state.project));

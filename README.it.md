@@ -185,7 +185,15 @@ Il lettore locale invia il PCM decodificato direttamente al motore condiviso di 
 
 Gli undici moduli includono spettro stereo, peak e true peak, LUFS, immagine stereo, correlazione di fase, spettrogramma, oscilloscopio, dinamica, distribuzione tonale, informazioni del brano e giradischi. Posizione, dimensione e visibilità dei moduli si salvano localmente. Le misure provengono dal segnale audio reale: se non è disponibile, l’interfaccia indica l’attesa del segnale.
 
-La cattura resta attiva solo nell’area Streamer e si interrompe quando si esce o si preme **Ferma cattura**. I dati PCM acquisiti sono analizzati sul dispositivo; non vengono registrati o inviati a servizi esterni. Nel browser la cattura di sistema è una modalità limitata, disponibile soltanto se il browser espone l’audio condiviso.
+Le copertine YouTube vengono ritagliate in un quadrato centrale, eliminando i lati del 16:9 e le bande delle miniature 4:3. **Onde reattive** nella barra dell’analisi attiva o disattiva una superficie d’acqua rosa condivisa: aperture stereo improvvise e forti variazioni peak/true peak generano più creste dai rispettivi widget. Le onde interferiscono prima dell’illuminazione e si smorzano gradualmente. La preferenza resta locale e vale anche a schermo intero; il rendering WebGL ha un fallback software con risorse limitate, rispetta il movimento ridotto e non modifica riproduzione o misure audio.
+
+La cattura resta attiva solo nell’area Streamer e si interrompe quando si esce o si preme **Ferma cattura**. I dati PCM acquisiti sono elaborati sul dispositivo, mai inviati a servizi esterni e registrati soltanto dopo consenso esplicito. Nel browser la cattura di sistema è disponibile soltanto se il browser espone l’audio condiviso.
+
+**Registra**, accanto a Play, prepara una registrazione locale: scegli la **scheda/finestra di MLSM Studio**, poi premi Play. Per YouTube/Spotify, abilita prima l’analisi audio di sistema. Pausa sospende la registrazione; Stop o la fine di una coda senza avanzamento automatico la finalizzano. I widget a schermo intero mantengono l’audio e vengono registrati normalmente. Le registrazioni offrono **Salva video** (con audio stereo) e **Salva audio WAV** (Float32 non compresso alla frequenza ricevuta, prima del volume di ascolto), e restano disponibili localmente riaprendo l’area. Eliminare una registrazione rimuove i suoi file locali, non il brano sorgente.
+
+La cattura video usa i permessi di condivisione schermo di Chrome/Edge su Mac e Windows; nei runtime dell’app non compatibili viene spiegato di aprire l’area nel browser. Vengono richiesti fino a 4K/60 fps e un codec ad alto bitrate (preferenza VP9/Opus, alternative VP8/MP4); l’interfaccia mostra dimensioni, FPS e bitrate effettivi. Non viene inventata qualità assente nella sorgente. I blocchi vengono scritti nell’archivio privato del browser, senza accumulare il video intero in RAM e senza finire nel repository. Mantieni spazio libero ed esporta le registrazioni importanti prima di cancellare i dati del sito/browser. Il WAV separato conserva i campioni ricevuti e non include gli intervalli privi di PCM. Registra soltanto sorgenti che sei autorizzato a utilizzare; nessun download o aggiramento di stream protetti.
+
+Il widget del giradischi include la trascrizione locale **Whisper-Streaming**: le parole provvisorie si correggono con l’arrivo di altro audio, poi vengono confermate. Apple Silicon usa MLX; Windows usa Faster-Whisper con CUDA quando supportata e ripiego CPU INT8. Il primo utilizzo prepara il motore e scarica i pesi multilingua mostrando l’avanzamento. Modelli e runtime ufficiale, fissato a una revisione verificata, restano nella cache esterna al repository. L’audio in attesa viene conservato; se il motore non riesce a tenere il passo viene mostrato un errore, senza saltare silenziosamente blocchi. La precisione sul cantato e il ritardo dipendono dal brano e dall’hardware. Disattivando il testo o uscendo dall’area si chiude il processo; una pausa lunga libera la memoria del modello.
 
 ### 12. Documentation
 
@@ -425,6 +433,12 @@ node tools/capture_documentation_screenshots.mjs
 Lo script usa Chrome headless sul build statico, salva le immagini in `docs/screenshots/` e chiude il processo al termine. Non avvia un server permanente.
 
 ## Packaging desktop
+
+Le build usano esplicitamente il logo originale MLSM: ICNS Retina per macOS, ICO multirisoluzione per Windows e PNG RGBA. Anche installer e disinstaller NSIS hanno il logo; gli script verificano gli asset prima della compilazione. Formati e configurazione seguono [Tauri App Icons](https://v2.tauri.app/develop/icons/).
+
+Install e launch generano un avviatore grafico con lo stesso logo: `scripts/macos/MLSM Studio.app` su Mac e `scripts/windows/MLSM Studio.lnk` su Windows. Doppio clic per avviare lo script originale nel terminale e mantenere visibili i log. Per crearli o aggiornarli senza avviare servizi, esegui `node tools/create_branded_launchers.cjs` dalla root del progetto. Gli script `.sh`/`.bat` rimangono disponibili e un errore nella creazione del launcher non ne impedisce l’uso.
+
+Gli avviatori sono locali e ignorati da Git perché contengono percorsi della macchina. Non vengono creati collegamenti sul Desktop automaticamente; puoi copiarvi l’avviatore generato. Se sposti il repository, rigeneralo. La procedura non sovrascrive app o collegamenti omonimi non creati da MLSM e non richiede nuove dipendenze npm. L’avviatore di sviluppo non sostituisce il pacchetto desktop installabile.
 
 ### macOS
 

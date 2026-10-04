@@ -1756,8 +1756,8 @@ def process_mlx_dlss_video_job(
     configuration = dict(job.get("providerConfig", {}))
     start_seconds = max(0.0, float(job.get("sourceStartSeconds", 0) or 0))
     preview_seconds = max(0.0, float(job.get("sourceDurationSeconds", 0) or 0))
+    start_frame = min(max(0, total - 1), int(round(start_seconds * source_fps)))
     if start_seconds or preview_seconds:
-        start_frame = min(max(0, total - 1), int(round(start_seconds * source_fps)))
         selected_frames = min(total - start_frame, max(1, int(round(preview_seconds * source_fps)))) if preview_seconds else total - start_frame
         configuration.update(startFrame=start_frame, frames=selected_frames)
         total = selected_frames
@@ -1778,28 +1778,39 @@ def process_mlx_dlss_video_job(
             elapsedSeconds=elapsed, estimatedRemainingSeconds=remaining,
         )
 
-    mlx_dlss.process_video(source, native_path, configuration, cancelled=lambda: video_job_cancelled(job_id), progress=report)
+    # NativeVideoWriter ends its AVAssetWriter session when video finishes,
+    # while the upstream audio task can still append samples (AVFoundation
+    # -11862). Keep native inference video-only; mux audio after it closes.
+    mlx_dlss.process_video(source, native_path, {**configuration, "audioPolicy": "mute"}, cancelled=lambda: video_job_cancelled(job_id), progress=report)
     if video_job_cancelled(job_id): raise InterruptedError("Job MLX-DLSS annullato")
     target_width, target_height = int(job["width"]), int(job["height"])
     geometry = probe_video_geometry(native_path)
     needs_resize = int(geometry["width"]) != target_width or int(geometry["height"]) != target_height
     replace_audio = configuration["audioPolicy"] == "replace"
-    if needs_resize or replace_audio:
-        update_video_job(job_id, phase="encoding", phaseLabel="Finalizzazione risoluzione e audio", progress=.93)
+    source_audio_packets = audio_packet_count(source)
+    preserve_audio = configuration["audioPolicy"] == "preserve" and source_audio_packets > 0
+    if needs_resize or replace_audio or preserve_audio:
+        update_video_job(job_id, phase="encoding", phaseLabel="Finalizzazione risoluzione e audio", progress=.96)
         video_codec = "prores_ks" if codec == "prores" else "hevc_videotoolbox" if codec == "hevc" else "h264_videotoolbox"
         command = [*upscaler_ffmpeg_prefix(binary), *upscaler_ffmpeg_codec_threads(), "-i", str(native_path)]
         replacement_path = Path(str(job.get("replacementAudioPath", "")))
-        if replace_audio:
-            if not replacement_path.is_file(): raise RuntimeError("Traccia audio sostitutiva non disponibile")
-            command += ["-i", str(replacement_path), "-map", "0:v:0", "-map", "1:a:0"]
+        if replace_audio or preserve_audio:
+            if replace_audio and not replacement_path.is_file(): raise RuntimeError("Traccia audio sostitutiva non disponibile")
+            audio_source = replacement_path if replace_audio else source
+            # Use exactly the same frame-aligned range as native inference.
+            # Re-encoding only the audio avoids keyframe/preroll offsets and
+            # supports source codecs that cannot be copied into MP4.
+            if start_frame > 0: command += ["-ss", str(start_frame / source_fps)]
+            command += ["-t", str(expected_duration), "-i", str(audio_source), "-map", "0:v:0", "-map", "1:a:0"]
+        else:
+            command += ["-map", "0:v:0", "-an"]
         if needs_resize:
             command += ["-vf", f"scale={target_width}:{target_height}:flags=lanczos,setsar=1", "-c:v", video_codec]
             if codec != "prores": command += ["-b:v", str(configuration.get("bitrate", "20000000"))]
         else:
             command += ["-c:v", "copy"]
-        command += ["-c:a", "aac" if replace_audio else "copy"]
-        if replace_audio: command += ["-shortest"]
-        command += ["-movflags", "+faststart", *upscaler_ffmpeg_codec_threads(), str(result_path)]
+        if replace_audio or preserve_audio: command += ["-c:a", "aac", "-b:a", "256k"]
+        command += ["-t", str(expected_duration), "-movflags", "+faststart", *upscaler_ffmpeg_codec_threads(), str(result_path)]
         run_checked(command, cancelled=lambda: video_job_cancelled(job_id))
         native_path.unlink(missing_ok=True)
     else:
@@ -1807,7 +1818,6 @@ def process_mlx_dlss_video_job(
     encoded_geometry = probe_video_geometry(result_path)
     encoded_frames = encoded_video_frame_count(result_path)
     encoded_duration = encoded_video_duration(result_path)
-    source_audio_packets = audio_packet_count(source)
     output_audio_packets = audio_packet_count(result_path)
     if configuration["audioPolicy"] == "preserve" and source_audio_packets and not output_audio_packets:
         raise RuntimeError("MLX-DLSS non ha conservato la traccia audio originale")

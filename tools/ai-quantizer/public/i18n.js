@@ -91,6 +91,13 @@
     'Scegli audio': 'Choose audio',
     'BPM rilevato': 'Detected BPM',
     'BPM obiettivo': 'Target BPM',
+    'Interpretazione ritmica': 'Rhythmic interpretation',
+    'Tempo normale': 'Normal time',
+    'Half-time · BPM dimezzato': 'Half-time · half BPM',
+    'Non cambia la velocità di riproduzione.': 'Does not change playback speed.',
+    'Il BPM obiettivo è sempre un numero intero.': 'Target BPM is always a whole number.',
+    'Mappa precedente: esegui Analisi Smart per aggiornarla prima di quantizzare.': 'Previous map: run Smart Analysis to update it before quantizing.',
+    'Il brano non è quantizzabile automaticamente: pulsazione troppo incerta. Puoi saltare la quantizzazione.': 'This song cannot be quantized automatically: the pulse is too uncertain. You can skip quantization.',
     'Confidenza analisi': 'Analysis confidence',
     'Correzione max': 'Maximum correction',
     'Timeline ritmica': 'Rhythm timeline',
@@ -273,6 +280,7 @@
   });
 
   const patterns = Object.freeze([
+    [/^Pulsazione utilizzabile: (\d+)%\. Le zone senza riferimenti seguono solo il cambio BPM globale, senza correzioni locali\.$/, (_match, percent) => `Usable pulse: ${percent}%. Untracked regions follow only the global BPM change, without local corrections.`],
     [/^Errore (\d+)$/, (_match, code) => `Error ${code}`],
     [/^Eliminare definitivamente “(.+)”\?$/, (_match, name) => `Permanently delete “${name}”?`],
     [/^Preview non disponibile: (.+)$/, (_match, error) => `Preview unavailable: ${translate(error)}`],

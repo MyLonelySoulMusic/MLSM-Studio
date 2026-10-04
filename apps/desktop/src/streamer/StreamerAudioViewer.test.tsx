@@ -15,6 +15,7 @@ vi.mock("../components/StudioSettings", () => ({ SettingsButton: () => null }));
 vi.mock("../components/ApplicationAssistant", () => ({ OPEN_LONELY_BOT_EVENT: "mlsm:open-lonely-bot" }));
 vi.mock("./AnalyzerGrid", () => ({ AnalyzerGrid: () => <div aria-label="Analysis grid" /> }));
 vi.mock("./AnalyzerCanvas", () => ({ AnalyzerCanvas: () => null }));
+vi.mock("./WaterSurface", () => ({ WaterSurface: () => <canvas aria-label="Shared water" /> }));
 vi.mock("./VinylTurntable", () => ({ VinylTurntable: () => null }));
 vi.mock("./ProviderPlayer", () => ({ ProviderPlayer: () => <div aria-label="Provider player" /> }));
 vi.mock("./streamer-providers", () => ({ loadProviderMetadata: vi.fn() }));
@@ -25,6 +26,7 @@ vi.mock("./streamer-audio", () => ({
     frame = null;
     receivedAt = 0;
     configure() {}
+    subscribePcm() { return () => undefined; }
     pause() {}
     reset() {}
     stopLocal() {}
@@ -86,6 +88,25 @@ describe("StreamerAudioViewer startup", () => {
     expect(opened).toHaveBeenCalledOnce();
   });
 
+  it("toggles a single shared water layer and remembers the choice, including fullscreen", async () => {
+    testState.loadQueue.mockResolvedValue({ tracks: [], currentId: null, autoAdvance: false, favorites: [] });
+    const mounted = render(<StreamerAudioViewer onHome={() => undefined} />);
+    await screen.findByLabelText("Shared water");
+    fireEvent.click(screen.getByRole("button", { name: /Onde reattive/ }));
+    expect(screen.queryByLabelText("Shared water")).not.toBeInTheDocument();
+    expect(localStorage.getItem("mlsm.streamer.water.v1")).toBe("off");
+    fireEvent.click(screen.getByRole("button", { name: /Widget a schermo intero/ }));
+    const toggle = screen.getByRole("banner").querySelector<HTMLButtonElement>(".sav-water-toggle")!;
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(toggle);
+    expect(screen.getAllByLabelText("Shared water")).toHaveLength(1);
+    expect(localStorage.getItem("mlsm.streamer.water.v1")).toBe("on");
+    fireEvent.click(toggle);
+    mounted.unmount();
+    render(<StreamerAudioViewer onHome={() => undefined} />);
+    expect(screen.getByRole("button", { name: /Onde reattive/ })).toHaveAttribute("aria-pressed", "false");
+  });
+
   it("expands the analyzer grid inside the app and returns with one action", async () => {
     testState.loadQueue.mockResolvedValue({ tracks: [{ id: "web-1", provider: "youtube", title: "Web stereo", url: "https://www.youtube.com/watch?v=test" }], currentId: "web-1", autoAdvance: false, favorites: [] });
     const open = vi.spyOn(window, "open");
@@ -97,10 +118,23 @@ describe("StreamerAudioViewer startup", () => {
     expect(screen.getByLabelText("Analysis grid")).toBeInTheDocument();
     expect(screen.getByLabelText("Provider player")).toBe(providerPlayer);
     expect(screen.getByRole("button", { name: "Play" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Registra" })).toHaveAttribute("aria-pressed", "false");
     expect(screen.queryByRole("button", { name: "← MLSM Studio" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Torna alla visualizzazione classica/ }));
     expect(screen.queryByRole("banner", { name: "Analizzatori a schermo intero" })).not.toBeInTheDocument();
     expect(screen.getByLabelText("Provider player")).toBe(providerPlayer);
     expect(screen.getByRole("button", { name: "← MLSM Studio" })).toBeInTheDocument();
+  });
+
+  it("keeps Record beside Play, off by default, and requires a received audio source for web recordings", async () => {
+    testState.loadQueue.mockResolvedValue({ tracks: [{ id: "web-1", provider: "youtube", title: "Web stereo", url: "https://www.youtube.com/watch?v=test" }], currentId: "web-1", autoAdvance: false, favorites: [] });
+    render(<StreamerAudioViewer onHome={() => undefined} />);
+    await screen.findByLabelText("Provider player");
+    const record = screen.getByRole("button", { name: "Registra" }), play = screen.getByRole("button", { name: "Play" });
+    expect(record).toHaveAttribute("aria-pressed", "false"); expect(play.nextElementSibling).toBe(record);
+    fireEvent.click(record);
+    expect(await screen.findByRole("alert")).toHaveTextContent("abilita l’analisi audio di sistema");
+    expect(record).toHaveAttribute("aria-pressed", "false"); expect(testState.startCapture).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Provider player")).toBeInTheDocument();
   });
 });

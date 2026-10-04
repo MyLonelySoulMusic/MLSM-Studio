@@ -7,6 +7,7 @@ const os = require('os');
 const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
 const { resolveTool } = require('../platform_tools.cjs');
+const rhythm = require('./public/rhythm.cjs');
 
 const ROOT = __dirname;
 const PUBLIC = path.join(ROOT, 'public');
@@ -42,7 +43,7 @@ function terminateChildren() {
 }
 
 const MIME = {
-  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
+  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.cjs': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8',
   '.wav': 'audio/wav', '.mp3': 'audio/mpeg', '.flac': 'audio/flac',
   '.m4a': 'audio/mp4', '.aac': 'audio/aac', '.ogg': 'audio/ogg',
@@ -70,13 +71,23 @@ function manifestPath(id) { return path.join(projectDir(id), 'project.json'); }
 
 async function readManifest(id) {
   const project = JSON.parse(await fsp.readFile(manifestPath(id), 'utf8'));
+  normalizeTargetBpm(project);
   reconcilePipeline(project);
   return project;
 }
 
 async function writeManifest(project) {
+  normalizeTargetBpm(project);
   project.updatedAt = new Date().toISOString();
   await fsp.writeFile(manifestPath(project.id), JSON.stringify(project, null, 2));
+}
+
+function normalizeTargetBpm(project) {
+  project.settings ||= {};
+  const halfTime = project.settings.tempoInterpretation === 'half';
+  const value = Number(project.settings.targetBpm);
+  project.settings.targetBpm = Math.round(Math.max(halfTime ? 20 : 40,
+    Math.min(halfTime ? 120 : 240, Number.isFinite(value) && value > 0 ? value : 120)));
 }
 
 function clearAiStages(project, stages) {
@@ -670,7 +681,21 @@ async function api(req, res, url) {
   if (parts[3] === 'warp-map' && req.method === 'PUT') {
     const input = await bodyJson(req);
     const project = await readManifest(id);
-    const points = (input.points || []).map(p => ({
+    const halfTime = input.settings?.tempoInterpretation === 'half';
+    const requestedBpm = Number(input.settings?.targetBpm);
+    const targetBpm = Number.isFinite(requestedBpm) && requestedBpm > 0
+      ? Math.round(Math.max(halfTime ? 20 : 40, Math.min(halfTime ? 120 : 240, requestedBpm)))
+      : project.settings.targetBpm;
+    let verifiedRhythm = null;
+    if (project.analysis && input.modules?.quantize !== false) {
+      const master = project.tracks.find(track => track.role === 'master');
+      const analysis = { ...project.analysis,
+        beats: Array.isArray(input.rhythmBeats) ? input.rhythmBeats : project.analysis.beats };
+      const sourceBpm = rhythm.estimateTempo(analysis).bpm;
+      verifiedRhythm = rhythm.buildMap(analysis, master.duration, sourceBpm, targetBpm * (halfTime ? 2 : 1));
+      if (!verifiedRhythm.quantizable) throw new Error(UNQUANTIZABLE_ERROR);
+    }
+    const points = (verifiedRhythm?.points || input.points || []).map(p => ({
       source: Number(p.source), target: Number(p.target)
     })).filter(p => Number.isFinite(p.source) && Number.isFinite(p.target))
       .sort((a, b) => a.source - b.source);
@@ -686,14 +711,15 @@ async function api(req, res, url) {
     }
     if (maxUnsafeCorrection > 12 && input.confirmUnsafe !== true)
       throw new Error(`CONFERMA_WARP: correzione locale fino al ${Math.round(maxUnsafeCorrection)}%, oltre il limite consigliato`);
-    const requestedBpm = Number(input.settings?.targetBpm);
     project.settings = {
       ...project.settings, ...input.settings,
-      targetBpm: Number.isFinite(requestedBpm) ? Math.round(Math.max(40, Math.min(240, requestedBpm))) : project.settings.targetBpm
+      targetBpm
     };
     project.warpMap = {
       points, estimatedBpm: Number(input.estimatedBpm), confidence: Number(input.confidence),
       engine: input.engine || 'unknown', maximumLocalCorrection: maxUnsafeCorrection,
+      rhythmVersion: verifiedRhythm ? rhythm.VERSION : null,
+      rhythmCoverage: verifiedRhythm?.coverage ?? null,
       unsafeConfirmed: maxUnsafeCorrection > 12,
       sourceDuration: Number(input.sourceDuration) > 0
         ? Number(input.sourceDuration)
@@ -741,11 +767,14 @@ async function api(req, res, url) {
     const analysis = await runJson(PYTHON, [
       path.join(ROOT, 'audio_engine', 'analyze.py'), path.join(projectDir(id), master.source)
     ]);
-    if (analysis.beats.length < 16 || analysis.downbeats.length < 4)
-      throw new Error('Pulsazione non sufficientemente affidabile per la quantizzazione automatica');
-    project.analysis = { ...analysis, analyzedAt: new Date().toISOString() };
+    const tempo = rhythm.estimateTempo(analysis);
+    const checked = rhythm.buildMap(analysis, master.duration, tempo.bpm, tempo.bpm);
+    project.analysis = { ...analysis, detectedBpm: tempo.bpm, meanBpm: rhythm.meanTempo(analysis, master.duration), meter: tempo.meter,
+      rhythmVersion: rhythm.VERSION, quantizable: checked.quantizable,
+      rhythmCoverage: checked.coverage, analyzedAt: new Date().toISOString() };
     project.warpMap = null;
-    project.settings.targetBpm = Math.round(analysis.detectedBpm);
+    project.settings.targetBpm = rhythm.suggestedTargetBpm(analysis, master.duration, project.settings.tempoInterpretation === 'half');
+    project.settings.targetBpmAutomatic = true;
     invalidateFromWarpMap(project);
     await writeManifest(project);
     return json(res, 200, project);
@@ -754,6 +783,8 @@ async function api(req, res, url) {
     const input = await bodyJson(req);
     const project = await readManifest(id);
     if (!project.warpMap) throw new Error('Analizza e salva prima la beat map');
+    if (project.modules?.quantize !== false && project.analysis && project.warpMap.rhythmVersion !== rhythm.VERSION)
+      throw new Error('Mappa precedente: esegui Analisi Smart per aggiornarla prima di quantizzare.');
     const requestedIds = Array.isArray(input.trackIds)
       ? new Set(input.trackIds.map(safeId))
       : new Set(input.trackId ? [safeId(input.trackId)] : []);

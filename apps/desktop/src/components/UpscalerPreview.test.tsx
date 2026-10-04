@@ -147,6 +147,41 @@ describe("UpscalerPreview video export", () => {
     expect(revokeUrl).toHaveBeenCalledWith("blob:remote-result");
   });
 
+  it.each(["mp4", "mov"])("salva la prova MLX-DLSS %s senza rielaborarla e mantiene separato il video completo", async (extension) => {
+    vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
+    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
+    const blob = new Blob(["dlss-preview"], { type: extension === "mov" ? "video/quicktime" : "video/mp4" });
+    const fileName = `dlss-preview.${extension}`;
+    const resultPath = `/cache/preview/${fileName}`;
+    exportUpscaledVideo.mockResolvedValueOnce({ blob, fileName, width: 1280, height: 720, sourceFrameCount: 180, encodedFrameCount: 180, audioPacketCount: 128, resultPath });
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:dlss-preview") });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
+    const settings = { ...createProject().animation.upscaler, provider: "mlx-dlss" as const, sourceUrl: "blob:dlss-source", sourceName: "source.mp4", sourceKind: "video" as const, sourceWidth: 1280, sourceHeight: 720, durationSeconds: 12 };
+    const { container } = render(<UpscalerPreview settings={settings} />);
+    fireEvent.loadedData(container.querySelector("video")!);
+    expect(screen.queryByRole("button", { name: /Salva prova/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Prova 3 secondi" }));
+    const save = await screen.findByRole("button", { name: `Salva prova ${extension.toUpperCase()}` });
+    expect(exportUpscaledVideo).toHaveBeenCalledOnce();
+    expect(exportUpscaledVideo.mock.calls[0]?.[0]).toMatchObject({ sourceDurationSeconds: 3, suppressDownload: true });
+
+    chooseUpscalerVideoSaveTarget.mockResolvedValueOnce(null);
+    fireEvent.click(save);
+    await waitFor(() => expect(useUpscalerBatchStore.getState().singleOperations).toBe(0));
+    expect(saveUpscalerVideoArtifact).not.toHaveBeenCalled();
+    expect(exportUpscaledVideo).toHaveBeenCalledOnce();
+
+    fireEvent.click(await screen.findByRole("button", { name: `Salva prova ${extension.toUpperCase()}` }));
+    await waitFor(() => expect(saveUpscalerVideoArtifact).toHaveBeenCalledWith({ kind: "download" }, expect.objectContaining({ blob, fileName, resultPath, previewOnly: true })));
+    expect(chooseUpscalerVideoSaveTarget).toHaveBeenCalledWith(fileName);
+    expect(exportUpscaledVideo).toHaveBeenCalledOnce();
+    await waitFor(() => expect(useUpscalerBatchStore.getState().singleOperations).toBe(0));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Avvia upscaling video completo" }));
+    await waitFor(() => expect(exportUpscaledVideo).toHaveBeenCalledTimes(2));
+    expect(exportUpscaledVideo.mock.calls[1]?.[0]).not.toHaveProperty("sourceDurationSeconds");
+  });
+
   it("annulla il job remoto quando la pagina viene aggiornata", async () => {
     vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
     vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);

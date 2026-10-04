@@ -2,6 +2,27 @@
 
 Gli script nativi sono separati per sistema operativo e partono sempre dalla root del repository, anche quando vengono invocati da un’altra directory.
 
+## Logo e launcher grafici
+
+Le build desktop usano esplicitamente il logo originale MLSM: ICNS multirisoluzione fino a 1024px per Mac, ICO con livelli da 16 a 256px per Windows e PNG RGBA per Tauri. Anche installer e disinstaller NSIS Windows usano il logo. Prima del packaging, `tools/verify_brand_assets.cjs` verifica formati, risoluzioni e riferimenti della configurazione: un asset mancante o corrotto interrompe la build con un errore leggibile.
+
+Install e launch creano/aggiornano questi avviatori con il logo:
+
+- macOS: `scripts/macos/MLSM Studio.app` — doppio clic nel Finder; apre Terminale ed esegue il normale `launch.sh`.
+- Windows: `scripts/windows/MLSM Studio.lnk` — doppio clic in Esplora file; esegue `launch.bat` con percorsi quotati e mantiene aperto il terminale per i log.
+
+Per crearli o rigenerarli senza avviare l’app:
+
+```bash
+node tools/create_branded_launchers.cjs
+```
+
+Sono generati per la macchina corrente e ignorati da Git perché contengono il percorso del checkout. Non vengono creati collegamenti sul Desktop automaticamente. Puoi copiare l’avviatore sul Desktop; non spostare il repository dopo averlo creato, oppure rigeneralo. Gli script `.sh` e `.bat` originali rimangono disponibili: l’icona è sull’avviatore nativo, non un’associazione globale del tipo di file.
+
+La generazione non richiede nuove dipendenze npm e non avvia Vite o backend. Gli aggiornamenti sono idempotenti e non sovrascrivono app o collegamenti omonimi non creati da MLSM. Un fallimento della generazione viene segnalato ma non blocca l’installazione o l’avvio tramite gli script. Il launcher di sviluppo con logo non sostituisce l’app Tauri installabile: DMG, NSIS e MSI continuano a essere prodotti dai build script.
+
+Configurazione dei formati nativi: [Tauri App Icons](https://v2.tauri.app/develop/icons/).
+
 ```text
 scripts/
 ├── macos/

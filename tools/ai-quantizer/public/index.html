@@ -73,6 +73,9 @@
           <div><span>Correzione max</span><strong id="maxCorrection">—</strong></div>
         </div>
 
+        <div class="tempo-options"><label for="tempoInterpretation">Interpretazione ritmica</label><select id="tempoInterpretation"><option value="normal">Tempo normale</option><option value="half">Half-time · BPM dimezzato</option></select><small>Il BPM obiettivo è sempre un numero intero.</small></div>
+        <p id="rhythmStatus" class="mapping-caption" role="status"></p>
+
         <section class="panel timeline-panel">
           <div class="panel-head"><div><p class="eyebrow">WARP MAP</p><h3>Timeline ritmica</h3></div>
             <div class="timeline-tools">
@@ -240,6 +243,7 @@
   <div id="busy" class="busy hidden" role="status" aria-live="polite" tabindex="-1"><div class="spinner"></div><strong id="busyTitle">Elaborazione audio</strong><span id="busyText">Questa operazione può richiedere qualche minuto.</span><div id="zipProgressArea" class="busy-progress hidden"><progress id="zipProgress" max="100" value="0"></progress><span id="zipProgressText">Preparazione archivio…</span></div></div>
   <script src="./i18n.js"></script>
   <script>document.documentElement.dataset.theme=new URLSearchParams(location.search).get("theme")||parent.documentElement.dataset.theme||"day";</script>
+  <script src="./rhythm.cjs"></script>
   <script src="./app.js"></script>
 </body>
 </html>

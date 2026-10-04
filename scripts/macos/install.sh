@@ -46,6 +46,7 @@ run node tools/setup_python_runtime.cjs audio-tts
 run cargo fetch --manifest-path apps/desktop/src-tauri/Cargo.toml
 if [[ "$DRY_RUN" == 0 ]]; then node tools/verify_installation.cjs; fi
 run chmod +x scripts/macos/install.sh scripts/macos/launch.sh scripts/macos/build.sh scripts/macos/setup-ai-quantizer.sh scripts/macos/setup-upscaler.sh
+run node tools/create_branded_launchers.cjs || echo "Avviso: launcher con logo non creato. Rigeneralo con node tools/create_branded_launchers.cjs" >&2
 
 if [[ "$DRY_RUN" == 1 ]]; then
   echo "Dry-run completata: nessuna modifica eseguita."

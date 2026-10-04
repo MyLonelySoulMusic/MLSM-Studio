@@ -44,6 +44,8 @@ def main():
     beat_period = robust_median(beat_intervals)
     bar_period = robust_median(bar_intervals)
     bpm_from_beats = 60.0 / beat_period if beat_period else 0.0
+    # Keep the original estimate. The shared rhythm validator resolves meter
+    # and builds compatible beat positions instead of counting all peaks alike.
     bpm_from_bars = 240.0 / bar_period if bar_period else 0.0
     bpm = bpm_from_bars if 55 <= bpm_from_bars <= 190 else bpm_from_beats
 

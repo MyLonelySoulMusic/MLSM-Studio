@@ -15,6 +15,10 @@ coverage/
 # Non è uno stato di release e non deve essere condivisa tra Mac e Windows.
 *.tsbuildinfo
 
+# Launcher con logo generati localmente: contengono percorsi specifici della macchina.
+/scripts/macos/MLSM Studio.app/
+/scripts/windows/MLSM Studio.lnk
+
 # File di sessione effimeri creati da database aperti con `:memory:`.
 # Il carattere `:` rende questi percorsi impossibili da estrarre su Windows/NTFS.
 /:memory:*.ses
@@ -69,4 +73,3 @@ temp/
 /img/avatar-*
 /apps/desktop/public/.avatar3d-private/
 /apps/desktop/public/avatar3d-models/
-

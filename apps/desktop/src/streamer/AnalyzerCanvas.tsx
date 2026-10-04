@@ -15,8 +15,9 @@ export const analyzerPalette = (theme: UiTheme) => theme === "night" ? {
   soft: "#e6e0e4", softAccent: "#d899b4", guide: "#9a8c96", stereoCenter: "#f8f3f6", stereoMid: "#eee8ed", stereoEdge: "#e3dce2"
 };
 const format = (n: number, digits = 1) => Number.isNaN(n) ? "—" : Number.isFinite(n) ? n.toFixed(digits) : "−∞";
-export function AnalyzerCanvas({ kind, runtime, freeze = false, language, speed = 2, theme }: { kind: AnalyzerKind; runtime: StreamerAudioRuntime; freeze?: boolean; language: "it" | "en"; speed?: number; theme: UiTheme }) {
+export function AnalyzerCanvas({ kind, runtime, freeze = false, language, speed = 2, theme, water = false }: { kind: AnalyzerKind; runtime: StreamerAudioRuntime; freeze?: boolean; language: "it" | "en"; speed?: number; theme: UiTheme; water?: boolean }) {
   const ref = useRef<HTMLCanvasElement>(null), freezeRef = useRef(freeze); freezeRef.current = freeze;
+  const waterRef = useRef(water); waterRef.current = water;
   useEffect(() => {
     const canvas = ref.current; if (!canvas) return; const ctx = canvas.getContext("2d"); if (!ctx) return;
     const palette = analyzerPalette(theme);
@@ -31,17 +32,19 @@ export function AnalyzerCanvas({ kind, runtime, freeze = false, language, speed 
       animation = requestAnimationFrame(draw); if (!visible || document.hidden || !ctx || !canvas) return;
       const dt = Math.min(.1, (time - lastDraw) / 1000 || .016); lastDraw = time;
       const { width: w, height: h } = canvas.getBoundingClientRect(); if (!w || !h) return;
+      const withWater = waterRef.current;
       ctx.setTransform(canvas.width / w, 0, 0, canvas.height / h, 0, 0);
       if (!freezeRef.current) frozen = runtime.frame;
       const f = frozen; const fresh = !!f && (freezeRef.current || time - runtime.receivedAt < 250);
       const x0 = 40, y0 = 20, pw = Math.max(1, w - 55), ph = Math.max(1, h - 50);
       const text = (value: string, x: number, y: number, size = 11, color = palette.muted, align: CanvasTextAlign = "left") => { ctx.font = `${size >= 20 ? "600 " : ""}${size}px ui-monospace, SFMono-Regular, monospace`; ctx.fillStyle = color; ctx.textAlign = align; ctx.fillText(value, x, y); };
       const line = (x1: number, y1: number, x2: number, y2: number, color = palette.grid) => { ctx.beginPath(); ctx.strokeStyle = color; ctx.lineWidth = 1; ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); };
+      if (withWater) ctx.clearRect(0, 0, w, h);
       if (kind === "stereo") {
         const background = ctx.createRadialGradient(w / 2, h * .48, 0, w / 2, h * .48, Math.max(w, h) * .68);
         background.addColorStop(0, palette.stereoCenter); background.addColorStop(.58, palette.stereoMid); background.addColorStop(1, palette.stereoEdge);
-        ctx.fillStyle = background; ctx.fillRect(0, 0, w, h);
-      } else { ctx.fillStyle = palette.background; ctx.fillRect(0, 0, w, h); }
+        ctx.save(); ctx.globalAlpha = withWater ? .24 : 1; ctx.fillStyle = background; ctx.fillRect(0, 0, w, h); ctx.restore();
+      } else if (!withWater) { ctx.fillStyle = palette.background; ctx.fillRect(0, 0, w, h); }
       const frequencyX = (hz: number) => x0 + Math.log(hz / 20) / Math.log(Math.min(20000, (f?.sampleRate ?? 48000) / 2) / 20) * pw;
       if (kind === "spectrum" || kind === "waveform" || kind === "spectrogram") {
         for (let d = 0; d <= 4; d++) { const y = y0 + d * ph / 4; line(x0, y, x0 + pw, y); text(kind === "waveform" ? (1 - d / 2).toFixed(1) : String(-d * 24), 5, y + 4); }
@@ -105,5 +108,5 @@ export function AnalyzerCanvas({ kind, runtime, freeze = false, language, speed 
     animation = requestAnimationFrame(draw);
     return () => { cancelAnimationFrame(animation); resize.disconnect(); observer.disconnect(); canvas.removeEventListener("pointermove", pointer); canvas.removeEventListener("pointerleave", leave); };
   }, [kind, runtime, language, speed, theme]);
-  return <canvas ref={ref} className="sav-canvas" role="img" aria-label={`${kind} · ${language === "it" ? "analisi audio stereo in tempo reale" : "live stereo audio analysis"}`} />;
+  return <canvas ref={ref} className="sav-canvas" data-ripple-source={kind === "stereo" || kind === "peaks" ? kind : undefined} role="img" aria-label={`${kind} · ${language === "it" ? "analisi audio stereo in tempo reale" : "live stereo audio analysis"}`} />;
 }

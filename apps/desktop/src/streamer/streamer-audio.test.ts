@@ -56,4 +56,31 @@ describe("StreamerAudioRuntime lifecycle", () => {
     expect(invoke).not.toHaveBeenCalled();
     await runtime.dispose();
   });
+
+  it("taps the untouched stereo PCM before transferring it to the analyzer", async () => {
+    const { StreamerAudioRuntime } = await import("./streamer-audio");
+    const runtime = new StreamerAudioRuntime();
+    const internal = runtime as unknown as { push(pcm: Float32Array, rate: number): void; worker: FakeWorker };
+    const pcm = new Float32Array([.1, -.3, .2, -.4]);
+    const subscriber = vi.fn((audio: Float32Array, rate: number) => {
+      expect(internal.worker.postMessage).not.toHaveBeenCalled();
+      expect(audio).toBe(pcm); expect(rate).toBe(48000);
+    });
+    runtime.subscribePcm(subscriber); internal.push(pcm, 48000);
+    expect(subscriber).toHaveBeenCalledOnce();
+    expect(internal.worker.postMessage).toHaveBeenCalledWith({ type: "pcm", pcm, sampleRate: 48000 }, [pcm.buffer]);
+    expect(Array.from(pcm)).toEqual(Array.from(new Float32Array([.1, -.3, .2, -.4])));
+    await runtime.dispose(); internal.push(pcm, 48000); expect(subscriber).toHaveBeenCalledOnce();
+  });
+
+  it("does not interrupt analysis if a transcript subscriber fails", async () => {
+    const { StreamerAudioRuntime } = await import("./streamer-audio");
+    const runtime = new StreamerAudioRuntime();
+    const internal = runtime as unknown as { push(pcm: Float32Array, rate: number): void; worker: FakeWorker };
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const broken = vi.fn(() => { throw new Error("subscriber failed"); }); runtime.subscribePcm(broken);
+    internal.push(new Float32Array(4), 48000); internal.push(new Float32Array(4), 48000);
+    expect(internal.worker.postMessage).toHaveBeenCalledTimes(2); expect(broken).toHaveBeenCalledOnce();
+    warning.mockRestore(); await runtime.dispose();
+  });
 });

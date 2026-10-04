@@ -40,6 +40,7 @@ if not exist C:\msys64\ucrt64\bin\rubberband.exe (
   )
 )
 if "%DRY_RUN%"=="1" (
+  echo [dry-run] node tools\create_branded_launchers.cjs
   echo [dry-run] powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows\ensure-user-path.ps1 -Directory "%MSYS2_UCRT_BIN%"
   echo [dry-run] node tools\prepare_node_workspace.cjs
   echo [dry-run] node tools\setup_python_runtime.cjs upscaler
@@ -70,6 +71,7 @@ call node tools\setup_python_runtime.cjs audio-tts || exit /b 14
 call cargo fetch --manifest-path apps\desktop\src-tauri\Cargo.toml || exit /b 15
 
 call node tools\verify_installation.cjs || exit /b 16
+node tools\create_branded_launchers.cjs || echo Avviso: launcher con logo non creato. Rigeneralo con node tools\create_branded_launchers.cjs
 echo MLSM Studio e' pronto. L'installer non ha avviato alcun server.
 exit /b 0
 

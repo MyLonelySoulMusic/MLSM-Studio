@@ -23,6 +23,11 @@ body { -webkit-font-smoothing: antialiased; }
 .upload-panel:hover { border-color: var(--lime); }
 .metrics > div, .alignment-readout > div, .loudness-card, .ai-score-card { border-radius: 12px; box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 3%, transparent); }
 .metrics strong, .alignment-readout strong { font-variant-numeric: tabular-nums; letter-spacing: -.035em; }
+.tempo-options { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; color: var(--text); }
+.tempo-options label { font-size: 12px; font-weight: 700; }
+.tempo-options select { max-width: 100%; padding: 10px 12px; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 9px; }
+.tempo-options small { color: var(--muted); font-size: 11px; }
+#rhythmStatus:empty { display: none; }
 .option-card { border-radius: 12px; transition: border-color .16s; }
 .option-card:has(input:checked) { border-color: var(--lime); }
 .primary, .secondary, .file-button, .icon-btn, .download { border-radius: 9px; transition: box-shadow .16s, border-color .16s; }

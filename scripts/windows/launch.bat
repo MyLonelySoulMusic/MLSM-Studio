@@ -6,6 +6,7 @@ set "PATH=%ProgramFiles%\nodejs;%USERPROFILE%\.cargo\bin;%LOCALAPPDATA%\Microsof
 
 if /I "%~1"=="--check" goto check
 where node >nul 2>nul || (echo Node non trovato. Esegui prima scripts\windows\install.bat.& exit /b 2)
+node tools\create_branded_launchers.cjs --quiet || echo Avviso: launcher con logo non aggiornato. Rigeneralo con node tools\create_branded_launchers.cjs
 call node tools\prepare_node_workspace.cjs || (echo Aggiornamento dipendenze/build non riuscito. Controlla l'errore precedente.& exit /b 3)
 echo Avvio MLSM Studio su http://localhost:1421
 echo Per arrestare applicazione e servizi premi Ctrl+C.

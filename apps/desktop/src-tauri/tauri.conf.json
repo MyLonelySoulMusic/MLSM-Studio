@@ -14,9 +14,13 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.png", "icons/icon.icns", "icons/icon.ico"],
+    "windows": { "nsis": { "installerIcon": "icons/icon.ico", "uninstallerIcon": "icons/icon.ico" } },
     "macOS": { "minimumSystemVersion": "12.3", "infoPlist": "Info.plist" },
     "resources": {
       "../../../tools/song-player/worker.py": "song-player/worker.py",
+      "../../../tools/song-player/live_whisper.py": "song-player/live_whisper.py",
+      "../../../tools/song-player/whisper_streaming_runtime.py": "song-player/whisper_streaming_runtime.py",
       "../../../tools/song-player/auto_avsr_runtime.py": "song-player/auto_avsr_runtime.py",
       "../../../tools/song-player/audio_analysis.py": "song-player/audio_analysis.py",
       "../../../tools/song-player/requirements.txt": "song-player/requirements.txt"

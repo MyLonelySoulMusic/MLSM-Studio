@@ -13,6 +13,7 @@ check() {
   command -v cargo >/dev/null || { echo "Cargo non trovato: esegui prima scripts/macos/install.sh" >&2; exit 3; }
   xcode-select -p >/dev/null 2>&1 || { echo "Xcode Command Line Tools non disponibili." >&2; exit 3; }
   node tools/verify_node_dependencies.cjs || { echo "Dipendenze npm incomplete: esegui prima scripts/macos/install.sh" >&2; exit 3; }
+  node tools/verify_brand_assets.cjs
 }
 
 if [[ "${1:-}" == "--check" ]]; then check; echo "Packaging macOS pronto. Nessuna compilazione avviata."; exit 0; fi
