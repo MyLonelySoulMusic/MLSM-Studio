@@ -3,7 +3,7 @@ import { filtersForWidget } from "./filter-targets";
 import { buildGeoPoints } from "./geo";
 import { buildPivotTable } from "./pivot";
 import { validateDashboard } from "./storage";
-import { AGGREGATION_LABELS, type ReportDashboard, type ReportWidget } from "./types";
+import { AGGREGATION_LABELS, type ReportDashboard, type ReportDataset, type ReportWidget } from "./types";
 import { timeSeriesPoints } from "./time-series-playback";
 import { barRaceValueDecimals, buildBarRaceFrames } from "./bar-race-playback";
 
@@ -121,8 +121,13 @@ function renderWidget(widget: ReportWidget, dashboard: ReportDashboard): string 
     const rows = filterRows(dataset, filters).slice(0, widget.limit ?? 50);
     content = `<div class="table-wrap"><table><thead><tr>${dataset.fields.map(field => `<th>${escapeHtml(field.name)}</th>`).join("")}</tr></thead><tbody>${rows.map(row => `<tr>${dataset.fields.map(field => `<td>${escapeHtml(displayCell(row[field.id]))}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
   } else if (widget.type === "pivot" && dataset) {
-    const pivot = buildPivotTable({ dataset, filters, rowFieldId: widget.dimension, columnFieldId: widget.secondaryDimension, measureFieldId: widget.measure, aggregation: widget.aggregation, timeGrain: widget.timeGrain, timeAxis: dataset.fields.find(field => field.id === widget.dimension)?.type === "date" ? "row" : "none" });
-    content = pivot.message ? `<p class="empty">${escapeHtml(pivot.message)}</p>` : `<div class="table-wrap"><table><thead><tr><th>Righe × Colonne</th>${pivot.columnLabels.map(label => `<th>${escapeHtml(label)}</th>`).join("")}<th>Totale</th></tr></thead><tbody>${pivot.rowLabels.map((label, rowIndex) => `<tr><th>${escapeHtml(label)}</th>${pivot.cells[rowIndex]!.map(value => `<td>${value === null ? "—" : escapeHtml(format(value, widget))}</td>`).join("")}<td>${pivot.rowTotals[rowIndex] === null ? "—" : escapeHtml(format(pivot.rowTotals[rowIndex]!, widget))}</td></tr>`).join("")}</tbody></table></div>`;
+    const rowFieldIds = widget.rowDimensions.length ? widget.rowDimensions : widget.dimension ? [widget.dimension] : [];
+    const columnFieldIds = widget.columnDimensions.length ? widget.columnDimensions : widget.secondaryDimension ? [widget.secondaryDimension] : [];
+    const rowFields = rowFieldIds.map(fieldId => dataset.fields.find(field => field.id === fieldId)).filter((field): field is ReportDataset["fields"][number] => Boolean(field));
+    const columnFields = columnFieldIds.map(fieldId => dataset.fields.find(field => field.id === fieldId)).filter((field): field is ReportDataset["fields"][number] => Boolean(field));
+    const timeAxis = rowFields.some(field => field.type === "date") ? "row" : columnFields.some(field => field.type === "date") ? "column" : "none";
+    const pivot = buildPivotTable({ dataset, filters, rowFieldIds, columnFieldIds, measureFieldId: widget.measure, aggregation: widget.aggregation, timeGrain: widget.timeGrain, timeAxis });
+    content = pivot.message ? `<p class="empty">${escapeHtml(pivot.message)}</p>` : `<div class="table-wrap"><table><thead><tr>${rowFields.map(field => `<th>${escapeHtml(field.name)}</th>`).join("")}${pivot.columnLabels.map(label => `<th>${escapeHtml(label)}</th>`).join("")}<th>Totale</th></tr></thead><tbody>${pivot.rowHeaders.map((headers, rowIndex) => `<tr>${headers.map(label => `<th>${escapeHtml(label)}</th>`).join("")}${pivot.cells[rowIndex]!.map(value => `<td>${value === null ? "—" : escapeHtml(format(value, widget))}</td>`).join("")}<td>${pivot.rowTotals[rowIndex] === null ? "—" : escapeHtml(format(pivot.rowTotals[rowIndex]!, widget))}</td></tr>`).join("")}</tbody><tfoot><tr><th colspan="${Math.max(1, rowFields.length)}">Totale</th>${pivot.columnTotals.map(value => `<td>${value === null ? "—" : escapeHtml(format(value, widget))}</td>`).join("")}<td>${pivot.grandTotal === null ? "—" : escapeHtml(format(pivot.grandTotal, widget))}</td></tr></tfoot></table></div>`;
   } else if (widget.type === "map") content = renderMap(widget, data.points, dashboard);
   else if (widget.type === "scatter") content = renderScatter(widget, data.scatter, accent, xAxisTitle, yAxisTitle);
   else content = renderChart(widget, data.points, accent, xAxisTitle, yAxisTitle);

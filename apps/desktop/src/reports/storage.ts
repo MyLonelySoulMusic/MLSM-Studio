@@ -273,14 +273,18 @@ export function validateDashboard(value: unknown): ReportDashboard {
   if (tabs.some(tab => !layoutRows.some(row => row.tabId === tab.id))) invalid("ogni tab deve contenere almeno una riga layout.");
   const layoutRowIds = new Set(layoutRows.map(row => row.id));
   const widgets: ReportWidget[] = array(data.widgets, REPORT_LIMITS.widgets, "widget").map(value => {
-    const widget = object(value, ["id", "type", "title", "datasetId", "dimension", "secondaryDimension", "measure", "aggregation", "timeGrain", "rowId", "width", "height", "color", "mapBackground", "text", "format", "currency", "decimals", "sort", "xSort", "limit", "categoryLimitMode", "showKpiLabel", "showKpiMeta", "showXTicks", "showYTicks", "xTickCount", "yTickCount", "xAxisMin", "xAxisMax", "yAxisMin", "yAxisMax", "xAxisLabel", "yAxisLabel", "animation", "replicateXls"], "widget");
+    const widget = object(value, ["id", "type", "title", "datasetId", "dimension", "secondaryDimension", "rowDimensions", "columnDimensions", "measure", "aggregation", "timeGrain", "rowId", "width", "height", "color", "mapBackground", "text", "format", "currency", "decimals", "sort", "xSort", "limit", "categoryLimitMode", "showKpiLabel", "showKpiMeta", "showXTicks", "showYTicks", "xTickCount", "yTickCount", "xAxisMin", "xAxisMax", "yAxisMin", "yAxisMax", "xAxisLabel", "yAxisLabel", "animation", "replicateXls"], "widget", ["rowDimensions", "columnDimensions"]);
     const datasetId = id(widget.datasetId, "dataset del widget", true);
     const source = datasetId ? datasetsById.get(datasetId) : undefined;
     if (datasetId && !source) invalid("un widget fa riferimento a un dataset inesistente.");
     const dimension = id(widget.dimension, "dimensione del widget", true);
     const secondaryDimension = id(widget.secondaryDimension, "dimensione colonne del widget", true);
+    const rowDimensions = widget.rowDimensions === undefined ? (widget.type === "pivot" && dimension ? [dimension] : []) : array(widget.rowDimensions, 8, "dimensioni righe della pivot").map((value, index) => id(value, `dimensione righe ${index + 1}`));
+    const columnDimensions = widget.columnDimensions === undefined ? (widget.type === "pivot" && secondaryDimension ? [secondaryDimension] : []) : array(widget.columnDimensions, 8, "dimensioni colonne della pivot").map((value, index) => id(value, `dimensione colonne ${index + 1}`));
+    unique(rowDimensions, "dimensioni righe della pivot");
+    unique(columnDimensions, "dimensioni colonne della pivot");
     const measure = id(widget.measure, "misura del widget", true);
-    if ([dimension, secondaryDimension, measure].some(fieldId => fieldId && !source?.fields.some(field => field.id === fieldId))) invalid("un widget fa riferimento a un campo inesistente.");
+    if ([dimension, secondaryDimension, measure, ...rowDimensions, ...columnDimensions].some(fieldId => fieldId && !source?.fields.some(field => field.id === fieldId))) invalid("un widget fa riferimento a un campo inesistente.");
     const rowId = id(widget.rowId, "riga del widget");
     if (!layoutRowIds.has(rowId)) invalid("un widget fa riferimento a una riga layout inesistente.");
     if (typeof widget.width !== "number" || !Number.isInteger(widget.width) || widget.width < 1 || widget.width > 12) invalid("la larghezza del widget deve essere un intero tra 1 e 12.");
@@ -360,7 +364,7 @@ export function validateDashboard(value: unknown): ReportDashboard {
     }
     return {
       id: id(widget.id, "ID widget"), type: choice(widget.type, ["kpi", "bar", "column", "line", "area", "doughnut", "scatter", "map", "table", "pivot", "replicateXls", "text"] as const, "tipo widget"),
-      title: string(widget.title, "titolo widget", 300, true), datasetId, dimension, secondaryDimension, measure, rowId,
+      title: string(widget.title, "titolo widget", 300, true), datasetId, dimension, secondaryDimension, rowDimensions, columnDimensions, measure, rowId,
       aggregation: choice(widget.aggregation, ["sum", "avg", "count", "distinct", "median", "min", "max", "range", "variance", "stddev"] as const, "aggregazione"),
       timeGrain: choice(widget.timeGrain, ["exact", "day", "week", "month", "quarter", "year"] as const, "raggruppamento temporale"),
       width: widget.width, height: choice(widget.height, [240, 320, 420] as const, "altezza widget"),

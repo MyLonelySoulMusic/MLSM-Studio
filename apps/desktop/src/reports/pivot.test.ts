@@ -71,6 +71,40 @@ describe("report pivot", () => {
     expect(count.grandTotal).toBe(5);
   });
 
+  it("groups by multiple ordered row and column dimensions", () => {
+    const multiDataset: ReportDataset = {
+      ...dataset,
+      fields: [
+        ...dataset.fields.slice(0, 2),
+        { id: "store", name: "Negozio", type: "text" },
+        { id: "device", name: "Dispositivo", type: "text" },
+        ...dataset.fields.slice(2),
+      ],
+      rows: [
+        { region: "Nord", channel: "Web", store: "Milano", device: "Mobile", date: "2026-01-03", sales: 10 },
+        { region: "Nord", channel: "Web", store: "Milano", device: "Desktop", date: "2026-01-20", sales: 20 },
+        { region: "Nord", channel: "Negozio", store: "Torino", device: "Desktop", date: "2026-02-02", sales: 100 },
+        { region: "Sud", channel: "Web", store: "Roma", device: "Mobile", date: "2026-02-10", sales: 40 },
+      ],
+      sources: [{ ...dataset.sources[0]!, rowCount: 4 }],
+    };
+    const result = buildPivotTable({
+      dataset: multiDataset,
+      filters: [],
+      rowFieldIds: ["region", "store"],
+      columnFieldIds: ["channel", "device"],
+      measureFieldId: "sales",
+      aggregation: "sum",
+    });
+
+    expect(result.rowHeaders).toEqual([["Nord", "Milano"], ["Nord", "Torino"], ["Sud", "Roma"]]);
+    expect(result.columnHeaders).toEqual([["Web", "Mobile"], ["Web", "Desktop"], ["Negozio", "Desktop"]]);
+    expect(result.rowLabels).toEqual(["Nord › Milano", "Nord › Torino", "Sud › Roma"]);
+    expect(result.columnLabels).toEqual(["Web › Mobile", "Web › Desktop", "Negozio › Desktop"]);
+    expect(result.cells).toEqual([[10, 20, null], [null, null, 100], [40, null, null]]);
+    expect(result.grandTotal).toBe(170);
+  });
+
   it("evaluates an aggregate calculated measure independently for every pivot cell and total", () => {
     const withUnits: ReportDataset = {
       ...dataset,
@@ -130,35 +164,47 @@ describe("report pivot", () => {
     expect(empty.cells).toEqual([]);
   });
 
-  it("returns an explicit error instead of silently truncating oversized pivots", () => {
-    const manyRows: ReportDataset = {
+  it("keeps every group in large pivots and pages only the dense rendering", () => {
+    const largeDataset: ReportDataset = {
       ...dataset,
-      rows: Array.from({ length: 101 }, (_, index) => ({ region: `R${index}`, channel: "Web", date: "2026-01-01", sales: index })),
+      rows: Array.from({ length: 401 }, (_, index) => ({ region: `R${index}`, channel: `C${index % 37}`, date: "2026-01-01", sales: index })),
     };
-    const rowsResult = buildPivotTable({
-      dataset: manyRows,
+    const firstPage = buildPivotTable({
+      dataset: largeDataset,
       filters: [],
       rowFieldId: "region",
       columnFieldId: "channel",
       measureFieldId: "sales",
       aggregation: "sum",
+      rowLimit: 200,
+      columnLimit: 20,
     });
-    expect(rowsResult.message).toContain("100 righe");
-    expect(rowsResult.cells).toEqual([]);
+    expect(firstPage.message).toBe("");
+    expect(firstPage.totalRowCount).toBe(401);
+    expect(firstPage.totalColumnCount).toBe(37);
+    expect(firstPage.rowHeaders).toHaveLength(200);
+    expect(firstPage.columnHeaders).toHaveLength(20);
+    expect(firstPage.cells).toHaveLength(200);
+    expect(firstPage.cells[0]).toHaveLength(20);
+    expect(firstPage.grandTotal).toBe(80_200);
 
-    const manyColumns: ReportDataset = {
-      ...dataset,
-      rows: Array.from({ length: 51 }, (_, index) => ({ region: "Nord", channel: `C${index}`, date: "2026-01-01", sales: index })),
-    };
-    const columnsResult = buildPivotTable({
-      dataset: manyColumns,
+    const lastPage = buildPivotTable({
+      dataset: largeDataset,
       filters: [],
       rowFieldId: "region",
       columnFieldId: "channel",
       measureFieldId: "sales",
       aggregation: "sum",
+      rowOffset: 400,
+      rowLimit: 200,
+      columnOffset: 20,
+      columnLimit: 20,
     });
-    expect(columnsResult.message).toContain("50 colonne");
-    expect(columnsResult.cells).toEqual([]);
+    expect(lastPage.message).toBe("");
+    expect(lastPage.rowOffset).toBe(400);
+    expect(lastPage.columnOffset).toBe(20);
+    expect(lastPage.rowHeaders).toHaveLength(1);
+    expect(lastPage.columnHeaders).toHaveLength(17);
+    expect(lastPage.grandTotal).toBe(80_200);
   });
 });

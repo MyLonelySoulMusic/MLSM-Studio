@@ -94,6 +94,31 @@ describe("Reports widget views", () => {
     expect(screen.getAllByText("60").length).toBeGreaterThan(0);
   });
 
+  it("navigates every row of a large pivot instead of blocking it", () => {
+    const pivotDataset: ReportDataset = {
+      id: "large-pivot", name: "Pivot estesa", sourceName: "large.csv",
+      sources: [{ id: "large-source", fileName: "large.csv", sheetName: "Dati", importedAt: "2026-01-01T00:00:00.000Z", rowCount: 201 }],
+      fields: [
+        { id: "region", name: "Regione", type: "text" },
+        { id: "channel", name: "Canale", type: "text" },
+        { id: "value", name: "Valore", type: "number" },
+      ],
+      rows: Array.from({ length: 201 }, (_, index) => ({ region: `R${index}`, channel: "Web", value: index })),
+    };
+    const widget = {
+      ...createWidget("pivot", pivotDataset),
+      dimension: "region", secondaryDimension: "channel", rowDimensions: ["region"], columnDimensions: ["channel"], measure: "value",
+    };
+    render(<WidgetView widget={widget} dataset={pivotDataset} theme={DEFAULT_REPORT_THEME} filters={[]} />);
+
+    expect(screen.queryByText(/limite massimo/i)).not.toBeInTheDocument();
+    expect(screen.getByText("Righe 1–200 di 201 · colonne 1–1 di 1")).toBeInTheDocument();
+    expect(screen.queryByRole("rowheader", { name: "R200" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Pagina righe successiva" }));
+    expect(screen.getByRole("rowheader", { name: "R200" })).toBeInTheDocument();
+    expect(screen.getByText("Righe 201–201 di 201 · colonne 1–1 di 1")).toBeInTheDocument();
+  });
+
   it("renders an interactive OpenStreetMap from city and country labels", async () => {
     Object.defineProperty(SVGSVGElement.prototype, "createSVGRect", { configurable: true, value: () => ({}) });
     const mapDataset: ReportDataset = {

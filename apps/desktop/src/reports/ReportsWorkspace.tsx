@@ -50,7 +50,7 @@ function referencedDatasetFields(dashboard: ReportDashboard, datasetId: string):
   const ids = new Set<string>();
   for (const widget of dashboard.widgets) {
     if (widget.datasetId !== datasetId) continue;
-    [widget.dimension, widget.secondaryDimension, widget.measure].forEach(id => { if (id) ids.add(id); });
+    [widget.dimension, widget.secondaryDimension, widget.measure, ...widget.rowDimensions, ...widget.columnDimensions].forEach(id => { if (id) ids.add(id); });
     if (widget.animation?.type === "timeSeries") ids.add(widget.animation.dimension);
     if (widget.animation?.type === "barRace") {
       [widget.animation.dateDimension, widget.animation.groupDimension, widget.animation.measure].forEach(id => { if (id) ids.add(id); });
@@ -68,6 +68,47 @@ function referencedDatasetFields(dashboard: ReportDashboard, datasetId: string):
     try { analyzeCalculatedFormula(field.calculated!.formula, dataset!).referencedFieldIds.forEach(fieldId => ids.add(fieldId)); } catch { /* Validation reports the formula error when the dashboard is loaded. */ }
   }
   return ids;
+}
+
+function pivotAxisIds(widget: ReportWidget, axis: "row" | "column"): string[] {
+  const configured = axis === "row" ? widget.rowDimensions : widget.columnDimensions;
+  const legacy = axis === "row" ? widget.dimension : widget.secondaryDimension;
+  return configured.length ? configured : legacy ? [legacy] : [];
+}
+
+function PivotDimensionEditor({ label, axis, fields, selectedIds, language, onChange, onDrop }: {
+  label: string;
+  axis: "row" | "column";
+  fields: ReportField[];
+  selectedIds: string[];
+  language: UiLanguage;
+  onChange: (fieldIds: string[]) => void;
+  onDrop: (event: DragEvent<HTMLDivElement>) => void;
+}) {
+  const available = fields.filter(field => !selectedIds.includes(field.id));
+  const replace = (index: number, fieldId: string) => onChange(selectedIds.map((current, currentIndex) => currentIndex === index ? fieldId : current));
+  const move = (index: number, offset: number) => {
+    const target = index + offset;
+    if (target < 0 || target >= selectedIds.length) return;
+    const next = [...selectedIds];
+    [next[index], next[target]] = [next[target]!, next[index]!];
+    onChange(next);
+  };
+  return <div className="rpt-pivot-dimensions rpt-drop-zone" onDragOver={event => event.preventDefault()} onDrop={onDrop}>
+    <div className="rpt-pivot-dimensions-heading"><span>{label}</span><small>{selectedIds.length}/8</small></div>
+    <div className="rpt-pivot-dimension-list">{selectedIds.map((fieldId, index) => <div className="rpt-pivot-dimension-row" key={`${fieldId}-${index}`}>
+      <span>{index + 1}</span>
+      <select aria-label={`${label} ${index + 1}`} value={fieldId} onChange={event => replace(index, event.target.value)}>{fields.map(field => <option data-no-localize key={field.id} value={field.id} disabled={field.id !== fieldId && selectedIds.includes(field.id)}>{field.name}</option>)}</select>
+      <button type="button" disabled={index === 0} aria-label={language === "en" ? `Move ${label} field up` : `Sposta campo ${label.toLocaleLowerCase()} su`} onClick={() => move(index, -1)}>↑</button>
+      <button type="button" disabled={index === selectedIds.length - 1} aria-label={language === "en" ? `Move ${label} field down` : `Sposta campo ${label.toLocaleLowerCase()} giù`} onClick={() => move(index, 1)}>↓</button>
+      <button type="button" aria-label={language === "en" ? `Remove ${label} field` : `Rimuovi campo ${label.toLocaleLowerCase()}`} onClick={() => onChange(selectedIds.filter((_, currentIndex) => currentIndex !== index))}>×</button>
+    </div>)}</div>
+    <select className="rpt-pivot-add-field" aria-label={language === "en" ? `Add field to ${label}` : `Aggiungi campo a ${label}`} value="" disabled={!available.length || selectedIds.length >= 8} onChange={event => { if (event.target.value) onChange([...selectedIds, event.target.value]); }}>
+      <option value="">{language === "en" ? "+ Add field" : "+ Aggiungi campo"}</option>
+      {available.map(field => <option data-no-localize key={field.id} value={field.id}>{field.name}</option>)}
+    </select>
+    <small>{axis === "row" ? (language === "en" ? "Drag fields here. Order defines the hierarchy from left to right." : "Trascina qui i campi. L’ordine definisce la gerarchia da sinistra a destra.") : (language === "en" ? "Drag fields here. Every unique combination becomes a column." : "Trascina qui i campi. Ogni combinazione distinta diventa una colonna.")}</small>
+  </div>;
 }
 
 function FilterControl({ dashboard, filter, onChange }: { dashboard: ReportDashboard; filter: ReportFilter; onChange: (value: string | null) => void }) {
@@ -166,7 +207,8 @@ export function ReportsWorkspace({ onHome, viewDashboardId = null, onOpenViewer 
   const selectedBarRaceAnimation = selected?.animation?.type === "barRace" ? selected.animation : null;
   const activeDataset = dashboard.datasets.find(dataset => dataset.id === activeDatasetId) ?? dashboard.datasets[0];
   const selectedDataset = dashboard.datasets.find(dataset => dataset.id === selected?.datasetId);
-  const selectedDimensionField = selectedDataset?.fields.find(field => field.id === selected?.dimension);
+  const selectedDimensionField = selectedDataset?.fields.find(field => field.id === (selected?.type === "pivot" ? selected && pivotAxisIds(selected, "row")[0] : selected?.dimension));
+  const selectedHasTemporalPivotAxis = Boolean(selected?.type === "pivot" && [...pivotAxisIds(selected, "row"), ...pivotAxisIds(selected, "column")].some(fieldId => selectedDataset?.fields.find(field => field.id === fieldId)?.type === "date"));
   const selectedMeasureField = selectedDataset?.fields.find(field => field.id === selected?.measure);
   const selectedTemporalSequence = Boolean(selected && (["line", "area"] as WidgetType[]).includes(selected.type) && isTemporalDimension(selectedDimensionField, selectedDataset?.rows ?? []));
   const selectedCartesian = Boolean(selected && (["bar", "column", "line", "area", "scatter"] as WidgetType[]).includes(selected.type));
@@ -355,7 +397,16 @@ export function ReportsWorkspace({ onHome, viewDashboardId = null, onOpenViewer 
       patch.dimension = numeric.some(field => field.id === selected.dimension) ? selected.dimension : numeric[0]?.id ?? "";
       patch.measure = numeric.some(field => field.id === selected.measure) ? selected.measure : numeric[1]?.id ?? numeric[0]?.id ?? "";
     }
-    if (type === "pivot" && !selected.secondaryDimension) patch.secondaryDimension = defaults.secondaryDimension;
+    if (type === "pivot") {
+      const existingRows = selected.type === "pivot" ? pivotAxisIds(selected, "row") : selected.dimension ? [selected.dimension] : [];
+      const existingColumns = selected.type === "pivot" ? pivotAxisIds(selected, "column") : selected.secondaryDimension ? [selected.secondaryDimension] : [];
+      const rowDimensions = existingRows.length ? existingRows : defaults.rowDimensions;
+      const columnDimensions = existingColumns.length ? existingColumns : defaults.columnDimensions;
+      patch.rowDimensions = rowDimensions;
+      patch.columnDimensions = columnDimensions;
+      patch.dimension = rowDimensions[0] ?? "";
+      patch.secondaryDimension = columnDimensions[0] ?? "";
+    }
     if (type === "text" || type === "replicateXls") patch.animation = null;
     if (type !== "replicateXls") patch.replicateXls = null;
     patchWidget(patch); setWidgetMenuOpen(false); setWidgetMenuMode("add");
@@ -419,21 +470,40 @@ export function ReportsWorkspace({ onHome, viewDashboardId = null, onOpenViewer 
   function bindField(field: ReportField, dataset = activeDataset) {
     if (!dataset || !selected || selected.type === "text") return;
     const defaults = selected.datasetId !== dataset.id ? widgetDefaults(selected.type, dataset, "", language) : selected;
-    const patch: Partial<ReportWidget> = { datasetId: dataset.id, dimension: defaults.dimension, measure: defaults.measure, aggregation: defaults.aggregation, xSort: defaults.xSort, ...(selected.datasetId !== dataset.id ? { animation: null } : {}) };
+    const patch: Partial<ReportWidget> = { datasetId: dataset.id, dimension: defaults.dimension, measure: defaults.measure, aggregation: defaults.aggregation, xSort: defaults.xSort, ...(selected.datasetId !== dataset.id ? { secondaryDimension: defaults.secondaryDimension, rowDimensions: defaults.rowDimensions, columnDimensions: defaults.columnDimensions, animation: null } : {}) };
     if (field.type === "number") { patch.measure = field.id; patch.aggregation = selected.aggregation === "count" ? "sum" : selected.aggregation; }
-    else { patch.dimension = field.id; patch.xSort = "asc"; }
+    else if (selected.type === "pivot") {
+      const current = selected.datasetId === dataset.id ? pivotAxisIds(selected, "row") : defaults.rowDimensions;
+      const rowDimensions = current.includes(field.id) ? current : [...current, field.id].slice(0, 8);
+      patch.rowDimensions = rowDimensions; patch.dimension = rowDimensions[0] ?? ""; patch.xSort = "asc";
+      if (selected.datasetId !== dataset.id) { patch.columnDimensions = defaults.columnDimensions; patch.secondaryDimension = defaults.columnDimensions[0] ?? ""; }
+    } else { patch.dimension = field.id; patch.xSort = "asc"; }
     patchWidget(patch);
   }
-  function fieldDrop(event: DragEvent, target: "dimension" | "measure") {
+  function setPivotAxis(axis: "row" | "column", fieldIds: string[]) {
+    const uniqueIds = [...new Set(fieldIds)].slice(0, 8);
+    patchWidget(axis === "row"
+      ? { rowDimensions: uniqueIds, dimension: uniqueIds[0] ?? "", timeGrain: "exact", xSort: "asc" }
+      : { columnDimensions: uniqueIds, secondaryDimension: uniqueIds[0] ?? "" });
+  }
+  function fieldDrop(event: DragEvent, target: "dimension" | "measure" | "pivotRows" | "pivotColumns") {
     event.preventDefault();
     try { const value: unknown = JSON.parse(event.dataTransfer.getData("application/mlsm-report-field")); if (typeof value !== "object" || value === null || !("datasetId" in value) || !("fieldId" in value)) return;
       const dataset = dashboard.datasets.find(item => item.id === value.datasetId); const field = dataset?.fields.find(item => item.id === value.fieldId);
       const numericMeasureRequired = selected?.type === "scatter" || (target === "measure" && selected?.aggregation !== "distinct");
       if (!dataset || !field || !selected || (numericMeasureRequired && field.type !== "number")) return;
-      const defaults = widgetDefaults(selected.type, dataset, "", language); patchWidget({ ...(selected.datasetId !== dataset.id ? { dimension: defaults.dimension, measure: defaults.measure, xSort: defaults.xSort, animation: null } : {}), datasetId: dataset.id, [target]: field.id, ...(target === "dimension" ? { xSort: "asc" } : {}), ...(target === "measure" && selected.aggregation !== "distinct" ? { aggregation: "sum" } : {}) });
+      const defaults = widgetDefaults(selected.type, dataset, "", language);
+      if (target === "pivotRows" || target === "pivotColumns") {
+        const axis = target === "pivotRows" ? "row" : "column";
+        const current = selected.datasetId === dataset.id ? pivotAxisIds(selected, axis) : pivotAxisIds(defaults, axis);
+        const next = current.includes(field.id) ? current : [...current, field.id].slice(0, 8);
+        patchWidget({ ...(selected.datasetId !== dataset.id ? { measure: defaults.measure, aggregation: defaults.aggregation, rowDimensions: defaults.rowDimensions, columnDimensions: defaults.columnDimensions, animation: null } : {}), datasetId: dataset.id, ...(axis === "row" ? { rowDimensions: next, dimension: next[0] ?? "", xSort: "asc" as const } : { columnDimensions: next, secondaryDimension: next[0] ?? "" }) });
+        return;
+      }
+      patchWidget({ ...(selected.datasetId !== dataset.id ? { dimension: defaults.dimension, secondaryDimension: defaults.secondaryDimension, rowDimensions: defaults.rowDimensions, columnDimensions: defaults.columnDimensions, measure: defaults.measure, xSort: defaults.xSort, animation: null } : {}), datasetId: dataset.id, [target]: field.id, ...(target === "dimension" ? { xSort: "asc" } : {}), ...(target === "measure" && selected.aggregation !== "distinct" ? { aggregation: "sum" } : {}) });
     } catch { /* Ignore unrelated dragged content. */ }
   }
-  function removeDataset(dataset: ReportDataset) { setConfirmation({ title: `Rimuovere “${dataset.name}”?`, message: "Verranno rimossi anche i widget e i filtri collegati a questa origine nella dashboard corrente.", label: "Rimuovi origine", run: () => { change(current => ({ ...current, datasets: current.datasets.filter(item => item.id !== dataset.id), widgets: current.widgets.flatMap(item => item.datasetId !== dataset.id ? [item] : item.type === "text" ? [{ ...item, datasetId: "", dimension: "", secondaryDimension: "", measure: "" }] : []), filters: current.filters.filter(item => item.datasetId !== dataset.id) })); setActiveDatasetId(""); setSelectedId(null); setFilterField(""); } }); }
+  function removeDataset(dataset: ReportDataset) { setConfirmation({ title: `Rimuovere “${dataset.name}”?`, message: "Verranno rimossi anche i widget e i filtri collegati a questa origine nella dashboard corrente.", label: "Rimuovi origine", run: () => { change(current => ({ ...current, datasets: current.datasets.filter(item => item.id !== dataset.id), widgets: current.widgets.flatMap(item => item.datasetId !== dataset.id ? [item] : item.type === "text" ? [{ ...item, datasetId: "", dimension: "", secondaryDimension: "", rowDimensions: [], columnDimensions: [], measure: "" }] : []), filters: current.filters.filter(item => item.datasetId !== dataset.id) })); setActiveDatasetId(""); setSelectedId(null); setFilterField(""); } }); }
   function addFilter() { if (!activeDataset || !filterField) return; const id = reportId(); change(current => ({ ...current, filters: [...current.filters, { id, datasetId: activeDataset.id, fieldId: filterField, value: null, defaultValue: null, includeAll: true, targetMode: "all", widgetIds: [] }] })); setActiveFilterValues(current => ({ ...current, [id]: null })); setFilterField(""); }
   function addCalculatedField(value: { name: string; formula: string; description: string }) {
     if (!activeDataset) return;
@@ -533,11 +603,13 @@ export function ReportsWorkspace({ onHome, viewDashboardId = null, onOpenViewer 
             <label className="rpt-control">Tipo widget<select aria-label="Tipo widget" value={selected.type} onChange={event => convertSelectedWidget(event.target.value as WidgetType)}>{(Object.keys(widgetLabels) as WidgetType[]).map(type => <option key={type} value={type}>{widgetLabels[type]}</option>)}</select><small>Il cambio mantiene titolo, posizione, dimensioni, colore e campi compatibili.</small></label>
             <button type="button" className="rpt-button rpt-full-width rpt-change-type" onClick={() => openWidgetLibrary("replace")}><ReportIcon name="swap" />Cambia visualizzazione</button>
             {selected.type === "text" ? <label className="rpt-control">Contenuto<textarea rows={6} value={selected.text} maxLength={10000} onChange={event => patchWidget({ text: event.target.value })} /></label> : <>
-              <label className="rpt-control">Origine<select value={selected.datasetId} onChange={event => { const dataset = dashboard.datasets.find(item => item.id === event.target.value); const defaults = widgetDefaults(selected.type, dataset, "", language); patchWidget({ datasetId: event.target.value, dimension: defaults.dimension, secondaryDimension: defaults.secondaryDimension, measure: defaults.measure, aggregation: defaults.aggregation, timeGrain: defaults.timeGrain, xSort: defaults.xSort, animation: null, ...(selected.type === "replicateXls" ? { replicateXls: null } : {}) }); }}><option value="" disabled>Seleziona origine</option>{dashboard.datasets.map(dataset => <option data-no-localize key={dataset.id} value={dataset.id}>{dataset.name}</option>)}</select></label>
+              <label className="rpt-control">Origine<select value={selected.datasetId} onChange={event => { const dataset = dashboard.datasets.find(item => item.id === event.target.value); const defaults = widgetDefaults(selected.type, dataset, "", language); patchWidget({ datasetId: event.target.value, dimension: defaults.dimension, secondaryDimension: defaults.secondaryDimension, rowDimensions: defaults.rowDimensions, columnDimensions: defaults.columnDimensions, measure: defaults.measure, aggregation: defaults.aggregation, timeGrain: defaults.timeGrain, xSort: defaults.xSort, animation: null, ...(selected.type === "replicateXls" ? { replicateXls: null } : {}) }); }}><option value="" disabled>Seleziona origine</option>{dashboard.datasets.map(dataset => <option data-no-localize key={dataset.id} value={dataset.id}>{dataset.name}</option>)}</select></label>
               {selected.type === "replicateXls" ? <div className="rpt-replicate-inspector"><span><ReportIcon name="replicateXls" /></span><strong>{selected.replicateXls?.templateName || (language === "en" ? "No template" : "Nessun template")}</strong><small>{selected.replicateXls ? `${selected.replicateXls.regions.length} ${language === "en" ? "mapped regions" : "aree mappate"}` : (language === "en" ? "Upload a workbook, map its regions and test the result." : "Carica un workbook, mappa le aree e prova il risultato.")}</small><button type="button" className="rpt-button rpt-button-primary rpt-full-width" onClick={() => setReplicateWidgetId(selected.id)}>{language === "en" ? "Configure Replicate XLS" : "Configura Replica Excel"}</button></div> : <>
-              {selected.type !== "kpi" && selected.type !== "table" && <label className="rpt-control rpt-drop-zone" onDragOver={event => event.preventDefault()} onDrop={event => fieldDrop(event, "dimension")}>{selected.type === "scatter" ? "Asse X (numerico)" : selected.type === "pivot" ? "Righe" : "Dimensione / asse X"}<select value={selected.dimension} onChange={event => patchWidget({ dimension: event.target.value, timeGrain: "exact", xSort: "asc" })}><option value="">Seleziona campo</option>{selectedDataset?.fields.filter(field => selected.type !== "scatter" || field.type === "number").map(field => <option data-no-localize key={field.id} value={field.id}>{field.name}</option>)}</select><small>Trascina un campo qui</small></label>}
-              {selected.type === "pivot" && <label className="rpt-control">Colonne<select value={selected.secondaryDimension} onChange={event => patchWidget({ secondaryDimension: event.target.value })}><option value="">Seleziona campo</option>{selectedDataset?.fields.map(field => <option data-no-localize key={field.id} value={field.id}>{field.name}</option>)}</select></label>}
-              {selectedDimensionField?.type === "date" && selected.type !== "scatter" && <label className="rpt-control">Raggruppa il tempo<select value={selected.timeGrain} onChange={event => patchWidget({ timeGrain: event.target.value as ReportWidget["timeGrain"] })}>{Object.entries(timeGrainLabels).map(([grain, label]) => <option key={grain} value={grain}>{label}</option>)}</select><small>Disponibile per linee, area, barre orizzontali e verticali, ciambella e righe della pivot.</small></label>}
+              {selected.type === "pivot" ? <>
+                <PivotDimensionEditor label={language === "en" ? "Rows" : "Righe"} axis="row" fields={selectedDataset?.fields ?? []} selectedIds={pivotAxisIds(selected, "row")} language={language} onChange={fieldIds => setPivotAxis("row", fieldIds)} onDrop={event => fieldDrop(event, "pivotRows")} />
+                <PivotDimensionEditor label={language === "en" ? "Columns" : "Colonne"} axis="column" fields={selectedDataset?.fields ?? []} selectedIds={pivotAxisIds(selected, "column")} language={language} onChange={fieldIds => setPivotAxis("column", fieldIds)} onDrop={event => fieldDrop(event, "pivotColumns")} />
+              </> : selected.type !== "kpi" && selected.type !== "table" && <label className="rpt-control rpt-drop-zone" onDragOver={event => event.preventDefault()} onDrop={event => fieldDrop(event, "dimension")}>{selected.type === "scatter" ? "Asse X (numerico)" : "Dimensione / asse X"}<select value={selected.dimension} onChange={event => patchWidget({ dimension: event.target.value, timeGrain: "exact", xSort: "asc" })}><option value="">Seleziona campo</option>{selectedDataset?.fields.filter(field => selected.type !== "scatter" || field.type === "number").map(field => <option data-no-localize key={field.id} value={field.id}>{field.name}</option>)}</select><small>Trascina un campo qui</small></label>}
+              {(selectedDimensionField?.type === "date" || selectedHasTemporalPivotAxis) && selected.type !== "scatter" && <label className="rpt-control">Raggruppa il tempo<select value={selected.timeGrain} onChange={event => patchWidget({ timeGrain: event.target.value as ReportWidget["timeGrain"] })}>{Object.entries(timeGrainLabels).map(([grain, label]) => <option key={grain} value={grain}>{label}</option>)}</select><small>{selected.type === "pivot" ? "Applica il raggruppamento ai campi data dell’asse pivot temporale." : "Disponibile per linee, area, barre orizzontali e verticali e ciambella."}</small></label>}
               {selected.type !== "table" && <><label className="rpt-control rpt-drop-zone" onDragOver={event => event.preventDefault()} onDrop={event => fieldDrop(event, "measure")}>{selected.type === "scatter" ? "Asse Y (numerico)" : selected.aggregation === "distinct" ? "Campo da contare" : "Misura"}<select disabled={selected.aggregation === "count" && selected.type !== "scatter"} value={selected.measure} onChange={event => patchWidget({ measure: event.target.value })}><option value="">Seleziona campo</option>{selectedDataset?.fields.filter(field => selected.aggregation === "distinct" || field.type === "number").map(field => <option data-no-localize key={field.id} value={field.id}>{field.name}</option>)}</select><small>{selected.aggregation === "distinct" ? "Può essere numerico, testuale, data o booleano." : "Trascina una misura qui"}</small></label>
               {selected.type !== "scatter" && <label className="rpt-control">Aggregazione<select disabled={Boolean(selectedDataset?.fields.find(field => field.id === selected.measure)?.calculated && analyzeCalculatedFormula(selectedDataset!.fields.find(field => field.id === selected.measure)!.calculated!.formula, selectedDataset!).aggregate)} value={selected.aggregation} onChange={event => applyAggregation(event.target.value as Aggregation)}>{Object.entries(aggregationLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select>{selectedDataset?.fields.find(field => field.id === selected.measure)?.calculated && analyzeCalculatedFormula(selectedDataset.fields.find(field => field.id === selected.measure)!.calculated!.formula, selectedDataset).aggregate && <small>{language === "en" ? "Aggregation is defined by the MLSM Formula itself." : "L’aggregazione è definita direttamente dalla MLSM Formula."}</small>}</label>}
               <div className="rpt-control-row"><label className="rpt-control">Formato<select value={selected.format} onChange={event => patchWidget({ format: event.target.value as ReportWidget["format"] })}><option value="number">Numero</option><option value="currency">Valuta</option><option value="percent">Percentuale</option></select></label><label className="rpt-control">Decimali massimi<input type="number" min={0} max={6} value={selected.decimals} onChange={event => patchWidget({ decimals: Math.max(0, Math.min(6, Number(event.target.value) || 0)) })} /></label></div>

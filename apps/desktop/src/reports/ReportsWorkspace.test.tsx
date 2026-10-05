@@ -214,8 +214,17 @@ describe("ReportsWorkspace", () => {
     expect(screen.queryByRole("dialog", { name: "Scegli un widget" })).not.toBeInTheDocument();
     expect(screen.getAllByText(/6 widget/).length).toBeGreaterThan(0);
     expect(screen.getByLabelText("Titolo")).toHaveValue("Tabella pivot");
-    expect(screen.getByLabelText(/^Righe/)).toBeInTheDocument();
-    expect(screen.getByLabelText("Colonne")).toBeInTheDocument();
+    expect(screen.getByLabelText("Righe 1")).toBeInTheDocument();
+    expect(screen.getByLabelText("Colonne 1")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Aggiungi campo a Righe"), { target: { value: "field-3" } });
+    fireEvent.change(screen.getByLabelText("Aggiungi campo a Colonne"), { target: { value: "field-4" } });
+    expect(screen.getByLabelText("Righe 2")).toHaveValue("field-3");
+    expect(screen.getByLabelText("Colonne 2")).toHaveValue("field-4");
+
+    fireEvent.click(screen.getByRole("button", { name: "Salva dashboard" }));
+    await waitFor(() => expect(reportMocks.saveDashboard).toHaveBeenCalledOnce());
+    expect(reportMocks.saveDashboard.mock.calls[0]![0].widgets.at(-1)).toMatchObject({ rowDimensions: ["field-1", "field-3"], columnDimensions: ["field-2", "field-4"] });
   });
 
   it("creates independent dashboard tabs and lets each tab be renamed", async () => {

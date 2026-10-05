@@ -13,6 +13,8 @@ import { useUiPreferences, type UiLanguage } from "../services/ui-preferences";
 import { ReportIcon } from "./ReportIcon";
 
 const GeoMapView = lazy(() => import("./GeoMapView"));
+const PIVOT_ROW_PAGE_SIZE = 200;
+const PIVOT_COLUMN_PAGE_SIZE = 50;
 
 Chart.register(ArcElement, BarController, BarElement, CategoryScale, DoughnutController, Filler,
   Legend, LinearScale, LineController, LineElement, PointElement, ScatterController, Tooltip);
@@ -180,21 +182,60 @@ function DataTable({ widget, dataset, filters, language }: { widget: ReportWidge
 }
 
 function PivotTable({ widget, dataset, filters, language }: { widget: ReportWidget; dataset: ReportDataset; filters: ReportFilter[]; language: UiLanguage }) {
-  const rowField = dataset.fields.find(field => field.id === widget.dimension);
-  const columnField = dataset.fields.find(field => field.id === widget.secondaryDimension);
+  const [rowPage, setRowPage] = useState(0);
+  const [columnPage, setColumnPage] = useState(0);
+  const rowFieldIds = widget.rowDimensions.length ? widget.rowDimensions : widget.dimension ? [widget.dimension] : [];
+  const columnFieldIds = widget.columnDimensions.length ? widget.columnDimensions : widget.secondaryDimension ? [widget.secondaryDimension] : [];
+  const rowFields = rowFieldIds.map(fieldId => dataset.fields.find(field => field.id === fieldId)).filter((field): field is ReportDataset["fields"][number] => Boolean(field));
+  const columnFields = columnFieldIds.map(fieldId => dataset.fields.find(field => field.id === fieldId)).filter((field): field is ReportDataset["fields"][number] => Boolean(field));
+  const timeAxis = rowFields.some(field => field.type === "date") ? "row" : columnFields.some(field => field.type === "date") ? "column" : "none";
+  const pivotDefinitionKey = `${dataset.id}|${rowFieldIds.join("\u0000")}|${columnFieldIds.join("\u0000")}|${widget.measure}|${widget.aggregation}|${widget.timeGrain}|${timeAxis}|${filters.map(filter => `${filter.id}:${String(filter.value ?? "")}`).join("\u0000")}`;
+
+  useEffect(() => {
+    setRowPage(0);
+    setColumnPage(0);
+  }, [pivotDefinitionKey]);
+
   const result = buildPivotTable({
-    dataset, filters, rowFieldId: widget.dimension, columnFieldId: widget.secondaryDimension,
+    dataset, filters, rowFieldIds, columnFieldIds,
     measureFieldId: widget.measure, aggregation: widget.aggregation, timeGrain: widget.timeGrain,
-    timeAxis: rowField?.type === "date" ? "row" : "none", language,
+    timeAxis, language,
+    rowOffset: rowPage * PIVOT_ROW_PAGE_SIZE,
+    rowLimit: PIVOT_ROW_PAGE_SIZE,
+    columnOffset: columnPage * PIVOT_COLUMN_PAGE_SIZE,
+    columnLimit: PIVOT_COLUMN_PAGE_SIZE,
   });
+  const rowPageCount = Math.max(1, Math.ceil(result.totalRowCount / PIVOT_ROW_PAGE_SIZE));
+  const columnPageCount = Math.max(1, Math.ceil(result.totalColumnCount / PIVOT_COLUMN_PAGE_SIZE));
+  const currentRowPage = Math.min(rowPage, rowPageCount - 1);
+  const currentColumnPage = Math.min(columnPage, columnPageCount - 1);
+
+  useEffect(() => {
+    if (rowPage !== currentRowPage) setRowPage(currentRowPage);
+    if (columnPage !== currentColumnPage) setColumnPage(currentColumnPage);
+  }, [columnPage, currentColumnPage, currentRowPage, rowPage]);
+
   if (result.message) return <div className="rpt-widget-content rpt-widget-empty" role="status">{result.message}</div>;
-  const totalLabel = widget.aggregation === "avg" ? "Media complessiva" : widget.aggregation === "count" ? "Totale righe" : widget.aggregation === "distinct" ? "Distinti complessivi" : "Totale";
-  return <div className="rpt-widget-content rpt-table-widget rpt-pivot-widget"><div className="rpt-table-wrap"><table className="rpt-data-table rpt-pivot-table">
-    <caption className="rpt-sr-only"><span data-no-localize>{widget.title}</span>: {rowField?.name} per {columnField?.name}</caption>
-    <thead><tr><th scope="col">{rowField?.name ?? "Righe"} × {columnField?.name ?? "Colonne"}</th>{result.columnLabels.map(label => <th scope="col" key={label}>{label}</th>)}<th scope="col">{totalLabel}</th></tr></thead>
-    <tbody>{result.rowLabels.map((label, rowIndex) => <tr key={label}><th scope="row">{label}</th>{result.cells[rowIndex]!.map((value, columnIndex) => <td key={`${label}-${result.columnLabels[columnIndex]}`}>{value === null ? "—" : formatWidgetNumber(value, widget, language)}</td>)}<td className="rpt-pivot-total">{result.rowTotals[rowIndex] === null ? "—" : formatWidgetNumber(result.rowTotals[rowIndex]!, widget, language)}</td></tr>)}</tbody>
-    <tfoot><tr><th scope="row">{totalLabel}</th>{result.columnTotals.map((value, index) => <td key={result.columnLabels[index]}>{value === null ? "—" : formatWidgetNumber(value, widget, language)}</td>)}<td>{result.grandTotal === null ? "—" : formatWidgetNumber(result.grandTotal, widget, language)}</td></tr></tfoot>
-  </table></div></div>;
+  const totalLabel = widget.aggregation === "avg" ? (language === "en" ? "Overall average" : "Media complessiva") : widget.aggregation === "count" ? (language === "en" ? "Total rows" : "Totale righe") : widget.aggregation === "distinct" ? (language === "en" ? "Overall distinct" : "Distinti complessivi") : (language === "en" ? "Total" : "Totale");
+  const rowStart = result.totalRowCount ? result.rowOffset + 1 : 0;
+  const rowEnd = result.rowOffset + result.rowHeaders.length;
+  const columnStart = result.totalColumnCount ? result.columnOffset + 1 : 0;
+  const columnEnd = result.columnOffset + result.columnHeaders.length;
+  const hasPagination = rowPageCount > 1 || columnPageCount > 1;
+  const locale = language === "en" ? "en-GB" : "it-IT";
+  return <div className="rpt-widget-content rpt-table-widget rpt-pivot-widget">
+    <div className="rpt-table-wrap"><table className="rpt-data-table rpt-pivot-table">
+      <caption className="rpt-sr-only"><span data-no-localize>{widget.title}</span>: {rowFields.map(field => field.name).join(" › ")} {language === "en" ? "by" : "per"} {columnFields.map(field => field.name).join(" › ")}</caption>
+      <thead><tr>{rowFields.map(field => <th scope="col" key={field.id}>{field.name}</th>)}{result.columnHeaders.map((headers, index) => <th scope="col" key={result.columnLabels[index]}>{headers.map((header, headerIndex) => <span className="rpt-pivot-column-level" key={`${header}-${headerIndex}`}>{header}</span>)}</th>)}<th scope="col">{totalLabel}</th></tr></thead>
+      <tbody>{result.rowHeaders.map((headers, rowIndex) => <tr key={result.rowLabels[rowIndex]}>{headers.map((header, headerIndex) => <th scope={headerIndex === headers.length - 1 ? "row" : undefined} key={`${header}-${headerIndex}`}>{header}</th>)}{result.cells[rowIndex]!.map((value, columnIndex) => <td key={`${result.rowLabels[rowIndex]}-${result.columnLabels[columnIndex]}`}>{value === null ? "—" : formatWidgetNumber(value, widget, language)}</td>)}<td className="rpt-pivot-total">{result.rowTotals[rowIndex] === null ? "—" : formatWidgetNumber(result.rowTotals[rowIndex]!, widget, language)}</td></tr>)}</tbody>
+      <tfoot><tr><th scope="row" colSpan={Math.max(1, rowFields.length)}>{totalLabel}</th>{result.columnTotals.map((value, index) => <td key={result.columnLabels[index]}>{value === null ? "—" : formatWidgetNumber(value, widget, language)}</td>)}<td>{result.grandTotal === null ? "—" : formatWidgetNumber(result.grandTotal, widget, language)}</td></tr></tfoot>
+    </table></div>
+    {hasPagination && <div className="rpt-table-footer rpt-pivot-pagination" aria-label={language === "en" ? "Pivot table navigation" : "Navigazione tabella pivot"}>
+      <span>{language === "en" ? "Rows" : "Righe"} {rowStart.toLocaleString(locale)}–{rowEnd.toLocaleString(locale)} {language === "en" ? "of" : "di"} {result.totalRowCount.toLocaleString(locale)} · {language === "en" ? "columns" : "colonne"} {columnStart.toLocaleString(locale)}–{columnEnd.toLocaleString(locale)} {language === "en" ? "of" : "di"} {result.totalColumnCount.toLocaleString(locale)}</span>
+      {rowPageCount > 1 && <div className="rpt-pivot-page-control"><strong>{language === "en" ? "Rows" : "Righe"}</strong><button type="button" aria-label={language === "en" ? "Previous row page" : "Pagina righe precedente"} disabled={currentRowPage === 0} onClick={() => setRowPage(currentRowPage - 1)}>‹</button><span>{currentRowPage + 1} / {rowPageCount}</span><button type="button" aria-label={language === "en" ? "Next row page" : "Pagina righe successiva"} disabled={currentRowPage >= rowPageCount - 1} onClick={() => setRowPage(currentRowPage + 1)}>›</button></div>}
+      {columnPageCount > 1 && <div className="rpt-pivot-page-control"><strong>{language === "en" ? "Columns" : "Colonne"}</strong><button type="button" aria-label={language === "en" ? "Previous column page" : "Pagina colonne precedente"} disabled={currentColumnPage === 0} onClick={() => setColumnPage(currentColumnPage - 1)}>‹</button><span>{currentColumnPage + 1} / {columnPageCount}</span><button type="button" aria-label={language === "en" ? "Next column page" : "Pagina colonne successiva"} disabled={currentColumnPage >= columnPageCount - 1} onClick={() => setColumnPage(currentColumnPage + 1)}>›</button></div>}
+    </div>}
+  </div>;
 }
 
 export function WidgetView({ widget, dataset, theme, filters }: WidgetViewProps) {

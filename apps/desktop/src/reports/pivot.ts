@@ -3,28 +3,37 @@ import { bucketTimeValue, type TimeGrain } from "./time-buckets";
 import type { Aggregation, CellValue, ReportDataset, ReportFilter } from "./types";
 import type { UiLanguage } from "../services/ui-preferences";
 
-export const PIVOT_MAX_ROWS = 100;
-export const PIVOT_MAX_COLUMNS = 50;
-
 export interface BuildPivotTableArgs {
   dataset: ReportDataset;
   filters: ReportFilter[];
-  rowFieldId: string;
-  columnFieldId: string;
+  rowFieldId?: string;
+  columnFieldId?: string;
+  rowFieldIds?: string[];
+  columnFieldIds?: string[];
   measureFieldId: string;
   aggregation: Aggregation;
   timeGrain?: TimeGrain;
   timeAxis?: "row" | "column" | "none";
   language?: UiLanguage;
+  rowOffset?: number;
+  rowLimit?: number;
+  columnOffset?: number;
+  columnLimit?: number;
 }
 
 export interface PivotResult {
   rowLabels: string[];
   columnLabels: string[];
+  rowHeaders: string[][];
+  columnHeaders: string[][];
   cells: (number | null)[][];
   rowTotals: (number | null)[];
   columnTotals: (number | null)[];
   grandTotal: number | null;
+  totalRowCount: number;
+  totalColumnCount: number;
+  rowOffset: number;
+  columnOffset: number;
   message: string;
 }
 
@@ -39,7 +48,11 @@ interface DimensionValue {
   timeOrder: number | null;
 }
 
-interface Group extends DimensionValue {
+interface Group {
+  key: string;
+  values: DimensionValue[];
+  labels: string[];
+  sourceIndex: number;
   accumulator: Accumulator;
 }
 
@@ -52,12 +65,31 @@ interface NormalizedBucket {
 const EMPTY_RESULT = (message = ""): PivotResult => ({
   rowLabels: [],
   columnLabels: [],
+  rowHeaders: [],
+  columnHeaders: [],
   cells: [],
   rowTotals: [],
   columnTotals: [],
   grandTotal: null,
+  totalRowCount: 0,
+  totalColumnCount: 0,
+  rowOffset: 0,
+  columnOffset: 0,
   message,
 });
+
+function normalizedPageLimit(value: number | undefined): number | null {
+  if (value === undefined || !Number.isFinite(value)) return null;
+  return Math.max(1, Math.floor(value));
+}
+
+function normalizedPageOffset(value: number | undefined, total: number, limit: number | null): number {
+  if (total === 0) return 0;
+  const requested = Number.isFinite(value) ? Math.max(0, Math.floor(value ?? 0)) : 0;
+  if (limit === null) return Math.min(requested, total - 1);
+  const lastPageOffset = Math.floor((total - 1) / limit) * limit;
+  return Math.min(requested, lastPageOffset);
+}
 
 function createAccumulator(): Accumulator {
   return { rows: [] };
@@ -149,12 +181,28 @@ function dimensionValue(
 }
 
 function compareGroups(left: Group, right: Group): number {
-  if (left.timeOrder !== null || right.timeOrder !== null) {
-    if (left.timeOrder === null) return 1;
-    if (right.timeOrder === null) return -1;
-    if (left.timeOrder !== right.timeOrder) return left.timeOrder - right.timeOrder;
+  for (let index = 0; index < Math.max(left.values.length, right.values.length); index += 1) {
+    const leftValue = left.values[index];
+    const rightValue = right.values[index];
+    if (!leftValue || !rightValue) break;
+    if (leftValue.timeOrder !== null || rightValue.timeOrder !== null) {
+      if (leftValue.timeOrder === null) return 1;
+      if (rightValue.timeOrder === null) return -1;
+      if (leftValue.timeOrder !== rightValue.timeOrder) return leftValue.timeOrder - rightValue.timeOrder;
+    }
+    const labelOrder = leftValue.label.localeCompare(rightValue.label, undefined, { numeric: true, sensitivity: "base" });
+    if (labelOrder !== 0) return labelOrder;
   }
   return left.sourceIndex - right.sourceIndex;
+}
+
+function compositeKey(values: DimensionValue[]): string {
+  return JSON.stringify(values.map(value => value.key));
+}
+
+function resolveFieldIds(multiple: string[] | undefined, single: string | undefined): string[] {
+  const values = multiple?.length ? multiple : single ? [single] : [];
+  return [...new Set(values.filter(Boolean))];
 }
 
 function invalidDateMessage(invalidDateRows: number): string {
@@ -162,7 +210,7 @@ function invalidDateMessage(invalidDateRows: number): string {
 }
 
 /**
- * Builds a bounded cross-tab from filtered raw rows. Each accumulator retains
+ * Builds a pageable cross-tab from filtered raw rows. Each accumulator retains
  * raw numeric values, so row/column/grand averages are weighted correctly.
  */
 export function buildPivotTable({
@@ -170,16 +218,26 @@ export function buildPivotTable({
   filters,
   rowFieldId,
   columnFieldId,
+  rowFieldIds,
+  columnFieldIds,
   measureFieldId,
   aggregation,
   timeGrain,
   timeAxis = "none",
   language = "it",
+  rowOffset,
+  rowLimit,
+  columnOffset,
+  columnLimit,
 }: BuildPivotTableArgs): PivotResult {
-  const rowField = dataset.fields.find(field => field.id === rowFieldId);
-  const columnField = dataset.fields.find(field => field.id === columnFieldId);
+  const resolvedRowFieldIds = resolveFieldIds(rowFieldIds, rowFieldId);
+  const resolvedColumnFieldIds = resolveFieldIds(columnFieldIds, columnFieldId);
+  const rowFields = resolvedRowFieldIds.map(fieldId => dataset.fields.find(field => field.id === fieldId)).filter((field): field is ReportDataset["fields"][number] => Boolean(field));
+  const columnFields = resolvedColumnFieldIds.map(fieldId => dataset.fields.find(field => field.id === fieldId)).filter((field): field is ReportDataset["fields"][number] => Boolean(field));
   const measureField = dataset.fields.find(field => field.id === measureFieldId);
-  if (!rowField || !columnField) return EMPTY_RESULT("Scegli due dimensioni valide per la tabella pivot.");
+  if (!rowFields.length || !columnFields.length || rowFields.length !== resolvedRowFieldIds.length || columnFields.length !== resolvedColumnFieldIds.length) {
+    return EMPTY_RESULT("Scegli almeno una dimensione valida per le righe e una per le colonne della tabella pivot.");
+  }
   if (aggregationNeedsMeasure(aggregation) && !measureField) {
     return EMPTY_RESULT("Scegli un campo per la misura della tabella pivot.");
   }
@@ -197,40 +255,34 @@ export function buildPivotTable({
   let invalidDateRows = 0;
 
   for (const [sourceIndex, row] of rows.entries()) {
-    const rowDimension = dimensionValue(row[rowField.id], rowField.type, sourceIndex, timeAxis === "row", timeGrain, language);
-    const columnDimension = dimensionValue(row[columnField.id], columnField.type, sourceIndex, timeAxis === "column", timeGrain, language);
-    if (rowDimension.invalidDate || columnDimension.invalidDate || !rowDimension.value || !columnDimension.value) {
-      if (rowDimension.invalidDate || columnDimension.invalidDate) invalidDateRows += 1;
+    const rowDimensions = rowFields.map(field => dimensionValue(row[field.id], field.type, sourceIndex, timeAxis === "row", timeGrain, language));
+    const columnDimensions = columnFields.map(field => dimensionValue(row[field.id], field.type, sourceIndex, timeAxis === "column", timeGrain, language));
+    if ([...rowDimensions, ...columnDimensions].some(dimension => dimension.invalidDate || !dimension.value)) {
+      if ([...rowDimensions, ...columnDimensions].some(dimension => dimension.invalidDate)) invalidDateRows += 1;
       continue;
     }
 
-    const rowValue = rowDimension.value;
-    const columnValue = columnDimension.value;
-    let rowGroup = rowGroups.get(rowValue.key);
+    const rowValues = rowDimensions.map(dimension => dimension.value!);
+    const columnValues = columnDimensions.map(dimension => dimension.value!);
+    const rowKey = compositeKey(rowValues);
+    const columnKey = compositeKey(columnValues);
+    let rowGroup = rowGroups.get(rowKey);
     if (!rowGroup) {
-      rowGroup = { ...rowValue, accumulator: createAccumulator() };
-      rowGroups.set(rowValue.key, rowGroup);
-    } else if (rowGroup.timeOrder === null && rowValue.timeOrder !== null) {
-      rowGroup.timeOrder = rowValue.timeOrder;
-    } else if (rowValue.timeOrder !== null && rowGroup.timeOrder !== null) {
-      rowGroup.timeOrder = Math.min(rowGroup.timeOrder, rowValue.timeOrder);
+      rowGroup = { key: rowKey, values: rowValues, labels: rowValues.map(value => value.label), sourceIndex, accumulator: createAccumulator() };
+      rowGroups.set(rowKey, rowGroup);
     }
 
-    let columnGroup = columnGroups.get(columnValue.key);
+    let columnGroup = columnGroups.get(columnKey);
     if (!columnGroup) {
-      columnGroup = { ...columnValue, accumulator: createAccumulator() };
-      columnGroups.set(columnValue.key, columnGroup);
-    } else if (columnGroup.timeOrder === null && columnValue.timeOrder !== null) {
-      columnGroup.timeOrder = columnValue.timeOrder;
-    } else if (columnValue.timeOrder !== null && columnGroup.timeOrder !== null) {
-      columnGroup.timeOrder = Math.min(columnGroup.timeOrder, columnValue.timeOrder);
+      columnGroup = { key: columnKey, values: columnValues, labels: columnValues.map(value => value.label), sourceIndex, accumulator: createAccumulator() };
+      columnGroups.set(columnKey, columnGroup);
     }
 
-    const cellByColumn = cells.get(rowValue.key) ?? new Map<string, Accumulator>();
-    const cell = cellByColumn.get(columnValue.key) ?? createAccumulator();
+    const cellByColumn = cells.get(rowKey) ?? new Map<string, Accumulator>();
+    const cell = cellByColumn.get(columnKey) ?? createAccumulator();
     addValue(cell, row);
-    cellByColumn.set(columnValue.key, cell);
-    cells.set(rowValue.key, cellByColumn);
+    cellByColumn.set(columnKey, cell);
+    cells.set(rowKey, cellByColumn);
     addValue(rowGroup.accumulator, row);
     addValue(columnGroup.accumulator, row);
     addValue(grandAccumulator, row);
@@ -242,28 +294,43 @@ export function buildPivotTable({
 
   const orderedRows = [...rowGroups.values()];
   const orderedColumns = [...columnGroups.values()];
-  if (timeAxis === "row" && timeGrain && rowField.type === "date") orderedRows.sort(compareGroups);
-  if (timeAxis === "column" && timeGrain && columnField.type === "date") orderedColumns.sort(compareGroups);
+  if (timeAxis === "row" && timeGrain && rowFields.some(field => field.type === "date")) orderedRows.sort(compareGroups);
+  if (timeAxis === "column" && timeGrain && columnFields.some(field => field.type === "date")) orderedColumns.sort(compareGroups);
 
-  if (orderedRows.length > PIVOT_MAX_ROWS || orderedColumns.length > PIVOT_MAX_COLUMNS) {
-    return EMPTY_RESULT(`La tabella pivot supera il limite massimo di ${PIVOT_MAX_ROWS} righe e ${PIVOT_MAX_COLUMNS} colonne (trovate ${orderedRows.length} righe e ${orderedColumns.length} colonne). Riduci i dati o applica filtri.`);
-  }
+  const totalRowCount = orderedRows.length;
+  const totalColumnCount = orderedColumns.length;
+  const effectiveRowLimit = normalizedPageLimit(rowLimit);
+  const effectiveColumnLimit = normalizedPageLimit(columnLimit);
+  const effectiveRowOffset = normalizedPageOffset(rowOffset, totalRowCount, effectiveRowLimit);
+  const effectiveColumnOffset = normalizedPageOffset(columnOffset, totalColumnCount, effectiveColumnLimit);
+  const visibleRows = effectiveRowLimit === null
+    ? orderedRows.slice(effectiveRowOffset)
+    : orderedRows.slice(effectiveRowOffset, effectiveRowOffset + effectiveRowLimit);
+  const visibleColumns = effectiveColumnLimit === null
+    ? orderedColumns.slice(effectiveColumnOffset)
+    : orderedColumns.slice(effectiveColumnOffset, effectiveColumnOffset + effectiveColumnLimit);
 
-  const outputCells = orderedRows.map(rowGroup => orderedColumns.map(columnGroup => {
+  const outputCells = visibleRows.map(rowGroup => visibleColumns.map(columnGroup => {
     const accumulator = cells.get(rowGroup.key)?.get(columnGroup.key);
     return accumulator ? reduceAccumulator(dataset, measureFieldId, accumulator, aggregation) : null;
   }));
-  const rowTotals = orderedRows.map(group => reduceAccumulator(dataset, measureFieldId, group.accumulator, aggregation));
-  const columnTotals = orderedColumns.map(group => reduceAccumulator(dataset, measureFieldId, group.accumulator, aggregation));
+  const rowTotals = visibleRows.map(group => reduceAccumulator(dataset, measureFieldId, group.accumulator, aggregation));
+  const columnTotals = visibleColumns.map(group => reduceAccumulator(dataset, measureFieldId, group.accumulator, aggregation));
   const grandTotal = reduceAccumulator(dataset, measureFieldId, grandAccumulator, aggregation);
-  const hasValue = outputCells.some(row => row.some(value => value !== null));
+  const hasValue = grandTotal !== null || outputCells.some(row => row.some(value => value !== null));
   return {
-    rowLabels: orderedRows.map(group => group.label),
-    columnLabels: orderedColumns.map(group => group.label),
+    rowLabels: visibleRows.map(group => group.labels.join(" › ")),
+    columnLabels: visibleColumns.map(group => group.labels.join(" › ")),
+    rowHeaders: visibleRows.map(group => group.labels),
+    columnHeaders: visibleColumns.map(group => group.labels),
     cells: outputCells,
     rowTotals,
     columnTotals,
     grandTotal,
+    totalRowCount,
+    totalColumnCount,
+    rowOffset: effectiveRowOffset,
+    columnOffset: effectiveColumnOffset,
     message: hasValue ? "" : "Nessun valore numerico disponibile per la misura selezionata.",
   };
 }

@@ -100,6 +100,19 @@ describe("Reports portable JSON", () => {
     expect(original.datasets[0]!.rows[0]!["field-3"]).toBe(42000);
   });
 
+  it("normalizes older v16 widgets into ordered pivot dimension lists", () => {
+    const legacy = JSON.parse(JSON.stringify(createDemoDashboard())) as { widgets: Record<string, unknown>[] };
+    legacy.widgets[0]!.type = "pivot";
+    legacy.widgets.forEach(widget => { delete widget.rowDimensions; delete widget.columnDimensions; });
+
+    const normalized = validateDashboard(legacy);
+
+    expect(normalized.widgets[0]!.rowDimensions).toEqual([normalized.widgets[0]!.dimension]);
+    expect(normalized.widgets[0]!.columnDimensions).toEqual([normalized.widgets[0]!.secondaryDimension]);
+    expect(normalized.widgets[1]!.rowDimensions).toEqual([]);
+    expect(normalized.widgets[1]!.columnDimensions).toEqual([]);
+  });
+
   it("rejects malformed JSON, unsupported versions and unknown properties", () => {
     expect(() => importDashboard("{broken")).toThrow(/JSON valido/);
     expect(() => importDashboard("null")).toThrow(/oggetto/);

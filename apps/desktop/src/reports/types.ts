@@ -76,7 +76,7 @@ export interface ReportTab { id: string; name: string }
 export interface ReportLayoutRow { id: string; tabId: string; columns: number | null }
 export interface ReportWidget {
   id: string; type: WidgetType; title: string; datasetId: string;
-  dimension: string; secondaryDimension: string; measure: string; aggregation: Aggregation; timeGrain: TimeGrain;
+  dimension: string; secondaryDimension: string; rowDimensions: string[]; columnDimensions: string[]; measure: string; aggregation: Aggregation; timeGrain: TimeGrain;
   rowId: string; width: number; height: 240 | 320 | 420;
   color: string; mapBackground: string; text: string; format: "number" | "currency" | "percent"; currency: CurrencyCode; decimals: number;
   sort: "source" | "asc" | "desc"; xSort: "source" | "asc" | "desc"; limit: number | null; categoryLimitMode: "first" | "last";
@@ -120,9 +120,10 @@ export function createDashboard(name?: string, language: UiLanguage = "it"): Rep
     theme: { ...DEFAULT_REPORT_THEME }, datasets: [], tabs: [{ id: tabId, name: language === "en" ? "Page 1" : "Pagina 1" }], layoutRows: [{ id: reportId(), tabId, columns: null }], widgets: [], filters: [] };
 }
 export function createWidget(type: WidgetType, dataset?: ReportDataset, rowId = "", language: UiLanguage = "it"): ReportWidget {
+  const dimension = dataset?.fields.find(field => field.type !== "number")?.id ?? dataset?.fields[0]?.id ?? "";
+  const secondaryDimension = dataset?.fields.filter(field => field.type !== "number")[1]?.id ?? dataset?.fields.find(field => field.type !== "number")?.id ?? "";
   return { id: reportId(), type, title: WIDGET_LABELS_BY_LANGUAGE[language][type], datasetId: dataset?.id ?? "",
-    dimension: dataset?.fields.find(field => field.type !== "number")?.id ?? dataset?.fields[0]?.id ?? "",
-    secondaryDimension: dataset?.fields.filter(field => field.type !== "number")[1]?.id ?? dataset?.fields.find(field => field.type !== "number")?.id ?? "",
+    dimension, secondaryDimension, rowDimensions: type === "pivot" && dimension ? [dimension] : [], columnDimensions: type === "pivot" && secondaryDimension ? [secondaryDimension] : [],
     measure: dataset?.fields.find(field => field.type === "number")?.id ?? "",
     aggregation: dataset?.fields.some(field => field.type === "number") ? "sum" : "count", timeGrain: "exact", rowId,
     width: type === "kpi" ? 4 : type === "table" || type === "pivot" || type === "replicateXls" ? 12 : 6, height: type === "kpi" ? 240 : type === "pivot" || type === "replicateXls" ? 420 : 320,
