@@ -27,7 +27,7 @@ async function indexMedia(format: VideoFormat, media: FormatMedia) {
   await memory.upsertRecord({ id: media.id, path: `/video-formats/${format.id}/${media.id}`, name: media.name, description: media.description, kind: 'video', mimeType: media.file.type, categoryIds: [category] });
 }
 
-export function VideoFormatWorkspace({ onHome, onEditor }: { onHome: () => void; onEditor: () => void }) {
+export function VideoFormatEditor({ onHome, onEditor, initialFormat, onSave }: { onHome: () => void; onEditor: () => void; initialFormat?: VideoFormat; onSave?: (format: VideoFormat) => Promise<void> }) {
   const { language } = useUiPreferences();
   const t = (it: string, en: string) => language === 'it' ? it : en;
   const [formats, setFormats] = useState<VideoFormat[]>([]), [format, setFormat] = useState<VideoFormat | null>(null);
@@ -44,9 +44,9 @@ export function VideoFormatWorkspace({ onHome, onEditor }: { onHome: () => void;
   const [exporting, setExporting] = useState(false);
   const [transitionBoundary, setTransitionBoundary] = useState<[string, string] | null>(null);
   const [deleting, setDeleting] = useState<{ id: string; standard: boolean; name: string; uses: number } | null>(null);
-  useEffect(() => { let active = true; void readFormats().then(items => { if (active) { setFormats(items); setFormat(items[0] ?? null); loaded.current = true; } }).catch(reason => { if (active) setError(String(reason)); }).finally(() => { if (active) setBusy(false); }); return () => { active = false; }; }, []);
+  useEffect(() => { let active = true; void (initialFormat ? Promise.resolve([initialFormat]) : readFormats()).then(items => { if (active) { setFormats(items); setFormat(items[0] ?? null); loaded.current = true; } }).catch(reason => { if (active) setError(String(reason)); }).finally(() => { if (active) setBusy(false); }); return () => { active = false; }; }, [initialFormat]);
   const run = async (action: () => Promise<void>) => { setBusy(true); setError(''); try { await action(); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); } finally { setBusy(false); } };
-  const persist = async (value: VideoFormat) => { await saveFormat(value); setFormats(items => [...items.filter(item => item.id !== value.id), value]); setSaved(true); };
+  const persist = async (value: VideoFormat) => { await (onSave ? onSave(value) : saveFormat(value)); setFormats(items => [...items.filter(item => item.id !== value.id), value]); setSaved(true); };
   const update = (value: VideoFormat) => { setFormat(value); setSaved(false); };
   const change = (patch: Partial<VideoFormat>, rebuild = false) => { if (!format) return; const next = { ...format, ...patch }; if (rebuild) next.clips = reactionClips(next); update(next); };
   const active = format?.uploads.find(item => item.id === activeId) ?? format?.uploads[0];
@@ -124,7 +124,7 @@ export function VideoFormatWorkspace({ onHome, onEditor }: { onHome: () => void;
   };
   const createVideo = (rowId: string) => { if (!format) return; void run(async () => { const selected = rowFormat(format, rowId); await persist(format); const project = await prepareFormat(selected); useProjectStore.getState().setProject(project, null); onEditor(); }); };
   return <main className="format-builder" data-ui-copy>
-    <header className="vfb-header"><button disabled={busy} onClick={() => void run(async () => { if (format) await persist(format); onHome(); })}>← {t('Aree', 'Areas')}</button><div><small>MLSM STUDIO / VIDEO FORMAT BUILDER</small><h1>{t('Il momento. La reazione.', 'The moment. The reaction.')}</h1></div><select aria-label={t('Scegli format', 'Choose format')} disabled={busy || !formats.length} value={format?.id ?? ''} onChange={event => void run(() => switchFormat(event.target.value))}>{formats.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select><button disabled={busy || !loaded.current} onClick={() => void run(async () => { if (format) await persist(format); const next = newFormat(language); await persist(next); setFormat(next); setPreviewRange(null); setActiveId(''); setReactionId(''); setQuery(''); setResults(null); })}>+ {t('Nuovo format', 'New format')}</button><button disabled={busy || !format} onClick={() => void run(async () => { if (format) await persist(format); })}>{t('Salva format e bozza', 'Save format and draft')}</button><button className="vfb-primary" disabled={busy || !format?.uploads.length} onClick={() => setExporting(true)}>{t('Esporta video', 'Export video')} ↑</button></header>
+    <header className="vfb-header"><button disabled={busy} onClick={() => void run(async () => { if (format) await persist(format); onHome(); })}>← {initialFormat ? t('Video del format', 'Format videos') : t('Aree', 'Areas')}</button><div><small>MLSM STUDIO / VIDEO FORMAT BUILDER</small><h1>{t('Il momento. La reazione.', 'The moment. The reaction.')}</h1></div>{!initialFormat && <><select aria-label={t('Scegli format', 'Choose format')} disabled={busy || !formats.length} value={format?.id ?? ''} onChange={event => void run(() => switchFormat(event.target.value))}>{formats.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select><button disabled={busy || !loaded.current} onClick={() => void run(async () => { if (format) await persist(format); const next = newFormat(language); await persist(next); setFormat(next); setPreviewRange(null); setActiveId(''); setReactionId(''); setQuery(''); setResults(null); })}>+ {t('Nuovo format', 'New format')}</button></>}<button disabled={busy || !format} onClick={() => void run(async () => { if (format) await persist(format); })}>{t('Salva format e bozza', 'Save format and draft')}</button><button className="vfb-primary" disabled={busy || !format?.uploads.length} onClick={() => setExporting(true)}>{t('Esporta video', 'Export video')} ↑</button></header>
     <div className="vfb-feedback">{error && <p role="alert">{formatError(language, error)}</p>}<span role="status">{busy ? t('Elaborazione in corso…', 'Processing…') : saved ? t('Format e bozza salvati sul dispositivo.', 'Format and draft saved on this device.') : format ? t('Modifiche da salvare', 'Unsaved changes') : t('Crea un format per iniziare.', 'Create a format to get started.')}</span></div>
     {trimNotice && <p className="vfb-trim-notice" role="status">{trimNotice}</p>}
     <div className="vfb-with-preview"><div className="vfb-authoring">
@@ -160,3 +160,5 @@ export function VideoFormatWorkspace({ onHome, onEditor }: { onHome: () => void;
     {editing && format && <StandardEditor key={editing.id} media={editing} language={language} busy={busy} onClose={() => setEditing(null)} onSave={media => void run(async () => { const exists = format.library.some(item => item.id === media.id); const next = { ...format, library: exists ? format.library.map(item => item.id === media.id ? media : item) : [...format.library, media] }; await indexMedia(next, media); await persist(next); setFormat(next); setEditing(null); setReactionId(media.id); setQuery(''); setResults(null); })} />}
   </main>;
 }
+
+export { VideoFormatHome as VideoFormatWorkspace } from './VideoFormatHome';

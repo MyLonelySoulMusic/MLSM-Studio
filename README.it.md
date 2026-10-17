@@ -509,7 +509,15 @@ Per dettagli sui tool di piattaforma consulta [Script di installazione e build](
 
 ### Video Format Builder
 
-Dalla home apri **Video Format Builder** e crea un format (per esempio “Gaming reaction”).
+Dalla home apri **Video Format Builder**: la schermata iniziale mostra tutti i format.
+Crea un format (per esempio “Gaming reaction”) o aprine uno per vedere i suoi montaggi.
+**Crea nuovo** apre un editor senza clip occasionali, conservando video standard e relativi
+tagli, scene, regole di ridimensionamento, transizioni globali e logo. **Salva format e bozza**
+salva il montaggio separatamente e aggiorna il modello per i nuovi video.
+Puoi riaprire o eliminare ogni montaggio dall'elenco; la cancellazione non rimuove la galleria
+standard né i file MP4 già esportati. I contenuti presenti nel vecchio editor sono migrati
+automaticamente in **Montaggio precedente**. Il pulsante **Video del format** torna all'elenco
+salvando il lavoro corrente.
 La galleria superiore contiene i **video standard**: carica una reazione, scegli inizio e fine,
 dalle un nome e una descrizione e salvala. Il taglio è non distruttivo: il montaggio usa solo
 l'intervallo scelto. La ricerca per nome e la ricerca semantica usano il database Memory condiviso,

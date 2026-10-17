@@ -24,7 +24,10 @@ export function FormatExportDialog({ format, activeId, language, onClose }: { fo
   const [info, setInfo] = useState<ExportMediaInfo[]>([]);
   const [resolution, setResolution] = useState(format.aspect === '9:16' ? '1080x1920' : '1920x1080'), [fps, setFps] = useState(30);
   const [loading, setLoading] = useState(true), [running, setRunning] = useState(false), [error, setError] = useState(''), [result, setResult] = useState('');
+  const [preparation, setPreparation] = useState('');
   const [progress, setProgress] = useState(0);
+  const successButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => { if (result) successButton.current?.focus(); }, [result]);
   const manualResolution = useRef(false), manualFps = useRef(false);
   const dialog = useRef<HTMLDialogElement>(null), controller = useRef<AbortController | null>(null);
   useEffect(() => { dialog.current?.showModal(); return () => controller.current?.abort(); }, []);
@@ -32,7 +35,7 @@ export function FormatExportDialog({ format, activeId, language, onClose }: { fo
     let active = true, prepared: RhythmBallProject | null = null;
     manualResolution.current = false; manualFps.current = false;
     setResolution(format.aspect === '9:16' ? '1080x1920' : '1920x1080'); setFps(30);
-    setLoading(true); setProject(null); setError(''); setResult(''); setInfo([]);
+    setPreparation(''); setLoading(true); setProject(null); setError(''); setResult(''); setInfo([]);
     void (async () => {
       try {
         const selected = exportRowFormat(format, selectedRowId);
@@ -48,14 +51,16 @@ export function FormatExportDialog({ format, activeId, language, onClose }: { fo
         const settings = exportOptions(metadata, format.aspect);
         setInfo(metadata); if (!manualResolution.current) setResolution(settings.resolutions.find(item => item.recommended)!.value); if (!manualFps.current) setFps(settings.suggestedFps);
         });
-        prepared = await prepareFormat(selected);
+        prepared = await prepareFormat(selected, step => {
+          if (active) setPreparation(`${step.current}/${step.total} · ${step.kind === 'frame' ? (language === 'it' ? 'Fermo immagine' : 'Still frame') : step.kind === 'logo' ? 'Logo' : (language === 'it' ? 'Lettura video' : 'Reading video')} · ${step.name}`);
+        });
         if (!active) { release(prepared); prepared = null; return; }
         setProject(prepared);
       } catch (reason) { if (active) setError(reason instanceof Error ? reason.message : String(reason)); }
       finally { if (active) setLoading(false); }
     })();
     return () => { active = false; if (prepared) release(prepared); };
-  }, [format, selectedRowId]);
+  }, [format, selectedRowId, language]);
   const options = exportOptions(info, format.aspect);
   const start = async () => {
     if (!project || loading || running) return;
@@ -78,8 +83,17 @@ export function FormatExportDialog({ format, activeId, language, onClose }: { fo
   };
   return <dialog ref={dialog} className="vfb-export-dialog" aria-label={t('Esporta video', 'Export video')} onCancel={event => { if (running) event.preventDefault(); else onClose(); }}>
     <h2>{t('Esporta video', 'Export video')} · MP4</h2>
+    {result ? <section className="vfb-export-success" role="status" aria-live="polite">
+      <span className="vfb-export-success-icon" aria-hidden="true">✓</span>
+      <h3>{t('Esportazione completata!', 'Export complete!')}</h3>
+      <p>{t('Il video è stato generato correttamente.', 'Your video has been generated successfully.')}</p>
+      <strong>{result}</strong>
+      <p>{t('Trovi il file nella destinazione scelta oppure nei download del browser.', 'Find the file in your chosen location or in your browser downloads.')}</p>
+      <button ref={successButton} className="vfb-primary" onClick={onClose}>{t('Fatto', 'Done')}</button>
+      <button onClick={() => setResult('')}>{t('Esporta un’altra versione', 'Export another version')}</button>
+    </section> : <>
     <label>{t('Video da esportare', 'Video to export')}<select value={selectedRowId} disabled={running} onChange={event => setRowId(event.target.value)}>{rows.map((row, index) => <option key={row.id} value={row.id}>{t('Video finale', 'Final video')} {index + 1} · {row.media.length} {t('blocchi', 'blocks')}</option>)}</select></label>
-    {loading && <p role="status">{t('Analisi delle clip e preparazione del montaggio…', 'Analyzing clips and preparing the composition…')}</p>}
+    {loading && <p role="status">{preparation || t('Preparazione del montaggio…', 'Preparing composition…')}</p>}
     {!!info.length && <><p>{t('Massimi rilevati tra le clip utilizzate (video nuovi e reaction). La risoluzione suggerita rispetta il formato del progetto.', 'Highest detected values among the used clips (new videos and reactions). The suggested resolution follows the project aspect ratio.')}</p>
       <table><thead><tr><th>{t('Clip', 'Clip')}</th><th>{t('Risoluzione originale', 'Source resolution')}</th><th>FPS</th></tr></thead><tbody>{info.map(item => <tr key={item.id}><td>{item.name}</td><td>{item.width && item.height ? <span className={Math.max(item.width, item.height) === options.maxEdge ? 'vfb-source-maximum' : ''}>{item.width} × {item.height}{Math.max(item.width, item.height) === options.maxEdge ? ' ★' : ''}</span> : '—'}</td><td><span className={item.fps === options.maxFps ? 'vfb-source-maximum' : ''}>{item.fps ?? '—'}{item.fps && item.fps === options.maxFps ? ' ★' : ''}</span></td></tr>)}</tbody></table>
       {info.some(item => !item.fps || !item.width) && <p>{t('Alcuni metadati non sono disponibili: i suggerimenti usano i valori rilevati, oppure 1080p e 30 FPS come fallback.', 'Some metadata is unavailable: suggestions use detected values, or 1080p and 30 FPS as fallback.')}</p>}
@@ -89,7 +103,8 @@ export function FormatExportDialog({ format, activeId, language, onClose }: { fo
       <p>{t('Gli FPS sono la frequenza media rilevata. Valori superiori alle sorgenti non aggiungono dettaglio o nuovi fotogrammi reali.', 'FPS is the detected average frame rate. Values above the sources do not add detail or new real frames.')}</p>
     </fieldset>
     {running && <div role="status"><progress max="1" value={progress} /><span>{Math.round(progress * 100)}%</span><button onClick={() => controller.current?.abort()}>{t('Annulla esportazione', 'Cancel export')}</button></div>}
-    {error && <p role="alert">{error}</p>}{result && <p role="status">{t('Esportazione completata', 'Export complete')}: {result}</p>}
+    {error && <p role="alert">{error}</p>}
     <footer><button disabled={running} onClick={onClose}>{t('Chiudi', 'Close')}</button><button className="vfb-primary" disabled={!project || loading || running} onClick={() => void start()}>{loading ? t('Preparazione video…', 'Preparing video…') : t('Esporta MP4', 'Export MP4')}</button></footer>
+    </>}
   </dialog>;
 }

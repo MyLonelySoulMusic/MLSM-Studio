@@ -30,6 +30,11 @@ it('probes only used clips, recommends their maxima and exports the selected row
   fireEvent.change(screen.getByLabelText('FPS'), { target: { value: '29.97' } });
   fireEvent.click(screen.getByRole('button', { name: 'Esporta MP4' }));
   await screen.findByText(/Esportazione completata/);
+  expect(screen.getByRole('status')).toHaveTextContent('result.mp4');
+  expect(screen.getByRole('button', { name: 'Fatto' })).toHaveFocus();
+  expect(screen.queryByLabelText('FPS')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Fatto' }));
+  expect(close).toHaveBeenCalledOnce();
   expect(mocks.export).toHaveBeenCalledWith(expect.objectContaining({ width: 1080, height: 1920, fps: 29.97, interpolationEnabled: false, videoEditorSettings: expect.objectContaining({ outputWidth: 1080, outputHeight: 1920 }) }), expect.any(AbortSignal), expect.any(Function));
   unmount();
   expect(mocks.forget).toHaveBeenCalledWith('asset');
@@ -43,7 +48,7 @@ it('exports standalone clips without requiring a reaction or explicit stop', asy
   await waitFor(() => expect(screen.getByRole('button', { name: 'Esporta MP4' })).toBeEnabled());
   expect(mocks.prepare).toHaveBeenCalledWith(expect.objectContaining({ clips: [
     expect.objectContaining({ mediaId: 'a', sourceIn: 0, sourceOut: 3, sceneId: '' })
-  ] }));
+  ] }), expect.any(Function));
 });
 
 it('allows changes while probing and preparing, without displaying 480p or overwriting manual choices', async () => {
@@ -82,6 +87,6 @@ it('prepares the visibly selected row automatically even when row IDs change and
   rerender(<FormatExportDialog format={changed} activeId="a" language="it" onClose={vi.fn()} />);
   await waitFor(() => expect(screen.getByRole('button', { name: 'Esporta MP4' })).toBeEnabled());
   expect(screen.getByLabelText('Video da esportare')).toHaveValue('new');
-  expect(mocks.prepare).toHaveBeenLastCalledWith(expect.objectContaining({ uploads: changed.uploads }));
+  expect(mocks.prepare).toHaveBeenLastCalledWith(expect.objectContaining({ uploads: changed.uploads }), expect.any(Function));
   expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 });

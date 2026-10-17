@@ -52,3 +52,18 @@
 .format-builder .vfb-export-dialog footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
 .format-builder .vfb-export-dialog fieldset { border: 0; padding: 0; margin: 0; }
 .format-builder .vfb-export-dialog progress { width: 70%; accent-color: #ed589c; margin-right: 10px; }
+.format-builder.vfb-home { display: block; height: 100vh; overflow-y: auto; }
+.format-builder .vfb-home-cards { display: grid; grid-template-columns: repeat(auto-fill,minmax(260px,1fr)); gap: 18px; margin: 24px 0; }
+.format-builder .vfb-home-cards > * { padding: 24px; text-align: left; border: 1px solid #443843; border-radius: 16px; background: #1c1922; }
+.format-builder .vfb-home-cards button + button { margin-left: 8px; }
+.format-builder.vfb-home form { display: flex; align-items: end; gap: 12px; max-width: 680px; margin: 20px 0; }
+.format-builder.vfb-home form label { flex: 1; margin: 0; }
+.format-builder .vfb-standard-preview { width: min(1100px, 94vw); max-height: 92vh; overflow: auto; }
+.format-builder .vfb-standard-preview > video { display: block; width: 100%; height: 62vh; max-height: 62vh; object-fit: contain; background: #000; border-radius: 10px; }
+.format-builder .vfb-standard-preview header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.format-builder .vfb-standard-preview h2 { overflow-wrap: anywhere; }
+.format-builder .vfb-standard .vfb-preview-button { color: #ff93c4; border-color: #89536c; }
+.format-builder .vfb-export-success { display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 32px 16px; text-align: center; }
+.format-builder .vfb-export-success-icon { display: grid; place-items: center; width: 72px; height: 72px; border-radius: 50%; background: #68d2b225; color: #68d2b2; font-size: 40px; }
+.format-builder .vfb-export-success h3 { font-size: 24px; margin: 0; }
+.format-builder .vfb-export-success strong { overflow-wrap: anywhere; max-width: 100%; color: #ff93c4; }

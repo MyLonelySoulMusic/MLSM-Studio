@@ -44,8 +44,9 @@ function probeVideo(url: string): Promise<{ durationSeconds: number; width: numb
 function probeImage(url: string): Promise<{ width: number; height: number }> {
   return new Promise((resolve, reject) => {
     const image = new Image();
-    image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight });
-    image.onerror = () => reject(new Error("Il browser non riesce a leggere l’immagine."));
+    const timeout = window.setTimeout(() => { image.onload = image.onerror = null; image.src = ''; reject(new Error("Timeout durante la lettura dell’immagine.")); }, 15000);
+    image.onload = () => { window.clearTimeout(timeout); resolve({ width: image.naturalWidth, height: image.naturalHeight }); };
+    image.onerror = () => { window.clearTimeout(timeout); reject(new Error("Il browser non riesce a leggere l’immagine.")); };
     image.src = url;
   });
 }
@@ -119,7 +120,7 @@ export interface VideoEditorImportedAsset { asset: VideoEditorAsset; file: File 
  * traccia audio decodificabile resta perfettamente valido: entra come sorgente
  * solo visiva anziché essere rifiutato.
  */
-export async function importVideoEditorAsset(file: File): Promise<VideoEditorImportedAsset> {
+export async function importVideoEditorAsset(file: File, options?: { metadataOnly?: boolean }): Promise<VideoEditorImportedAsset> {
   const kind = videoEditorAssetKind(file);
   if (!kind) throw new Error(`${file.name}: formato non riconosciuto. Usa video, immagini o audio.`);
   const url = URL.createObjectURL(file);
@@ -133,6 +134,24 @@ export async function importVideoEditorAsset(file: File): Promise<VideoEditorImp
     if (kind === "audio") {
       const decoded = await decodeAudio(await file.arrayBuffer());
       return { asset: { ...base, durationSeconds: decoded.durationSeconds, width: 0, height: 0, hasAudio: true, waveform: decoded.waveform }, file };
+    }
+    if (options?.metadataOnly) {
+      const { Input, BlobSource, ALL_FORMATS } = await import('mediabunny');
+      const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const metadata = await Promise.race([
+          (async () => {
+            const track = await input.getPrimaryVideoTrack();
+            if (!track) throw new Error(`Traccia video non disponibile: ${file.name}`);
+            const durationSeconds = await track.computeDuration();
+            if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) throw new Error(`Durata video non valida: ${file.name}`);
+            return { durationSeconds, width: track.displayWidth, height: track.displayHeight, hasAudio: !!await input.getPrimaryAudioTrack() };
+          })(),
+          new Promise<never>((_resolve, reject) => { timeout = setTimeout(() => reject(new Error(`Timeout lettura video: ${file.name}`)), 20000); }),
+        ]);
+        return { asset: { ...base, ...metadata, waveform: [] }, file };
+      } finally { clearTimeout(timeout); input.dispose(); }
     }
     const probe = await probeVideo(url);
     let waveform: number[] = [];

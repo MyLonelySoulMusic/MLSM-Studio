@@ -1,0 +1,27 @@
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, expect, it, vi } from 'vitest';
+import { StandardCard } from './MediaEditor';
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+it('opens a large preview without selecting or editing the standard and respects its saved trim', () => {
+  HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', ''); };
+  URL.createObjectURL = vi.fn(() => 'blob:standard'); URL.revokeObjectURL = vi.fn();
+  const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+  const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+  const select = vi.fn(), edit = vi.fn();
+  const media = { id: 'r', name: 'King', description: 'Esultanza', file: new File([''], 'r.mp4'), duration: 12, trimIn: 2.5, trimOut: 6 };
+  render(<StandardCard media={media} selected={false} language="it" onSelect={select} onEdit={edit} onDelete={vi.fn()} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Anteprima King' }));
+  const dialog = screen.getByRole('dialog', { name: 'Anteprima video standard' });
+  const video = dialog.querySelector('video')!;
+  fireEvent.loadedMetadata(video);
+  expect(video.currentTime).toBe(2.5);
+  expect(within(dialog).getByText('Esultanza')).toBeInTheDocument();
+  video.currentTime = 6.2; fireEvent.timeUpdate(video);
+  expect(video.currentTime).toBe(6); expect(pause).toHaveBeenCalled();
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Riproduci dall’inizio' }));
+  expect(video.currentTime).toBe(2.5); expect(play).toHaveBeenCalled();
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Chiudi anteprima' }));
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  expect(select).not.toHaveBeenCalled(); expect(edit).not.toHaveBeenCalled();
+  expect(media.trimIn).toBe(2.5); expect(media.trimOut).toBe(6);
+});

@@ -4,7 +4,7 @@ import { createProject } from '@rbs/project-schema';
 import { updateUiPreferences } from '../services/ui-preferences';
 import { UiLocalizationBridge } from '../components/UiLocalizationBridge';
 import { newFormat, reactionClips } from './model';
-import { VideoFormatWorkspace } from './VideoFormatWorkspace';
+import { VideoFormatEditor as VideoFormatWorkspace } from './VideoFormatWorkspace';
 const mocks = vi.hoisted(() => ({ read: vi.fn(), save: vi.fn(), prepare: vi.fn(), deleteRecord: vi.fn() }));
 vi.mock('../services/memory-engine', () => ({ createMemoryEngine: () => ({ deleteRecord: mocks.deleteRecord }) }));
 vi.mock('./storage', () => ({ readFormats: mocks.read, saveFormat: mocks.save }));

@@ -1,0 +1,27 @@
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, expect, it, vi } from 'vitest';
+import { newFormat } from './model';
+import { updateUiPreferences } from '../services/ui-preferences';
+import { VideoFormatHome } from './VideoFormatHome';
+const mocks = vi.hoisted(() => ({ read: vi.fn(), videos: vi.fn(), save: vi.fn(), saveVideo: vi.fn(), deleteVideo: vi.fn() }));
+vi.mock('./storage', async original => ({ ...await original<typeof import('./storage')>(), readFormats: mocks.read, readFormatVideos: mocks.videos, saveFormat: mocks.save, saveFormatVideo: mocks.saveVideo, deleteFormatVideo: mocks.deleteVideo }));
+vi.mock('./VideoFormatWorkspace', () => ({ VideoFormatEditor: ({ initialFormat }: { initialFormat: import('./model').VideoFormat }) => <div data-testid="editor">{initialFormat.uploads.length} uploads · {initialFormat.library[0]?.trimIn} trim</div> }));
+afterEach(() => { cleanup(); vi.clearAllMocks(); });
+it('starts at the format home, preserves the legacy composition and opens a clean new video with trimmed standards', async () => {
+  updateUiPreferences({ language: 'it' });
+  const format = newFormat(); format.name = 'Reaction';
+  const media = { id: 'a', name: 'a', description: '', duration: 10, file: new File([''], 'a') };
+  format.uploads = [{ ...media, trimIn: 2, stopSeconds: 6 }];
+  format.library = [{ ...media, id: 'r', trimIn: 1.5, trimOut: 4 }];
+  mocks.read.mockResolvedValue([format]); mocks.videos.mockResolvedValue([]); mocks.saveVideo.mockResolvedValue(undefined);
+  render(<VideoFormatHome onHome={vi.fn()} onEditor={vi.fn()} />);
+  await screen.findByRole('button', { name: /Reaction/ });
+  expect(screen.queryByTestId('editor')).not.toBeInTheDocument();
+  expect(mocks.saveVideo).toHaveBeenCalledWith(expect.objectContaining({ id: `legacy-${format.id}`, snapshot: format }));
+  fireEvent.click(screen.getByRole('button', { name: /Reaction/ }));
+  expect(screen.getByText('Montaggio precedente')).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText('Nome del nuovo video'), { target: { value: 'Video due' } });
+  fireEvent.click(screen.getByRole('button', { name: '+ Crea nuovo' }));
+  await waitFor(() => expect(screen.getByTestId('editor')).toHaveTextContent('0 uploads · 1.5 trim'));
+  expect(mocks.saveVideo).toHaveBeenLastCalledWith(expect.objectContaining({ name: 'Video due', snapshot: expect.objectContaining({ uploads: [], clips: [], library: format.library }) }));
+});

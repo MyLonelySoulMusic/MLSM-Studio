@@ -22,16 +22,17 @@ export async function lastFrame(file: File, stopSeconds?: number): Promise<File>
     });
   } finally { video.onseeked = video.onloadedmetadata = video.onloadeddata = video.onerror = null; video.removeAttribute('src'); video.load(); URL.revokeObjectURL(url); }
 }
-export async function prepareFormat(format: VideoFormat) {
+export async function prepareFormat(format: VideoFormat, onProgress?: (step: { kind: 'video' | 'frame' | 'logo'; name: string; current: number; total: number }) => void) {
   const assets = new Map<string, VideoEditorAsset>(), stills = new Map<string, VideoEditorAsset>(), files = new Map<string, File>(), backgrounds = new Map<string, VideoEditorAsset>();
   let logoAsset: VideoEditorAsset | undefined;
   try {
-    if (format.logo) { const imported = await importVideoEditorAsset(format.logo.file); logoAsset = imported.asset; files.set(imported.asset.id, imported.file); }
+    if (format.logo) { onProgress?.({ kind: 'logo', name: format.logo.file.name, current: 0, total: format.clips.length }); const imported = await importVideoEditorAsset(format.logo.file); logoAsset = imported.asset; files.set(imported.asset.id, imported.file); }
     const items = timeline(format);
     for (const [index, item] of items.entries()) {
-      if (!assets.has(item.media.id)) { const imported = await importVideoEditorAsset(item.media.file); assets.set(item.media.id, imported.asset); files.set(imported.asset.id, imported.file); }
+      if (!assets.has(item.media.id)) { onProgress?.({ kind: 'video', name: item.media.name, current: index + 1, total: items.length }); const imported = await importVideoEditorAsset(item.media.file, { metadataOnly: true }); assets.set(item.media.id, imported.asset); files.set(imported.asset.id, imported.file); }
       if (item.scene?.freeze) {
         const previous = items[index - 1]; if (!previous) throw new Error('Inserisci una clip prima della scena con ultimo frame.');
+        onProgress?.({ kind: 'frame', name: previous.media.name, current: index + 1, total: items.length });
         const imported = await importVideoEditorAsset(await lastFrame(previous.media.file, previous.sourceOut)); stills.set(item.clip.id, imported.asset); files.set(imported.asset.id, imported.file);
       }
     }

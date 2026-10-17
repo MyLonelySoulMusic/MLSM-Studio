@@ -1,3 +1,4 @@
+import { StandardPreview } from './StandardPreview';
 import { useEffect, useRef, useState } from 'react';
 import { useMediaUrl } from './useMediaUrl';
 import type { FormatMedia } from './model';
@@ -5,13 +6,16 @@ import type { UiLanguage } from '../services/ui-preferences';
 
 export function StandardCard({ media, selected, language, onSelect, onEdit, onDelete }: { media: FormatMedia; selected: boolean; language: UiLanguage; onSelect: () => void; onEdit: () => void; onDelete: () => void }) {
   const url = useMediaUrl(media.file);
+  const [preview, setPreview] = useState(false);
   return <article className={`vfb-standard${selected ? ' selected' : ''}`}>
     <button className="vfb-card-select" aria-pressed={selected} onClick={onSelect} aria-label={`${language === 'it' ? 'Usa reazione' : 'Use reaction'} ${media.name}`}>
       <video src={url || undefined} muted preload="metadata" onLoadedMetadata={event => { event.currentTarget.currentTime = media.trimIn ?? 0; }} />
       <span className="vfb-card-check">{selected ? '✓' : '+'}</span><strong>{media.name}</strong><small>{((media.trimOut ?? media.duration) - (media.trimIn ?? 0)).toFixed(2)} s</small>
       <p>{media.description}</p>
     </button>
-    <button className="vfb-delete" aria-label={`${language === 'it' ? 'Elimina video standard' : 'Delete standard video'} ${media.name}`} onClick={onDelete}>{language === 'it' ? 'Elimina video standard' : 'Delete standard video'}</button>
+    <button className="vfb-preview-button" aria-label={`${language === 'it' ? 'Anteprima' : 'Preview'} ${media.name}`} onClick={() => setPreview(true)}>▶ {language === 'it' ? 'Anteprima' : 'Preview'}</button>
+    {preview && <StandardPreview media={media} language={language} onClose={() => setPreview(false)} />}
+    <button className="vfb-delete"  aria-label={`${language === 'it' ? 'Elimina video standard' : 'Delete standard video'} ${media.name}`} onClick={onDelete}>{language === 'it' ? 'Elimina video standard' : 'Delete standard video'}</button>
     <button onClick={onEdit}>{language === 'it' ? '✂ Taglia / rinomina' : '✂ Trim / rename'}</button>
   </article>;
 }
