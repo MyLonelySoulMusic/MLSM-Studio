@@ -1,3 +1,4 @@
+import { formatText } from "../video-format/copy";
 import { DiscordLink } from "./DiscordLink";
 import { SettingsButton } from "./StudioSettings";
 import { cloneElement, useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
@@ -20,7 +21,7 @@ const areaCopyKeys = {
   audio: { label: "audio", description: "audioDescription" }
 } as const;
 
-export type StudioAreaDestination = AnimationCategoryId | "autopost" | "stickman" | "reports" | "postit" | "streamer" | "documentation";
+export type StudioAreaDestination = AnimationCategoryId | "autopost" | "stickman" | "reports" | "postit" | "streamer" | "documentation" | "videoFormat";
 
 export function StudioHome({ onEnterArea }: { onEnterArea: (category: StudioAreaDestination) => void }) {
   const { language, theme, setLanguage, setTheme } = useUiPreferences(); const copy = uiCopy[language]; const setAnimationMode = useProjectStore((state) => state.setAnimationMode);
@@ -59,7 +60,7 @@ export function StudioHome({ onEnterArea }: { onEnterArea: (category: StudioArea
   }, [sortByUsage, tasks]);
   const enter = (categoryId: StudioAreaDestination) => {
     resetWorkspaceForAreaEntry();
-    if (categoryId === "autopost" || categoryId === "stickman" || categoryId === "reports" || categoryId === "postit" || categoryId === "streamer" || categoryId === "documentation") { onEnterArea(categoryId); return; }
+    if (categoryId === "autopost" || categoryId === "stickman" || categoryId === "reports" || categoryId === "postit" || categoryId === "streamer" || categoryId === "documentation" || categoryId === "videoFormat") { onEnterArea(categoryId); return; }
     const category = animationCategories.find((item) => item.id === categoryId) ?? animationCategories[0]!;
     const firstMode = getAnimationMode(category.groups[0]!.modeIds[0]!);
     setAnimationMode(firstMode.id, [...firstMode.defaultBaseObjectTypes]); onEnterArea(category.id);
@@ -133,14 +134,18 @@ export function StudioHome({ onEnterArea }: { onEnterArea: (category: StudioArea
           <span className="studio-area-card__copy"><small>{language === "it" ? "Playlist · File locali · Analisi audio professionale" : "Playlists · Local files · Professional audio analysis"}</small><strong>Streamer Audio Viewer</strong><em>{language === "it" ? "Ascolta, analizza e ordina file locali, playlist e player ufficiali in una coda professionale." : "Listen, analyze and reorder local files, playlists and official players in one professional queue."}</em></span>
           <span className="studio-area-card__action">{copy.enterArea}<b>↗</b></span><i className="studio-area-card__shine" aria-hidden="true" />
         </button>,
+        <button key="videoFormat" className="studio-area-card area-videoEditor" type="button" onClick={() => enter("videoFormat")}>
+          <span className="studio-area-card__icon"><AreaIcon category="videoEditor" /></span><span className="studio-area-card__art" aria-hidden="true"><AreaArtwork category="videoEditor" /></span>
+          <span className="studio-area-card__copy"><small>{formatText(language, "FORMAT · REACTION · GAMEPLAY")}</small><strong>Video Format Builder</strong><em>{formatText(language, "Crea format riutilizzabili. Alterna nuove clip e reazioni, con scene e fermi immagine automatici.")}</em></span><span className="studio-area-card__action">{copy.enterArea}<b>↗</b></span>
+        </button>,
         <button key="documentation" className="studio-area-card area-documentation" style={{ "--area-index": animationCategories.length + 5 } as CSSProperties} type="button" onClick={() => enter("documentation")}>
-          <span className="studio-area-card__number">{String(animationCategories.length + 6).padStart(2, "0")}</span>
+          <span className="studio-area-card__number">{String(animationCategories.length + 7).padStart(2, "0")}</span>
           <span className="studio-area-card__icon"><svg viewBox="0 0 64 64" aria-hidden="true"><path d="M10 12h17c4 0 5 3 5 6v34c0-4-3-6-7-6H10Z"/><path d="M54 12H37c-4 0-5 3-5 6v34c0-4 3-6 7-6h15Z"/><path d="M17 22h9M17 29h9M38 22h9M38 29h9"/></svg></span>
           <span className="studio-area-card__art" aria-hidden="true"><svg className="documentation-area-art" viewBox="0 0 560 300"><rect x="38" y="32" width="484" height="236" rx="22" fill="var(--panel)" stroke="var(--line)"/><path d="M280 63c-31-24-82-27-145-17v168c61-10 112-7 145 19 33-26 84-29 145-19V46c-63-10-114-7-145 17Z" fill="var(--accent-soft)" stroke="var(--accent-strong)" strokeWidth="5"/><path d="M280 64v169M159 85h86M159 111h71M159 137h88M315 85h86M315 111h66M315 137h88" fill="none" stroke="var(--ink)" strokeWidth="9" strokeLinecap="round" opacity=".72"/><circle cx="397" cy="190" r="31" fill="var(--ink)"/><path d="m419 213 27 27M384 190h26" stroke="var(--accent)" strokeWidth="8" strokeLinecap="round"/></svg></span>
           <span className="studio-area-card__copy"><small>{language === "it" ? "Guida completa · Ricerca AI locale" : "Complete guide · Local AI search"}</small><strong>Documentation</strong><em>{language === "it" ? "Esplora ogni funzione e trova la risposta descrivendo ciò che vuoi fare." : "Explore every feature and find answers by describing what you want to do."}</em></span>
           <span className="studio-area-card__action">{copy.enterArea}<b>↗</b></span><i className="studio-area-card__shine" aria-hidden="true" />
         </button>,
-        ].sort((a, b) => sortByUsage ? (counts[b.key as StudioTaskArea] ?? 0) - (counts[a.key as StudioTaskArea] ?? 0) : 0).map((card, index) => cloneElement(card, {
+        ].sort((a, b) => a.key === "documentation" ? 1 : b.key === "documentation" ? -1 : sortByUsage ? (counts[b.key as StudioTaskArea] ?? 0) - (counts[a.key as StudioTaskArea] ?? 0) : 0).map((card, index) => cloneElement(card, {
           "data-area-id": card.key,
           style: { ...card.props.style, "--area-index": index } as CSSProperties,
         }))}

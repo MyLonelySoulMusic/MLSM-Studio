@@ -1,3 +1,5 @@
+import { sceneTransitionFrame } from './scene-transitions';
+import { drawPaletteBackground } from './video-palette-background';
 import { mediaDrawRect, type ExportMediaFit } from "./offline-video-exporter";
 import { videoEditorAsset, videoEditorVisibleLayers, type VideoEditorAdjustments, type VideoEditorClip, type VideoEditorSettings } from "./video-editor";
 import {
@@ -10,6 +12,7 @@ import { videoEditorSecondsToFrame } from "./video-editor";
 import { defaultVideoEditorImageShadow, drawVideoEditorImageShadow, videoEditorImageShadowGeometry } from "./video-editor-image-shadow";
 import { videoEditorAudioAutomationProperties, videoEditorAudioMix, videoEditorAudioMixValue, videoEditorAudioMixWithValue } from "./video-editor-audio-mix";
 
+const paletteScratch = new WeakMap<CanvasRenderingContext2D, HTMLCanvasElement>();
 export interface VideoEditorFrameSource { width: number; height: number; source: CanvasImageSource }
 /** La preview e l’export offline condividono questa funzione: ogni clip risolve il proprio fotogramma. */
 export type VideoEditorSourceResolver = (clip: VideoEditorClip, sourceTimeSeconds: number) => VideoEditorFrameSource | null;
@@ -178,6 +181,7 @@ export function createVideoEditorFrameRenderer(): VideoEditorFrameRenderer {
   let imageEffectContext: CanvasRenderingContext2D | null = null;
   let imageShadowCanvas: HTMLCanvasElement | OffscreenCanvas | null = null;
   let imageShadowContext: CanvasRenderingContext2D | null = null;
+  let transitionCanvas: HTMLCanvasElement | OffscreenCanvas | null = null;
   let hasPresentedFrame = false;
 
   const layerSurface = (width: number, height: number): CanvasRenderingContext2D | null => {
@@ -243,6 +247,12 @@ export function createVideoEditorFrameRenderer(): VideoEditorFrameRenderer {
       const layer = item.layer;
       const frame = item.frame;
       if (!frame || frame.width <= 0 || frame.height <= 0) continue;
+      if (layer.clip.paletteBackground) {
+        let scratch = paletteScratch.get(context);
+        if (!scratch) { scratch = document.createElement('canvas'); paletteScratch.set(context, scratch); }
+        drawPaletteBackground(context, frame.source, frame.width, frame.height, width, height, layer.clip.paletteBackground, scratch);
+        continue;
+      }
       const preserveSourceAlpha = videoEditorAsset(renderSettings, layer.clip.assetId)?.kind === "image";
       const rect = mediaDrawRect(frame.width, frame.height, width, height, layer.clip.fit as ExportMediaFit);
       const effectState = videoEditorEffectFrameState(renderSettings.effectClips, layer.clip.id, timeSeconds, width, height);
@@ -398,6 +408,34 @@ export function createVideoEditorFrameRenderer(): VideoEditorFrameRenderer {
       }
     }
     context.restore();
+    const transition = sceneTransitionFrame(settings.sceneTransitions ?? [], timeSeconds);
+    if (transition) {
+      if (!transitionCanvas || transitionCanvas.width !== width || transitionCanvas.height !== height) {
+        transitionCanvas = typeof OffscreenCanvas === 'function' ? new OffscreenCanvas(width, height) : document.createElement('canvas');
+        transitionCanvas.width = width; transitionCanvas.height = height;
+      }
+      const snapshot = transitionCanvas.getContext('2d') as CanvasRenderingContext2D | null;
+      if (snapshot) {
+        snapshot.clearRect(0, 0, width, height);
+        snapshot.drawImage(target, 0, 0);
+        context.save();
+        context.setTransform(1, 0, 0, 1, 0, 0);
+        context.globalCompositeOperation = 'source-over';
+        context.globalAlpha = 1;
+        context.filter = 'none';
+        context.fillStyle = transition.background;
+        context.fillRect(0, 0, width, height);
+        context.translate(width / 2 + transition.x * width, height / 2);
+        context.scale(transition.scale, transition.scale);
+        context.beginPath();
+        context.rect(-width / 2 + transition.insetX * width, -height / 2 + transition.insetY * height, width * (1 - 2 * transition.insetX), height * (1 - 2 * transition.insetY));
+        context.clip();
+        context.globalAlpha = transition.opacity;
+        context.filter = transition.blur ? `blur(${transition.blur * width}px)` : 'none';
+        context.drawImage(transitionCanvas, -width / 2, -height / 2);
+        context.restore();
+      }
+    }
     hasPresentedFrame = true;
   };
 }

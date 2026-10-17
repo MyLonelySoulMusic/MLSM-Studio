@@ -1433,7 +1433,11 @@ enum ProcessMessage {
 }
 
 fn read_stdout(stdout: impl Read, sender: mpsc::Sender<ProcessMessage>) {
-    let limited = stdout.take((MAX_STDOUT_BYTES + 1) as u64);
+    read_stdout_with_limits(stdout, sender, MAX_STDOUT_BYTES, MAX_STDOUT_LINE_BYTES);
+}
+
+fn read_stdout_with_limits(stdout: impl Read, sender: mpsc::Sender<ProcessMessage>, total_limit: usize, line_limit: usize) {
+    let limited = stdout.take((total_limit + 1) as u64);
     let mut reader = BufReader::new(limited);
     let mut total = 0usize;
     loop {
@@ -1442,15 +1446,15 @@ fn read_stdout(stdout: impl Read, sender: mpsc::Sender<ProcessMessage>) {
             Ok(0) => break,
             Ok(read) => {
                 total = total.saturating_add(read);
-                if total > MAX_STDOUT_BYTES {
+                if total > total_limit {
                     let _ = sender.send(ProcessMessage::Stdout(Err(
-                        "stdout worker oltre 4 MiB".into()
+                        format!("stdout worker oltre {total_limit} byte")
                     )));
                     break;
                 }
-                if line.len() > MAX_STDOUT_LINE_BYTES {
+                if line.len() > line_limit {
                     let _ = sender.send(ProcessMessage::Stdout(Err(
-                        "riga JSONL worker oltre 1 MiB".into(),
+                        format!("riga JSONL worker oltre {line_limit} byte"),
                     )));
                     break;
                 }
@@ -1668,6 +1672,9 @@ fn run_job(
         cleanup_staging(&job_root);
         return;
     }
+    let transcription = serde_json::from_slice::<Value>(&payload)
+        .ok().and_then(|value| value.get("action").and_then(Value::as_str).map(|action| action == "transcribeWords"))
+        .unwrap_or(false);
     payload.push(b'\n');
     let mut command = Command::new(python);
     command
@@ -1722,7 +1729,10 @@ fn run_job(
     let (sender, receiver) = mpsc::channel();
     if let Some(stdout) = child.stdout.take() {
         let sender = sender.clone();
-        thread::spawn(move || read_stdout(stdout, sender));
+        thread::spawn(move || {
+            if transcription { read_stdout_with_limits(stdout, sender, 32 * 1024 * 1024, 24 * 1024 * 1024); }
+            else { read_stdout(stdout, sender); }
+        });
     }
     if let Some(stderr) = child.stderr.take() {
         let sender = sender.clone();
@@ -1735,6 +1745,7 @@ fn run_job(
     let mut protocol_error = None;
     let mut stderr_message = String::new();
     let started = Instant::now();
+    let mut last_activity = started;
     let exit_status = loop {
         while let Ok(message) = receiver.try_recv() {
             match message {
@@ -1748,6 +1759,8 @@ fn run_job(
                             &mut worker_error,
                         ) {
                             protocol_error = Some(error);
+                        } else {
+                            last_activity = Instant::now();
                         }
                     }
                 }
@@ -1764,7 +1777,9 @@ fn run_job(
             let status = child.wait().ok();
             break status;
         }
-        if started.elapsed() > MAX_JOB_RUNTIME {
+        // Long transcriptions may continue while the worker makes progress.
+        let timed_out = if transcription { last_activity.elapsed() > MAX_JOB_RUNTIME } else { started.elapsed() > MAX_JOB_RUNTIME };
+        if timed_out {
             protocol_error = Some("Il job ha superato il limite di esecuzione".into());
             terminate_worker(&mut child);
             break child.wait().ok();

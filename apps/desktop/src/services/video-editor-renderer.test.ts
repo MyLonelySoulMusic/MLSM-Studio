@@ -71,6 +71,9 @@ class RecordingContext {
     this.shadowOffsetX = state.shadowOffsetX;
     this.shadowOffsetY = state.shadowOffsetY;
   }
+  beginPath(): void {}
+  rect(): void {}
+  clip(): void {}
   setTransform(): void { /* nessuna trasformazione nel compositor del montaggio */ }
   translate(x: number, y: number): void { this.transforms.push({ kind: "translate", values: [x, y] }); }
   rotate(radians: number): void { this.transforms.push({ kind: "rotate", values: [radians] }); }
@@ -451,4 +454,24 @@ describe("Video Editor · compositor multitraccia", () => {
     expect(shadowSurface.shadowDraws[0]?.offsetY).toBeCloseTo(5, 12);
     expect(context.draws.map((draw) => draw.source)).toEqual(["layer-canvas", "shadow-image"]);
   });
+});
+
+
+it("applies a scene transition after composing both video and frozen overlay", () => {
+  const { canvas, context } = fakeCanvas(1080, 1920);
+  const video = clip({ id: "reaction", assetId: "reaction" });
+  const still = clip({ id: "still", assetId: "still", trackId: "video-editor-track-overlay" });
+  const config = settings([video, still], {
+    assets: [visualAsset("reaction", "video"), visualAsset("still", "image")],
+    sceneTransitions: [{ kind: "blur", at: 2, duration: 1, intensity: .5 }]
+  });
+  createVideoEditorFrameRenderer()(canvas, config, 1.75, item => frameSource(100, 100, item.id));
+  const last = context.draws.at(-1)!;
+  expect(last.source).toBe("layer-canvas");
+  expect(last.alpha).toBeGreaterThan(0);
+  expect(last.alpha).toBeLessThan(1);
+  expect(last.filter).toContain("blur(");
+  expect(context.draws.slice(0, -1).some(draw => draw.source === "reaction")).toBe(true);
+  expect(context.draws.slice(0, -1).some(draw => draw.source === "still")).toBe(true);
+  expect(layerSurfaces.some(surface => surface.draws.some(draw => draw.source === "target"))).toBe(true);
 });

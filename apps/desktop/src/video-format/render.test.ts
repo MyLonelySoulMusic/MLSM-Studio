@@ -1,0 +1,23 @@
+import { afterEach, expect, it, vi } from 'vitest';
+import { lastFrame } from './render';
+afterEach(() => vi.restoreAllMocks());
+it('seeks the chosen stop point rather than the end and releases the source', async () => {
+  URL.createObjectURL = vi.fn(() => 'blob:source');
+  const revoke = vi.fn(); URL.revokeObjectURL = revoke;
+  const video = document.createElement('video');
+  Object.defineProperty(video, 'duration', { value: 100 });
+  Object.defineProperty(video, 'videoWidth', { value: 1920 });
+  Object.defineProperty(video, 'videoHeight', { value: 1080 });
+  vi.spyOn(video, 'load').mockImplementation(() => {});
+  const canvas = document.createElement('canvas');
+  vi.spyOn(canvas, 'getContext').mockReturnValue({ drawImage: vi.fn() } as unknown as CanvasRenderingContext2D);
+  vi.spyOn(canvas, 'toBlob').mockImplementation(callback => callback(new Blob(['frame'], { type: 'image/png' })));
+  const create = document.createElement.bind(document);
+  vi.spyOn(document, 'createElement').mockImplementation(((tag: string) => tag === 'video' ? video : tag === 'canvas' ? canvas : create(tag)) as typeof document.createElement);
+  const result = lastFrame(new File([''], 'source.mp4'), 7.25);
+  video.dispatchEvent(new Event('loadedmetadata'));
+  expect(video.currentTime).toBe(7.25);
+  video.dispatchEvent(new Event('seeked'));
+  expect((await result).type).toBe('image/png');
+  expect(revoke).toHaveBeenCalledWith('blob:source');
+});

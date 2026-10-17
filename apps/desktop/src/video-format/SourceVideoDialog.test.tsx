@@ -1,0 +1,22 @@
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, expect, it, vi } from 'vitest';
+import { SourceVideoDialog } from './SourceVideoDialog';
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+it('opens at the current source position, applies a trim and returns the position on closing', () => {
+  HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', ''); };
+  URL.createObjectURL = vi.fn(() => 'blob:video'); URL.revokeObjectURL = vi.fn();
+  vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+  const onRange = vi.fn(), onClose = vi.fn(), onPreviewRange = vi.fn();
+  const media = { id: 'game', name: 'Gameplay', description: '', duration: 30, file: new File([''], 'game.mp4') };
+  const { container } = render(<SourceVideoDialog media={media} language="it" initialTime={15} busy={false} onRange={onRange} onClose={onClose} onPreviewRange={onPreviewRange} />);
+  expect(screen.getByRole('dialog', { name: 'Gameplay' })).toBeInTheDocument();
+  const video = container.querySelector('video')!;
+  fireEvent.loadedMetadata(video); expect(video.currentTime).toBe(15);
+  fireEvent.click(screen.getByRole('button', { name: 'Inizia qui' }));
+  fireEvent.change(screen.getByLabelText('Fine Gameplay'), { target: { value: '22' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Applica taglio' }));
+  expect(onRange).toHaveBeenCalledWith(15, 22);
+  fireEvent.change(screen.getByLabelText('Posizione video originale'), { target: { value: '19' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Chiudi ×' }));
+  expect(onClose).toHaveBeenCalledWith(19);
+});

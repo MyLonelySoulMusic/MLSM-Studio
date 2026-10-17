@@ -73,6 +73,50 @@ describe("UpscalerPanel source picker", () => {
     vi.unstubAllGlobals();
   });
 
+  it("allows empty and partial dimensions without clamping and blocks processing until both are valid", () => {
+    useProjectStore.getState().updateUpscaler({ lockAspectRatio: false });
+    render(<UpscalerPanel />);
+    const width = screen.getByLabelText("Larghezza finale Upscaler");
+    const height = screen.getByLabelText("Altezza finale Upscaler");
+    const original = useProjectStore.getState().project.animation.upscaler.finalWidth;
+    fireEvent.focus(width);
+    for (const value of ["", "1", "12"]) {
+      fireEvent.change(width, { target: { value } });
+      expect(width).toHaveValue(value === "" ? null : Number(value));
+      expect(width).toHaveAttribute("aria-invalid", "true");
+      expect(useProjectStore.getState().project.animation.upscaler.finalWidth).toBe(original);
+      expect(useUpscalerBatchStore.getState().beginSingleOperation()).toBeNull();
+    }
+    fireEvent.blur(width);
+    expect(width).toHaveValue(12);
+    fireEvent.change(height, { target: { value: "" } });
+    fireEvent.change(width, { target: { value: "1920" } });
+    expect(width).toHaveValue(1920);
+    expect(useUpscalerBatchStore.getState().beginSingleOperation()).toBeNull();
+    fireEvent.change(height, { target: { value: "1080" } });
+    expect(height).toHaveValue(1080);
+    expect(useUpscalerBatchStore.getState().invalidResolution).toEqual({ width: false, height: false });
+    const owner = useUpscalerBatchStore.getState().beginSingleOperation();
+    expect(owner).not.toBeNull();
+    if (owner) act(() => { useUpscalerBatchStore.getState().endSingleOperation(owner); });
+  });
+
+  it("preserves odd values while typing, then applies encoder rounding on blur; presets clear invalid drafts", () => {
+    useProjectStore.getState().updateUpscaler({ lockAspectRatio: false });
+    render(<UpscalerPanel />);
+    const width = screen.getByLabelText("Larghezza finale Upscaler");
+    fireEvent.change(width, { target: { value: "1001" } });
+    expect(width).toHaveValue(1001);
+    fireEvent.blur(width);
+    expect(width).toHaveValue(useProjectStore.getState().project.animation.upscaler.finalWidth);
+    fireEvent.change(width, { target: { value: "16385" } });
+    expect(width).toHaveValue(16385);
+    expect(width).toHaveAttribute("aria-invalid", "true");
+    fireEvent.click(screen.getByRole("button", { name: "4K" }));
+    expect(screen.getByLabelText("Larghezza finale Upscaler")).toHaveValue(3840);
+    expect(useUpscalerBatchStore.getState().invalidResolution).toEqual({ width: false, height: false });
+  });
+
   it("espone multiple e inserisce tutte le immagini selezionate nel pool batch", async () => {
     render(<UpscalerPanel />);
     const input = screen.getByLabelText("Carica sorgente Upscaler");

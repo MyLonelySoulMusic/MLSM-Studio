@@ -506,3 +506,91 @@ Per dettagli sui tool di piattaforma consulta [Script di installazione e build](
 ---
 
 **MLSM Studio** · My Lonely Soul Music Studio
+
+### Video Format Builder
+
+Dalla home apri **Video Format Builder** e crea un format (per esempio “Gaming reaction”).
+La galleria superiore contiene i **video standard**: carica una reazione, scegli inizio e fine,
+dalle un nome e una descrizione e salvala. Il taglio è non distruttivo: il montaggio usa solo
+l'intervallo scelto. La ricerca per nome e la ricerca semantica usano il database Memory condiviso,
+in una categoria separata per format; non analizzano automaticamente il contenuto visivo.
+
+**Elimina video standard** rimuove una reazione dalla galleria e dalla ricerca; le clip che la
+usavano conservano il taglio e richiedono una nuova reazione tramite **+**. **Elimina clip**
+rimuove un video occasionale dalla griglia. Entrambi chiedono conferma e salvano subito la
+modifica, senza cancellare il file originale sul disco.
+
+In alto a destra, **Esporta video** apre l'esportazione diretta MP4 della riga selezionata,
+con possibilità di scegliere un'altra riga. La finestra legge risoluzione e FPS medi dei soli
+video utilizzati (clip nuove e reaction), evidenzia i massimi e preseleziona risoluzione e FPS
+consigliati. La risoluzione viene adattata al rapporto del format; puoi scegliere altri valori,
+inclusi FPS frazionari. Se alcuni metadati non sono leggibili viene indicato il fallback.
+L'esportazione include audio, tagli, transizioni, fermo immagine e logo, con avanzamento e
+annullamento. Le clip senza reaction vengono esportate normalmente; senza un taglio finale esplicito si usa la durata completa, come nell’anteprima.
+
+Nella sidebar destra, **Logo del format → Carica logo** accetta PNG, WebP e JPEG.
+Puoi scegliere una delle nove posizioni rapide e regolare dimensione e coordinate.
+Il logo mantiene le proporzioni, resta dentro l'inquadratura e compare sopra video e fermo
+immagine per tutta la durata di ogni riga, anche nell'esportazione. PNG e WebP mantengono
+la trasparenza. **Salva format e bozza** conserva il file e il posizionamento; puoi sostituirlo
+senza perdere le regolazioni oppure rimuoverlo con **Rimuovi logo**.
+
+Le **transizioni** si aggiungono con il pulsante **+ Transizione** tra clip e reazione o tra
+due colonne della stessa riga. Nella sidebar destra, **Transizioni per tutte le clip** permette
+di scegliere uno dei dieci stili oppure **Casuale automatico**. I pulsanti a sinistra mostrano
+subito le scelte: cliccandoli puoi modificare tipo, durata e intensità del singolo passaggio,
+oppure rimuoverlo. La durata iniziale è 1 secondo, ridotta automaticamente sulle clip brevi;
+i tagli e la durata totale del montaggio restano invariati. Una nuova scelta globale sostituisce
+le personalizzazioni locali. La combinazione casuale resta stabile e si salva con il format.
+Le transizioni coinvolgono l'intera scena (video, sfondo e fermo immagine), nell'anteprima e
+nell'esportazione, con dissolvenze al nero/bianco/rosa, sfocatura, zoom, scorrimenti e chiusure.
+
+La griglia **Video nuovi** organizza il lavoro per righe e colonne:
+- **Carica video su nuove righe** importa più clip insieme, ciascuna come video finale separato.
+- Ogni clip ha **Inizio**, **Fine** e **Applica taglio**, più un **+ Reazione** accanto che apre le
+  reazioni salvate e le assegna a quella clip. I campi consentono anche valori temporaneamente vuoti.
+- **Aggiungi colonna** carica altre clip in coda alla stessa riga: clip + reazione, poi clip +
+  reazione, senza interruzioni. Tre colonne producono un unico video con tre sequenze consecutive.
+- La maniglia **⠿**, il selettore **Ordine del blocco** e le frecce riordinano i blocchi
+  completi (video nuovo + reazione) dentro la riga. I tagli interni e la reazione associata
+  restano invariati; il selettore **Riga di…** sposta una clip in un altro video
+  o in una nuova riga separata.
+
+La scrivania di montaggio ha la galleria standard in alto a sinistra e le clip nuove sotto,
+l’**Anteprima video completo** al centro e le opzioni in una sidebar a destra. Ogni pannello
+scorre indipendentemente. L’anteprima riproduce
+la sequenza della riga selezionata, inclusi tagli, reazioni, sfondo e fermo immagine.
+L’editor della clip è collassabile: puoi tenerne aperto al massimo uno, oppure chiuderli tutti.
+Le modifiche valide a inizio e fine si vedono subito nell’anteprima; **Applica taglio** le salva
+immediatamente e mostra intervallo e durata. Il Play del monitor rispetta entrambi i limiti.
+
+Clicca una clip per aprirla nel monitor: puoi scorrere, segnare **Inizia qui** / **Finisci qui**,
+applicare il taglio e riprodurre solo l'intervallo selezionato. **Ferma qui** imposta rapidamente
+la fine. Il fermo immagine viene estratto in quel punto e sovrapposto alla reazione secondo
+posizione e dimensioni salvate nel format. Il passaggio automatico alla clip successiva mantiene
+la reazione scelta per lavorare in serie.
+
+Scegli il formato finale 9:16 o 16:9. Nelle **regole per proporzione** imposta separatamente
+l'adattamento e il ridimensionamento dei video nuovi 16:9, 9:16, quadrati o con altre proporzioni.
+Le regole valgono anche per i caricamenti futuri. “Mostra tutto” mantiene l'intero video con bande;
+“Riempi” ritaglia. Lo sfondo riprende in sincronia la scena della clip, ingrandita a tutto schermo
+e sfocata in quattro intensità. I colori originali sono rimappati sulla palette Lonely
+(nero, rosa, bianco), sulle sue combinazioni o su uno, due o tre colori personalizzati.
+Le regole non modificano lo zoom delle reazioni standard. Sfumature e ridimensionamento vengono
+trasferiti nel montaggio finale, oltre a comparire nell'anteprima.
+
+**Salva format e bozza** conserva impostazioni, galleria e file in IndexedDB sul dispositivo.
+L'importazione, “Ferma qui” e l'uscita tramite “Aree” salvano anche la bozza; salva le altre
+modifiche prima di chiudere l'app. **Crea questa riga →** apre nel Video Editor solo la sequenza di quella riga,
+con tutte le colonne nell’ordine mostrato. Ogni colonna deve avere un taglio e una reazione. Qui puoi rifinire ed
+esportare con audio. Il fermo immagine viene estratto nel punto scelto della sorgente.
+I dati locali non sono sincronizzati fra dispositivi; la cancellazione dei dati dell’app/browser
+rimuove anche i format e i media salvati.
+
+In **Audio → Transcribe**, i file oltre due ore vengono trascritti automaticamente in blocchi
+sequenziali da 20 minuti, con due secondi di contesto ai bordi. Whisper viene caricato una volta;
+FFmpeg prepara solo il blocco corrente in mono a 16 kHz. Parole e frasi vengono ricomposte in
+un’unica trascrizione con gli offset temporali originali, evitando la duplicazione del contesto.
+Per una selezione parziale i timestamp restano relativi alla selezione, come nelle altre funzioni
+Whisper. Restano i limiti di dimensione del file (1 GiB desktop, 512 MiB browser) e delle altre analisi audio;
+il limite di durata di due ore è rimosso esclusivamente per la trascrizione.

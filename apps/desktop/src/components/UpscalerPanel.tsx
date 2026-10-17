@@ -9,6 +9,7 @@ import { useUpscalerBatchStore, type UpscalerImportOwner } from "../store/upscal
 import { RemoteUpscalerPanel } from "./RemoteUpscalerPanel";
 import { MlxDlssPanel } from "./MlxDlssPanel";
 import { MlxDlssSetupModal } from "./MlxDlssSetupModal";
+import { useUiPreferences } from "../services/ui-preferences";
 import { useMlxDlssCapabilities } from "../services/use-mlx-dlss-capabilities";
 
 const adjustmentLabels = { exposure: "Esposizione", contrast: "Contrasto", highlights: "Luci", shadows: "Ombre", whites: "Bianchi", blacks: "Neri", saturation: "Saturazione", vibrance: "Vividezza", temperature: "Temperatura", tint: "Tinta", sharpness: "Nitidezza", denoise: "Riduzione rumore" } as const;
@@ -105,7 +106,34 @@ function formatSignedAdjustment(key: AdjustmentKey, value: number) {
   return value > 0 ? `+${formatted}` : formatted;
 }
 
+function UpscalerDimensionInput({ axis, value, onChange }: { axis: "width" | "height"; value: number; onChange: (value: number) => void }) {
+  const [draft, setDraft] = useState(String(value));
+  const editing = useRef(false);
+  const setInvalid = useUpscalerBatchStore(state => state.setResolutionInvalid);
+  const valid = draft.trim() !== "" && Number.isInteger(Number(draft)) && Number(draft) >= 64 && Number(draft) <= 16384;
+  useEffect(() => {
+    if (!editing.current) { setDraft(String(value)); setInvalid(axis, false); }
+  }, [value, axis, setInvalid]);
+  useEffect(() => () => setInvalid(axis, false), [axis, setInvalid]);
+  return <input aria-label={axis === "width" ? "Larghezza finale Upscaler" : "Altezza finale Upscaler"} type="number" min="64" max="16384" step="1" required aria-invalid={!valid} value={draft}
+    onFocus={() => { editing.current = true; }}
+    onChange={event => {
+      editing.current = true;
+      const text = event.target.value;
+      setDraft(text);
+      const number = Number(text);
+      const acceptable = text.trim() !== "" && Number.isInteger(number) && number >= 64 && number <= 16384;
+      setInvalid(axis, !acceptable);
+      if (acceptable) onChange(number);
+    }}
+    onBlur={() => { editing.current = false; if (valid) setDraft(String(value)); }} />;
+}
+
 export function UpscalerPanel() {
+  const { language } = useUiPreferences();
+  const [resolutionRevision, setResolutionRevision] = useState(0);
+  const projectId = useProjectStore(state => state.project.project.id);
+  const invalidResolution = useUpscalerBatchStore(state => state.invalidResolution.width || state.invalidResolution.height);
   const settings = useProjectStore((state) => state.project.animation.upscaler); const update = useProjectStore((state) => state.updateUpscaler);
   const batchRunning = useUpscalerBatchStore((state) => state.running);
   const batchImporting = useUpscalerBatchStore((state) => state.importing);
@@ -216,6 +244,7 @@ export function UpscalerPanel() {
     if (!mlx.capabilities?.usable) setMlxSetupOpen(true);
   };
   const selectPreset = (landscapeWidth: number, landscapeHeight: number) => {
+    setResolutionRevision(value => value + 1);
     const dimensions = fitUpscalerPreset(settings.sourceWidth || landscapeWidth, settings.sourceHeight || landscapeHeight, landscapeWidth, landscapeHeight);
     update({ finalWidth: dimensions.width, finalHeight: dimensions.height, lockAspectRatio: true, scale: settings.sourceWidth ? dimensions.width / settings.sourceWidth : 1 });
   };
@@ -248,7 +277,7 @@ export function UpscalerPanel() {
       <div className="upscaler-optimization-grid"><label>Tile<select aria-label="Dimensione tile Upscaler" value={settings.tileSize} onChange={(event) => update({ tileSize: Number(event.target.value) })}><option value="128">128 · poca memoria</option><option value="256">256 · automatico</option><option value="512">512 · GPU potente</option><option value="1024">1024 · memoria elevata</option></select></label><label className="teddy-dance-toggle"><span>TTA · qualità massima</span><input aria-label="TTA Upscaler" type="checkbox" checked={settings.tta} onChange={(event) => update({ tta: event.target.checked })} /></label></div>
       {demandingVideoProfile ? <div className="upscaler-performance-warning"><strong>Elaborazione video molto pesante</strong><span>{selectedModel.label} · {outputMegapixels.toFixed(1)} MP per frame{settings.tta ? " · doppio passaggio TTA" : ""}. Su video reali può richiedere decine di secondi per fotogramma. L’avanzamento mostrerà una stima attendibile dopo il primo frame.</span><button type="button" onClick={() => { const model = upscalerModels.find((item) => item.id === "realesr-general-x4v3")!; update({ model: model.id, scale: model.nativeScale, tta: false, tileSize: 256 }); }}>Usa profilo video veloce · General x4v3 senza TTA</button></div> : null}
     </> : settings.provider === "classic" ? <RemoteUpscalerPanel settings={settings} update={update} /> : <div className="upscaler-performance-warning"><strong>Completa la configurazione MLX-DLSS</strong><span>Installa il backend e importa `nvngx_dlssnr.dll` dalla procedura guidata.</span><button type="button" onClick={() => setMlxSetupOpen(true)}>Apri configurazione MLX-DLSS</button></div>}
-    <h2>Risoluzione finale</h2><label className="teddy-dance-toggle"><span>Mantieni proporzioni</span><input aria-label="Mantieni proporzioni Upscaler" type="checkbox" checked={settings.lockAspectRatio} onChange={(event) => update({ lockAspectRatio: event.target.checked })} /></label><div className="upscaler-resolution"><label>Larghezza<input aria-label="Larghezza finale Upscaler" type="number" min="64" max="16384" value={settings.finalWidth} onChange={(event) => setResolution("width", Number(event.target.value))} /></label><span>×</span><label>Altezza<input aria-label="Altezza finale Upscaler" type="number" min="64" max="16384" value={settings.finalHeight} onChange={(event) => setResolution("height", Number(event.target.value))} /></label></div><div className="upscaler-presets">{[[1920,1080,"Full HD"],[2560,1440,"QHD"],[3840,2160,"4K"],[7680,4320,"8K"]].map(([width,height,label]) => <button type="button" key={label} onClick={() => selectPreset(width as number, height as number)}>{label}</button>)}</div><p className="muted">I preset ruotano automaticamente per sorgenti verticali e adattano i lati senza deformare o tagliare l’immagine.</p>
+    <h2>Risoluzione finale</h2><label className="teddy-dance-toggle"><span>Mantieni proporzioni</span><input aria-label="Mantieni proporzioni Upscaler" type="checkbox" checked={settings.lockAspectRatio} onChange={(event) => update({ lockAspectRatio: event.target.checked })} /></label><div className="upscaler-resolution"><label>Larghezza<UpscalerDimensionInput key={`${projectId}:${settings.sourceUrl}:${resolutionRevision}:width`} axis="width" value={settings.finalWidth} onChange={value => setResolution("width", value)} /></label><span>×</span><label>Altezza<UpscalerDimensionInput key={`${projectId}:${settings.sourceUrl}:${resolutionRevision}:height`} axis="height" value={settings.finalHeight} onChange={value => setResolution("height", value)} /></label></div>{invalidResolution ? <p role="alert" data-ui-copy>{language === "en" ? "Enter a whole number between 64 and 16384 for both dimensions before starting upscaling." : "Inserisci un numero intero tra 64 e 16384 per entrambe le dimensioni prima di avviare l’upscaling."}</p> : null}<div className="upscaler-presets">{[[1920,1080,"Full HD"],[2560,1440,"QHD"],[3840,2160,"4K"],[7680,4320,"8K"]].map(([width,height,label]) => <button type="button" key={label} onClick={() => selectPreset(width as number, height as number)}>{label}</button>)}</div><p className="muted">I preset ruotano automaticamente per sorgenti verticali e adattano i lati senza deformare o tagliare l’immagine.</p>
     <h2>Confronto e fusione</h2><label>Vista<select aria-label="Modalità confronto Upscaler" value={settings.comparisonMode} onChange={(event) => update({ comparisonMode: event.target.value as typeof settings.comparisonMode })}><option value="split">Prima / dopo</option><option value="enhanced">Solo migliorato</option><option value="original">Solo originale</option><option value="blend">Fusione</option></select></label><div className="upscaler-comparison-ranges">{settings.comparisonMode === "split" ? <UpscalerRangeControl label="Separatore" ariaLabel="Separatore confronto Upscaler" min={0} max={1} step={0.01} value={settings.comparisonPosition} formatValue={(value) => `${Math.round(value * 100)}%`} onChange={(value) => update({ comparisonPosition: value })} /> : null}<UpscalerRangeControl label="Originale sovrapposto" ariaLabel="Fusione originale Upscaler" min={0} max={1} step={0.01} value={settings.originalBlend} formatValue={(value) => `${Math.round(value * 100)}%`} onChange={(value) => update({ originalBlend: value })} /></div>
     {settings.sourceKind === "video" ? <><h2>Regolazioni video finali</h2><label className="teddy-dance-toggle"><span>Applica colore, nitidezza e riduzione rumore al video</span><input aria-label="Applica regolazioni video Upscaler" type="checkbox" checked={settings.applyVideoAdjustments} onChange={(event) => update({ applyVideoAdjustments: event.target.checked })} /></label>{settings.applyVideoAdjustments ? <div className="upscaler-performance-warning"><strong>Operazione lenta</strong><span>Le regolazioni richiedono una ricodifica completa del video finale. L’avanzamento e il tempo residuo saranno mostrati durante la codifica.</span></div> : <p className="muted">Disattivato: quando i segmenti Gradio hanno già la risoluzione richiesta vengono uniti senza ricodificare il video e viene ripristinato direttamente l’audio originale.</p>}</> : null}
     <h2>Regolazioni immagine</h2><div className="upscaler-adjustments">{(Object.keys(adjustmentLabels) as AdjustmentKey[]).map((key) => <UpscalerRangeControl key={key} label={adjustmentLabels[key]} ariaLabel={`${adjustmentLabels[key]} Upscaler`} {...adjustmentRanges[key]} disabled={settings.sourceKind === "video" && !settings.applyVideoAdjustments} value={settings.adjustments[key]} formatValue={(value) => formatSignedAdjustment(key, value)} onChange={(value) => updateAdjustment(key, value)} />)}</div><button type="button" disabled={settings.sourceKind === "video" && !settings.applyVideoAdjustments} onClick={() => update({ adjustments: { exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, saturation: 0, vibrance: 0, temperature: 0, tint: 0, sharpness: 0, denoise: 0 } })}>Ripristina regolazioni</button>

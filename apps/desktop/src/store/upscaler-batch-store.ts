@@ -25,6 +25,8 @@ export interface UpscalerSingleOperationOwner extends OperationOwnerBase {
 }
 
 interface UpscalerBatchState {
+  invalidResolution: { width: boolean; height: boolean };
+  setResolutionInvalid: (axis: "width" | "height", invalid: boolean) => void;
   items: UpscalerBatchItem[];
   /** Runtime-only gallery source. It is intentionally independent from queue selection. */
   previewItemId: string | null;
@@ -74,6 +76,8 @@ function abortError(): DOMException {
 let operationId = 0;
 
 export const useUpscalerBatchStore = create<UpscalerBatchState>((set, get) => ({
+  invalidResolution: { width: false, height: false },
+  setResolutionInvalid: (axis, invalid) => set(state => ({ invalidResolution: { ...state.invalidResolution, [axis]: invalid } })),
   items: [], previewItemId: null, projectEpoch: 0, running: false, importing: false, singleOperations: 0, singleOperationOwners: [], importFailures: [], controller: null, batchOwner: null, importOwner: null, outputNotice: null,
   beginImport: (supersede = false) => {
     const state = get();
@@ -137,7 +141,7 @@ export const useUpscalerBatchStore = create<UpscalerBatchState>((set, get) => ({
   startBatch: (settings) => {
     void settings;
     const state = get();
-    if (state.running || state.importing || state.singleOperations > 0 || !state.items.some((item) => item.selected && item.status !== "done")) return null;
+    if (state.invalidResolution.width || state.invalidResolution.height || state.running || state.importing || state.singleOperations > 0 || !state.items.some((item) => item.selected && item.status !== "done")) return null;
     const owner: UpscalerBatchOwner = { kind: "batch", projectEpoch: state.projectEpoch, id: ++operationId, controller: new AbortController() };
     set({ running: true, controller: owner.controller, batchOwner: owner });
     return owner;
@@ -158,7 +162,7 @@ export const useUpscalerBatchStore = create<UpscalerBatchState>((set, get) => ({
   },
   beginSingleOperation: () => {
     const state = get();
-    if (state.running) return null;
+    if (state.invalidResolution.width || state.invalidResolution.height || state.running) return null;
     const owner: UpscalerSingleOperationOwner = { kind: "single", projectEpoch: state.projectEpoch, id: ++operationId };
     set((current) => ({ singleOperationOwners: [...current.singleOperationOwners, owner], singleOperations: current.singleOperations + 1 }));
     return owner;
@@ -195,6 +199,7 @@ export const useUpscalerBatchStore = create<UpscalerBatchState>((set, get) => ({
     if (!state.batchOwner) state.controller?.abort();
     for (const item of state.items) revoke(item, alreadyRevokedUrls);
     set({
+      invalidResolution: { width: false, height: false },
       items: [], previewItemId: null, projectEpoch: state.projectEpoch + 1,
       running: false, importing: false, singleOperations: 0, singleOperationOwners: [],
       importFailures: [], controller: null, batchOwner: null, importOwner: null, outputNotice: null

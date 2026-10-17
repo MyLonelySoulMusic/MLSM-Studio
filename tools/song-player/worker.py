@@ -249,7 +249,7 @@ def _install_signal_handlers() -> None:
             signal.signal(signum, _handle_signal)
 
 
-def _run_ffmpeg(source: Path, destination: Path, start_seconds: float | None = None, end_seconds: float | None = None) -> None:
+def _run_ffmpeg(source: Path, destination: Path, start_seconds: float | None = None, end_seconds: float | None = None, *, sample_rate: int = 44100, channels: int = 2) -> None:
     command = [
         resolve_tool("ffmpeg"),
         "-nostdin",
@@ -268,9 +268,9 @@ def _run_ffmpeg(source: Path, destination: Path, start_seconds: float | None = N
     command.extend([
         "-vn",
         "-ac",
-        "2",
+        str(channels),
         "-ar",
-        "44100",
+        str(sample_rate),
         "-c:a",
         "pcm_s16le",
         str(destination),
@@ -535,7 +535,7 @@ def transcribe_words(request: dict[str, Any]) -> dict[str, Any]:
     }
     if model_id not in model_names:
         raise WorkerError("invalid_input", "Modello Whisper non supportato")
-    metadata = probe_media(source)
+    metadata = probe_media(source, max_duration_seconds=None)
     start_value = request.get("startSeconds")
     end_value = request.get("endSeconds")
     if (start_value is None) != (end_value is None):
@@ -548,13 +548,16 @@ def transcribe_words(request: dict[str, Any]) -> dict[str, Any]:
             raise WorkerError("invalid_input", "Intervallo Whisper non valido") from error
         if not all(math.isfinite(value) for value in (start_seconds, end_seconds)) or start_seconds < 0 or end_seconds <= start_seconds + .05 or end_seconds > float(metadata["durationSeconds"]) + .05:
             raise WorkerError("invalid_input", "Intervallo Whisper fuori dalla durata del file")
-        staging = _confined_child(job_root, "staging")
-        window = staging / "whisper-window.wav"
-        _run_ffmpeg(source, window, start_seconds, min(end_seconds, float(metadata["durationSeconds"])))
-        source = window.resolve(strict=True)
-        duration_seconds = end_seconds - start_seconds
+        end_seconds = min(end_seconds, float(metadata["durationSeconds"]))
     else:
-        duration_seconds = float(metadata["durationSeconds"])
+        start_seconds = 0.0
+        end_seconds = float(metadata["durationSeconds"])
+    duration_seconds = end_seconds - start_seconds
+    # Decode only bounded windows, keeping the original file on disk.
+    # Short inputs keep their existing direct Whisper path.
+    chunk_seconds = 20 * 60 if duration_seconds > MAX_DURATION_SECONDS else duration_seconds
+    chunk_count = math.ceil(duration_seconds / chunk_seconds)
+    staging = _confined_child(job_root, "staging")
 
     progress(.03, f"Preparazione Whisper {model_names[model_id].capitalize()} nativo")
     try:
@@ -568,29 +571,67 @@ def transcribe_words(request: dict[str, Any]) -> dict[str, Any]:
     def run_whisper(selected_device: str, selected_compute_type: str) -> tuple[Any, list[dict[str, Any]], list[dict[str, Any]], list[str]]:
         progress(.08, f"Caricamento/download automatico Whisper {model_names[model_id].capitalize()} · {selected_device.upper()} · {selected_compute_type}")
         model = WhisperModel(model_names[model_id], device=selected_device, compute_type=selected_compute_type, download_root=str(cache_root))
-        segments, info = model.transcribe(
-            str(source),
-            language=language,
-            **whisper_singing_transcription_options(),
-        )
         words_result: list[dict[str, Any]] = []
         phrases: list[dict[str, Any]] = []
         texts: list[str] = []
-        for segment in segments:
+        info = None
+        detected_language = language
+        for chunk_index in range(chunk_count):
             if cancellation_requested():
                 raise WorkerError("cancelled", "Trascrizione Whisper annullata")
-            segment_text = str(segment.text or "").strip()
-            if segment_text:
-                texts.append(segment_text)
-                phrases.append({"text": segment_text, "start": round(float(segment.start), 4), "end": round(float(segment.end), 4), "confidence": round(max(0.0, min(1.0, math.exp(float(segment.avg_logprob)))), 4)})
-            for word in segment.words or []:
-                text = str(word.word or "").strip()
-                start = float(word.start)
-                end = float(word.end)
-                probability = float(word.probability)
-                if text and all(math.isfinite(value) for value in (start, end, probability)) and 0 <= start < end <= duration_seconds + .1:
-                    words_result.append({"text": text, "start": round(start, 4), "end": round(min(duration_seconds, end), 4), "confidence": round(max(0.0, min(1.0, probability)), 4)})
-            progress(.15 + .8 * min(1.0, float(segment.end) / max(.001, duration_seconds)), "Whisper Medium · timestamp parola per parola")
+            core_start = chunk_index * chunk_seconds
+            core_end = min(duration_seconds, core_start + chunk_seconds)
+            # Two seconds of context across cuts. Each word belongs to exactly
+            # one core interval, according to its measured midpoint.
+            window_start = max(0.0, core_start - 2.0)
+            window_end = min(duration_seconds, core_end + 2.0)
+            window = staging / "whisper-window.wav"
+            use_window = chunk_count > 1 or start_seconds > 0 or end_seconds < float(metadata["durationSeconds"])
+            label = f"Whisper {model_names[model_id].capitalize()} · blocco {chunk_index + 1}/{chunk_count}"
+            progress(.15 + .8 * core_start / duration_seconds, label)
+            try:
+                if use_window:
+                    _run_ffmpeg(source, window, start_seconds + window_start, start_seconds + window_end, sample_rate=16000, channels=1)
+                segments, chunk_info = model.transcribe(
+                    str(window if use_window else source),
+                    language=detected_language,
+                    **whisper_singing_transcription_options(),
+                )
+                for segment in segments:
+                    if cancellation_requested():
+                        raise WorkerError("cancelled", "Trascrizione Whisper annullata")
+                    kept_words = []
+                    for word in segment.words or []:
+                        text = str(word.word or "").strip()
+                        start = float(word.start) + window_start
+                        end = float(word.end) + window_start
+                        probability = float(word.probability)
+                        if not text or not all(math.isfinite(value) for value in (start, end, probability)) or end <= start:
+                            continue
+                        if not core_start <= (start + end) / 2 < core_end:
+                            continue
+                        # Keep the output monotonic, including small alignment
+                        # differences between independently decoded windows.
+                        start = max(core_start, start, words_result[-1]["end"] if words_result else 0.0)
+                        end = min(core_end, end)
+                        start, end = round(start, 4), round(end, 4)
+                        if end <= start:
+                            continue
+                        entry = {"text": text, "start": start, "end": end, "confidence": round(max(0.0, min(1.0, probability)), 4)}
+                        words_result.append(entry)
+                        kept_words.append(entry)
+                    if kept_words:
+                        segment_text = " ".join(word["text"] for word in kept_words)
+                        texts.append(segment_text)
+                        phrases.append({"text": segment_text, "start": kept_words[0]["start"], "end": kept_words[-1]["end"], "confidence": round(sum(word["confidence"] for word in kept_words) / len(kept_words), 4)})
+                        if detected_language is None:
+                            detected_language = getattr(chunk_info, "language", None)
+                        info = chunk_info
+                    progress(.15 + .8 * min(core_end, max(core_start, float(segment.end) + window_start)) / duration_seconds, label)
+            finally:
+                if use_window:
+                    window.unlink(missing_ok=True)
+            progress(.15 + .8 * core_end / duration_seconds, f"{label} completato")
         return info, words_result, phrases, texts
 
     try:

@@ -595,6 +595,7 @@ const videoEditorAudioMixSchema = z.object({
   }).strict().default({ enabled: false, thresholdDb: -18, ratio: 4, attackMs: 10, releaseMs: 180, kneeDb: 8, makeupGainDb: 0 })
 }).strict();
 const videoEditorClipSchema = z.object({
+  paletteBackground: z.object({ colors: z.array(z.string().regex(/^#[0-9a-fA-F]{6}$/)).min(1).max(3), intensity: z.number().int().min(1).max(4) }).strict().optional(),
   id: z.string().min(1), assetId: z.string().min(1), trackId: z.string().min(1),
   startSeconds: z.number().nonnegative(), durationSeconds: z.number().positive(), sourceInSeconds: z.number().nonnegative().default(0),
   reversed: z.boolean().default(false),
@@ -634,6 +635,10 @@ const defaultVideoEditor = {
   interpolationEnabled: false, interpolationTargetFps: 60, interpolationMethod: "motion" as const
 };
 const videoEditorSchema = z.object({
+  sceneTransitions: z.array(z.object({
+    kind: z.enum(['black', 'white', 'pink', 'blur', 'zoom-in', 'zoom-out', 'slide-left', 'slide-right', 'shutter-x', 'shutter-y']),
+    at: z.number().nonnegative(), duration: z.number().positive().max(5), intensity: z.number().min(0).max(1)
+  })).max(600).optional(),
   assets: z.array(videoEditorAssetSchema).max(200).default(defaultVideoEditor.assets),
   // L’ordine è quello mostrato in timeline (dall’alto verso il basso); il
   // compositor disegna in senso inverso, così la traccia in cima resta sopra.

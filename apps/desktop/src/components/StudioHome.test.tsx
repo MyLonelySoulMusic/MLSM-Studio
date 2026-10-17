@@ -17,7 +17,7 @@ describe("StudioHome", () => {
     const onEnterArea = vi.fn();
     render(<StudioHome onEnterArea={onEnterArea} />);
     expect(screen.getByRole("link", { name: /Discord/ })).toHaveAttribute("href", "https://discord.gg/ttG2X9WjU");
-    expect(within(screen.getByRole("region", { name: "Aree creative disponibili" })).getAllByRole("button")).toHaveLength(animationCategories.length + 6);
+    expect(within(screen.getByRole("region", { name: "Aree creative disponibili" })).getAllByRole("button")).toHaveLength(animationCategories.length + 7);
     expect(screen.getByRole("button", { name: /Sound Animation/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Photo & Video Studio/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Video Editor/ })).toBeInTheDocument();
@@ -29,6 +29,8 @@ describe("StudioHome", () => {
     expect(screen.getByRole("button", { name: /Post-it/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Streamer Audio Viewer/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Documentation/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Video Format Builder/ }));
+    expect(onEnterArea).toHaveBeenLastCalledWith("videoFormat");
     fireEvent.click(screen.getByRole("button", { name: /Photo & Video Studio/ }));
     expect(onEnterArea).toHaveBeenCalledWith("photoVideoStudio");
     expect(useProjectStore.getState().project.animation.modeId).toBe("staticWatermark");
@@ -80,6 +82,19 @@ describe("StudioHome", () => {
     fireEvent.click(toggle);
     act(() => { clearTaskHistory(); });
     expect(areaIds()).toEqual(original);
+  });
+
+  it("keeps Documentation last even when it is the most used area", () => {
+    localStorage.setItem("mlsm.task-history.v1", JSON.stringify([
+      { id: "docs", label: "Documentation", areaId: "documentation", startedAt: 1, status: "completed" },
+    ]));
+    const { container } = render(<StudioHome onEnterArea={vi.fn()} />);
+    const lastArea = () => [...container.querySelectorAll<HTMLElement>(".studio-area-card")].at(-1)?.dataset.areaId;
+    expect(lastArea()).toBe("documentation");
+    fireEvent.click(screen.getByRole("button", { name: "Ordina per utilizzo" }));
+    expect(lastArea()).toBe("documentation");
+    fireEvent.click(screen.getByRole("button", { name: "Torna all’ordine classico" }));
+    expect(lastArea()).toBe("documentation");
   });
 
   it("animates horizontal and vertical moves in both directions", () => {

@@ -206,10 +206,13 @@ export function localSongPlayerVocalsService(): Plugin {
             const language = url.searchParams.get("language") || "auto"; const model = url.searchParams.get("model") || "whisper-medium_timestamped";
             const result = await new Promise<Record<string, unknown>>((resolveResult, reject) => {
               const child = spawn(paths.python, [paths.worker], { cwd: paths.projectRoot, env: { ...process.env, MLSM_WHISPER_CACHE: resolve(paths.projectRoot, ".transformers-cache/faster-whisper") }, stdio: ["pipe", "pipe", "pipe"] }); separationProcess = child; let output = ""; let stderr = "";
-              child.stdout?.on("data", (chunk: Buffer) => { output = `${output}${chunk.toString("utf8")}`.slice(-4_000_000); }); child.stderr?.on("data", (chunk: Buffer) => { stderr = `${stderr}${chunk.toString("utf8")}`.slice(-12_000); });
+              child.stdout?.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); if (Buffer.byteLength(output) > 32 * 1024 * 1024) { child.kill("SIGTERM"); reject(new Error("La trascrizione supera il limite di output di 32 MiB.")); } }); child.stderr?.on("data", (chunk: Buffer) => { stderr = `${stderr}${chunk.toString("utf8")}`.slice(-12_000); });
               child.once("error", reject); child.once("exit", (code) => { separationProcess = null; try { if (code !== 0 && !output) throw new Error(stderr || `Whisper terminato con codice ${code}.`); resolveResult(decodeSongPlayerWorkerOutput(output)); } catch (cause) { reject(cause); } });
               child.stdin?.end(`${JSON.stringify({ protocolVersion: 1, action: "transcribeWords", inputPath, language, model, jobRoot, ...(hasWindow ? { startSeconds, endSeconds } : {}) })}\n`);
-              request.once("aborted", () => { if (child.exitCode === null) child.kill("SIGTERM"); });
+              const abort = () => { if (child.exitCode === null) child.kill("SIGTERM"); };
+              request.once("aborted", abort);
+              response.once("close", abort);
+              child.once("close", () => { request.off("aborted", abort); response.off("close", abort); });
             });
             return sendJson(response, 200, result);
           } catch (cause) { return sendJson(response, 500, { error: cause instanceof Error ? cause.message : String(cause) }); }

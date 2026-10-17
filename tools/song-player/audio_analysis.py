@@ -162,7 +162,7 @@ def validate_local_media(path_value: str) -> Path:
     return resolved
 
 
-def probe_media(path: Path) -> dict[str, Any]:
+def probe_media(path: Path, *, max_duration_seconds: float | None = MAX_DURATION_SECONDS) -> dict[str, Any]:
     command = [
         resolve_tool("ffprobe"),
         "-v",
@@ -190,7 +190,7 @@ def probe_media(path: Path) -> dict[str, Any]:
         raise AnalysisError("probe_failed", "Metadati audio incompleti") from error
     if not math.isfinite(duration) or duration <= 0:
         raise AnalysisError("invalid_duration", "La durata audio non e valida")
-    if duration > MAX_DURATION_SECONDS:
+    if max_duration_seconds is not None and duration > max_duration_seconds:
         raise AnalysisError("media_too_long", "La durata supera il limite di 2 ore")
     return {
         "durationSeconds": duration,

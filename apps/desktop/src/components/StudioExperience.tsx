@@ -1,3 +1,5 @@
+import { formatText } from "../video-format/copy";
+import { useUiPreferences } from "../services/ui-preferences";
 import { lazy, Suspense, useEffect, useState } from "react";
 import { App } from "../App";
 import { ArtistSupportProvider } from "./ArtistSupport";
@@ -22,9 +24,12 @@ const PostItWorkspace = lazy(() => import("../postit/PostItWorkspace").then((mod
 const StreamerAudioViewer = lazy(() => import("../streamer/StreamerAudioViewer").then((module) => ({ default: module.StreamerAudioViewer })));
 const DocumentationWorkspace = lazy(() => import("../documentation/DocumentationWorkspace").then((module) => ({ default: module.DocumentationWorkspace })));
 
-type StudioScreen = "welcome" | "areas" | "editor" | "autopost" | "stickman" | "reports" | "postit" | "streamer" | "documentation";
+const VideoFormatWorkspace = lazy(() => import("../video-format/VideoFormatWorkspace").then(module => ({ default: module.VideoFormatWorkspace })));
+
+type StudioScreen = "welcome" | "areas" | "editor" | "autopost" | "stickman" | "reports" | "postit" | "streamer" | "documentation" | "videoFormat";
 
 function StudioRouter() {
+  const { language } = useUiPreferences();
   const initialReportViewId = reportViewIdFromHash(window.location.hash);
   const [screen, setScreen] = useState<StudioScreen>(() => { resetWorkspaceForAreaEntry(); return initialReportViewId ? "reports" : "welcome"; });
   const [reportViewId, setReportViewId] = useState<string | null>(initialReportViewId);
@@ -42,6 +47,7 @@ function StudioRouter() {
   const goHome = () => { resetWorkspaceForAreaEntry(); setScreen("areas"); };
   const closeReports = () => { if (reportViewId) window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`); setReportViewId(null); goHome(); };
   const navigate = (modeId: string) => {
+    if (modeId === "videoFormat") { resetWorkspaceForAreaEntry(); setScreen("videoFormat"); return; }
     if (modeId === "reports") { resetWorkspaceForAreaEntry(); setReportViewId(null); setScreen("reports"); return; }
     if (modeId === "postit") { resetWorkspaceForAreaEntry(); setScreen("postit"); return; }
     if (modeId === "streamer") { resetWorkspaceForAreaEntry(); setScreen("streamer"); return; }
@@ -54,7 +60,9 @@ function StudioRouter() {
   const content = screen === "welcome"
     ? <WelcomeSplash onContinue={() => setScreen("areas")} />
     : screen === "areas"
-      ? <StudioHome onEnterArea={(area) => { if (area === "reports") setReportViewId(null); setScreen(area === "autopost" || area === "stickman" || area === "reports" || area === "postit" || area === "streamer" || area === "documentation" ? area : "editor"); }} />
+      ? <StudioHome onEnterArea={(area) => { if (area === "reports") setReportViewId(null); setScreen(area === "autopost" || area === "stickman" || area === "reports" || area === "postit" || area === "streamer" || area === "documentation" || area === "videoFormat" ? area : "editor"); }} />
+      : screen === "videoFormat"
+        ? <Suspense fallback={<p role="status" data-ui-copy>{formatText(language, "Caricamento Video Format Builder…")}</p>}><VideoFormatWorkspace onHome={goHome} onEditor={() => setScreen("editor")} /></Suspense>
       : screen === "autopost"
         ? <AutoPostApp onHome={goHome} />
         : screen === "stickman"
@@ -68,9 +76,9 @@ function StudioRouter() {
               : screen === "reports"
                 ? <Suspense fallback={<main className="studio-home"><p role="status">Caricamento Reports…</p></main>}><ReportsWorkspace onHome={closeReports} viewDashboardId={reportViewId} onOpenViewer={id => { setReportViewId(id); setScreen("reports"); }} /></Suspense>
                 : <App onHome={goHome} />;
-  const assistantScreen = screen === "editor" || screen === "stickman" || screen === "reports" || screen === "postit" || screen === "streamer" || screen === "documentation" ? "editor" : "areas";
-  const standalone = screen === "stickman" || screen === "reports" || screen === "postit" || screen === "streamer" || screen === "documentation";
-  return <>{content}{screen !== "welcome" && !reportViewId ? <ApplicationAssistant hideLauncher={screen === "streamer"} context={{ modeId: screen === "autopost" ? "autopost" : screen === "stickman" ? "stickman" : screen === "reports" ? "reports" : screen === "postit" ? "postit" : screen === "streamer" ? "streamer" : screen === "documentation" ? "documentation" : mode.id, modeLabel: screen === "areas" ? "Home aree" : screen === "autopost" ? "AutoPost" : screen === "stickman" ? "Stickman Animations" : screen === "reports" ? "Reports" : screen === "postit" ? "Post-it" : screen === "streamer" ? "Streamer Audio Viewer" : screen === "documentation" ? "Documentation" : mode.label, aspectRatio: screen === "stickman" ? "9:16" : screen === "reports" ? "dashboard" : screen === "streamer" ? "audio" : standalone ? "workspace" : project.canvas.aspectRatio, hasAudio: standalone ? false : Boolean(imported), analysisReady: standalone ? false : Boolean(analysis), screen: assistantScreen }} onNavigate={navigate} /> : null}</>;
+  const assistantScreen = screen === "editor" || screen === "stickman" || screen === "reports" || screen === "postit" || screen === "streamer" || screen === "documentation" || screen === "videoFormat" ? "editor" : "areas";
+  const standalone = screen === "videoFormat" || screen === "stickman" || screen === "reports" || screen === "postit" || screen === "streamer" || screen === "documentation";
+  return <>{content}{screen !== "welcome" && !reportViewId ? <ApplicationAssistant hideLauncher={screen === "streamer"} context={{ modeId: screen === "videoFormat" ? "videoFormat" : screen === "autopost" ? "autopost" : screen === "stickman" ? "stickman" : screen === "reports" ? "reports" : screen === "postit" ? "postit" : screen === "streamer" ? "streamer" : screen === "documentation" ? "documentation" : mode.id, modeLabel: screen === "videoFormat" ? "Video Format Builder" : screen === "areas" ? "Home aree" : screen === "autopost" ? "AutoPost" : screen === "stickman" ? "Stickman Animations" : screen === "reports" ? "Reports" : screen === "postit" ? "Post-it" : screen === "streamer" ? "Streamer Audio Viewer" : screen === "documentation" ? "Documentation" : mode.label, aspectRatio: screen === "stickman" ? "9:16" : screen === "reports" ? "dashboard" : screen === "streamer" ? "audio" : standalone ? "workspace" : project.canvas.aspectRatio, hasAudio: standalone ? false : Boolean(imported), analysisReady: standalone ? false : Boolean(analysis), screen: assistantScreen }} onNavigate={navigate} /> : null}</>;
 }
 
 export function StudioExperience() { return <ArtistSupportProvider><MemoryStudioProvider><UiLocalizationBridge /><StudioRouter /><StudioSettings /></MemoryStudioProvider></ArtistSupportProvider>; }

@@ -24,6 +24,7 @@ function abortError(): DOMException {
 }
 
 export function UpscalerBatchPanel({ settings }: { settings: UpscalerSettings }) {
+  const invalidResolution = useUpscalerBatchStore(state => state.invalidResolution.width || state.invalidResolution.height);
   const items = useUpscalerBatchStore((state) => state.items); const previewItemId = useUpscalerBatchStore((state) => state.previewItemId); const projectEpoch = useUpscalerBatchStore((state) => state.projectEpoch); const running = useUpscalerBatchStore((state) => state.running); const batchOwner = useUpscalerBatchStore((state) => state.batchOwner); const importing = useUpscalerBatchStore((state) => state.importing); const singleOperations = useUpscalerBatchStore((state) => state.singleOperations); const importFailures = useUpscalerBatchStore((state) => state.importFailures); const outputNotice = useUpscalerBatchStore((state) => state.outputNotice);
   const addFiles = useUpscalerBatchStore((state) => state.addFiles); const setPreviewItem = useUpscalerBatchStore((state) => state.setPreviewItem); const removeItem = useUpscalerBatchStore((state) => state.removeItem); const setSelected = useUpscalerBatchStore((state) => state.setSelected); const startBatch = useUpscalerBatchStore((state) => state.startBatch); const cancelBatch = useUpscalerBatchStore((state) => state.cancelBatch); const retryFailed = useUpscalerBatchStore((state) => state.retryFailed); const syncSettings = useUpscalerBatchStore((state) => state.syncSettings); const clear = useUpscalerBatchStore((state) => state.clear); const setOutputNotice = useUpscalerBatchStore((state) => state.setOutputNotice);
   const latestSettings = useRef(settings); latestSettings.current = settings;
@@ -99,7 +100,7 @@ export function UpscalerBatchPanel({ settings }: { settings: UpscalerSettings })
   };
 
   const processSelected = async () => {
-    if (choosingOutput.current || running || importing || singleOperations > 0 || !items.some((item) => item.selected && item.status !== "done")) return;
+    if (invalidResolution || choosingOutput.current || running || importing || singleOperations > 0 || !items.some((item) => item.selected && item.status !== "done")) return;
     const boundaryEpoch = useUpscalerBatchStore.getState().projectEpoch;
     let sink = outputDestination?.projectEpoch === boundaryEpoch ? outputDestination.sink : null;
     if (!sink) sink = await chooseOutputForEpoch(boundaryEpoch);
@@ -132,7 +133,7 @@ export function UpscalerBatchPanel({ settings }: { settings: UpscalerSettings })
   };
 
   const changeDestination = async () => {
-    if (choosingOutput.current || running || importing) return;
+    if (invalidResolution || choosingOutput.current || running || importing) return;
     const boundaryEpoch = useUpscalerBatchStore.getState().projectEpoch;
     const sink = await chooseOutputForEpoch(boundaryEpoch);
     if (!sink || !mounted.current || useUpscalerBatchStore.getState().projectEpoch !== boundaryEpoch) return;
@@ -157,6 +158,6 @@ export function UpscalerBatchPanel({ settings }: { settings: UpscalerSettings })
     </article>)}</div></> : <p className="muted">Aggiungi una o più foto per creare una coda batch. I video restano nel flusso singolo.</p>}
     {outputNotice ? <p className="upscaler-batch-notice" role="status">{outputNotice}</p> : null}
     {outputSink ? <p className="upscaler-batch-notice">Destinazione: <strong>{outputSink.label}</strong> <button type="button" disabled={running || importing || selectingOutput} onClick={() => void changeDestination()}>Cambia</button></p> : null}
-    <div className="upscaler-batch-actions"><button type="button" className="upscaler-batch-primary" disabled={running || importing || selectingOutput || singleOperations > 0 || !items.some((item) => item.selected && item.status !== "done")} onClick={() => void processSelected()}>{running ? "Elaborazione…" : importing ? "Importazione…" : selectingOutput ? "Scelta destinazione…" : singleOperations > 0 ? "Attendi operazione singola…" : "Elabora selezionate"}</button><button type="button" disabled={!running || !batchOwner} onClick={() => { if (batchOwner) cancelBatch(batchOwner); }}>Annulla</button><button type="button" disabled={running || importing || selectingOutput || failedCount === 0} onClick={retryFailed}>Riprova fallite</button><button type="button" disabled={running || selectingOutput || (!importing && items.length === 0)} onClick={clearBatch}>Svuota</button></div>
+    <div className="upscaler-batch-actions"><button type="button" className="upscaler-batch-primary" disabled={invalidResolution || running || importing || selectingOutput || singleOperations > 0 || !items.some((item) => item.selected && item.status !== "done")} onClick={() => void processSelected()}>{running ? "Elaborazione…" : importing ? "Importazione…" : selectingOutput ? "Scelta destinazione…" : singleOperations > 0 ? "Attendi operazione singola…" : "Elabora selezionate"}</button><button type="button" disabled={!running || !batchOwner} onClick={() => { if (batchOwner) cancelBatch(batchOwner); }}>Annulla</button><button type="button" disabled={running || importing || selectingOutput || failedCount === 0} onClick={retryFailed}>Riprova fallite</button><button type="button" disabled={running || selectingOutput || (!importing && items.length === 0)} onClick={clearBatch}>Svuota</button></div>
   </section>;
 }

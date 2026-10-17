@@ -1,6 +1,6 @@
 import type { AnimationCategoryId } from "./animation-modes";
 
-export type StudioTaskArea = AnimationCategoryId | "autopost" | "stickman" | "reports" | "postit" | "streamer" | "documentation";
+export type StudioTaskArea = AnimationCategoryId | "autopost" | "stickman" | "reports" | "postit" | "streamer" | "documentation" | "videoFormat";
 export interface StudioTask { id: string; label: string; status: "running" | "completed" | "failed" | "cancelled" | "interrupted"; startedAt: number; finishedAt?: number; detail?: string; areaId?: StudioTaskArea }
 const KEY = "mlsm.task-history.v1";
 export const TASK_HISTORY_EVENT = "mlsm:task-history";
