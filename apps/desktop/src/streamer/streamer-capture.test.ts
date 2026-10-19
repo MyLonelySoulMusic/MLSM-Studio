@@ -17,7 +17,7 @@ describe("Music capture negotiation", () => {
     const f = fixture({ channelCount: 2, sampleRate: 48000, echoCancellation: false });
     const result = await requestBrowserCapture({ kind: "system" });
     expect(f.getUserMedia).not.toHaveBeenCalled();
-    expect(f.getDisplayMedia).toHaveBeenCalledWith({ video: true, audio: expect.objectContaining({ channelCount: { ideal: 2 }, echoCancellation: false, noiseSuppression: false, autoGainControl: false }) });
+    expect(f.getDisplayMedia).toHaveBeenCalledWith({ video: { displaySurface: "browser" }, selfBrowserSurface: "include", preferCurrentTab: true, systemAudio: "include", windowAudio: "system", audio: expect.objectContaining({ channelCount: { ideal: 2 }, echoCancellation: false, noiseSuppression: false, autoGainControl: false, suppressLocalAudioPlayback: false, restrictOwnAudio: false }) });
     expect(f.track.applyConstraints).not.toHaveBeenCalled();
     expect(result.info).toMatchObject({ trackChannels: 2, receivedChannels: null, sampleRate: 48000, constraintError: null });
   });

@@ -16,7 +16,7 @@ export async function requestBrowserCapture(source: BrowserCaptureSource): Promi
   const displayAudio = { ...audio, suppressLocalAudioPlayback: false, restrictOwnAudio: false };
   const stream = source.kind === "input"
     ? await navigator.mediaDevices.getUserMedia({ audio: { ...audio, ...(source.id ? { deviceId: { exact: source.id } } : {}) }, video: false })
-    : await navigator.mediaDevices.getDisplayMedia({ video: true, audio: displayAudio });
+    : await navigator.mediaDevices.getDisplayMedia({ video: { displaySurface: "browser" }, audio: displayAudio, selfBrowserSurface: "include", preferCurrentTab: true, systemAudio: "include", windowAudio: "system" } as DisplayMediaStreamOptions);
   try {
     const track = stream.getAudioTracks()[0];
     if (!track) throw new Error("No audio was shared by this browser / Nessun audio condiviso dal browser");

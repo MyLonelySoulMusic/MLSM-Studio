@@ -89,3 +89,16 @@
 @keyframes sav-whisper-word { from { opacity:0; transform:translateY(10px); filter:blur(5px); } to { opacity:1; transform:translateY(0); filter:blur(0); } }
 @keyframes sav-whisper-pulse { 50% { opacity:.3; box-shadow:0 0 0 4px color-mix(in srgb,var(--sav-pink) 15%,transparent); } }
 @container (max-width:620px) { .sav-live-transcript { padding:10px; } .sav-live-transcript>header { flex-wrap:wrap; } .sav-live-transcript footer>span { display:none; } }
+
+/* Follow the usable viewport when browser sharing chrome reduces its height.
+   Preserve readable analyzers and let the workspace scroll below that limit. */
+.sav-analyzers-fullscreen .sav-shell{flex:1;min-height:0;overflow:hidden}
+.sav-analyzers-fullscreen .sav-main{min-height:0;overflow:auto}
+@media(min-width:1050px){
+ .sav-analyzers-fullscreen .sav-analysis-stage>.sav-grid{grid-auto-rows:minmax(44px,1fr)}
+}
+@media(min-width:1050px) and (max-height:800px){
+ .sav-fullscreen-topbar{height:48px;padding:5px 18px}
+ .sav-analyzers-fullscreen .sav-main{padding:8px 18px}
+ .sav-transport{padding-top:7px;padding-bottom:7px}
+}

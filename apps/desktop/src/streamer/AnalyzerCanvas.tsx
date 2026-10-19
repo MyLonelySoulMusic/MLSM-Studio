@@ -86,15 +86,52 @@ export function AnalyzerCanvas({ kind, runtime, freeze = false, language, speed 
       } else if (kind === "phase") {
         const left = 25, range = w - 50, y = h * .5; ctx.fillStyle = palette.soft; ctx.fillRect(left, y, range, 8); ctx.fillStyle = palette.softAccent; ctx.fillRect(left, y, range / 2, 8); const x = left + (f.correlation + 1) / 2 * range; ctx.fillStyle = palette.secondary; ctx.fillRect(x - 2, y - 8, 4, 24); for (const n of [-1, 0, 1]) text(`${n > 0 ? "+" : ""}${n}`, left + (n + 1) / 2 * range, y + 35, 11, palette.muted, "center"); text(format(f.correlation, 2), w / 2, y - 22, 26, palette.secondary, "center"); text(`Bass <120 Hz: ${format(f.lowCorrelation, 2)}`, w / 2, h - 12, 10, palette.muted, "center");
       } else if (kind === "peaks") {
-        const top = 34, bottom = h - 47, height = bottom - top;
-        for (let c = 0; c < 2; c++) { const target = fresh ? Math.max(-90, f.peak[c]!) : -90; meter[c] = target >= meter[c]! ? target : Math.max(target, meter[c]! - dt * 24); const x = w * (.25 + c * .34), bw = Math.min(35, w * .15); ctx.fillStyle = palette.soft; ctx.fillRect(x, top, bw, height); const fraction = Math.min(1, Math.max(0, (meter[c]! + 60) / 60)); ctx.fillStyle = c ? palette.secondary : pink; ctx.fillRect(x, bottom - fraction * height, bw, fraction * height); const holdY = top + Math.max(0, Math.min(1, -f.hold[c]! / 60)) * height; line(x - 3, holdY, x + bw + 3, holdY, "#ad2d64"); text(c ? "R" : "L", x + bw / 2, 20, 12, c ? palette.secondary : pink, "center"); text(format(f.peak[c]!), x + bw / 2, h - 26, 11, palette.secondary, "center"); text(`${format(f.truePeak[c]!)} TP`, x + bw / 2, h - 10, 9, palette.muted, "center"); if (f.clip[c]) { ctx.fillStyle = "#b8294c"; ctx.fillRect(x, top - 9, bw, 5); } }
-        for (const db of [0, -6, -12, -24, -36, -48, -60]) text(String(db), 5, top + -db / 60 * height + 3, 9); text("dBFS / dBTP", w - 8, 14, 9, palette.muted, "right");
+        // Units, channel names and clip lights occupy separate rows.
+        const showUnits = w >= 150, compact = h < 190, channelY = showUnits ? (compact ? 29 : 34) : 20;
+        const top = channelY + (compact ? 15 : 22), bottom = Math.max(top + 1, h - 47), height = bottom - top;
+        const plotLeft = 27, plotWidth = Math.max(1, w - plotLeft - 7), column = plotWidth / 2;
+        if (showUnits) text("dBFS / dBTP", w / 2, 14, 9, palette.muted, "center");
+        for (let c = 0; c < 2; c++) {
+          const target = fresh ? Math.max(-90, f.peak[c]!) : -90;
+          meter[c] = target >= meter[c]! ? target : Math.max(target, meter[c]! - dt * 24);
+          const center = plotLeft + column * (c + .5), bw = Math.min(35, column * .44), x = center - bw / 2;
+          ctx.fillStyle = palette.soft; ctx.fillRect(x, top, bw, height);
+          const fraction = Math.min(1, Math.max(0, (meter[c]! + 60) / 60));
+          ctx.fillStyle = c ? palette.secondary : pink; ctx.fillRect(x, bottom - fraction * height, bw, fraction * height);
+          const holdY = top + Math.max(0, Math.min(1, -f.hold[c]! / 60)) * height;
+          line(x - 3, holdY, x + bw + 3, holdY, "#ad2d64");
+          text(c ? "R" : "L", center, channelY, 12, c ? palette.secondary : pink, "center");
+          text(format(f.peak[c]!), center, h - 26, Math.min(11, (column - 3) / 3.6), palette.secondary, "center");
+          text(`${format(f.truePeak[c]!)} TP`, center, h - 10, Math.min(9, (column - 3) / 5.4), palette.muted, "center");
+          if (f.clip[c]) { ctx.fillStyle = "#b8294c"; ctx.fillRect(x, top - 9, bw, 5); }
+        }
+        // Keep scale labels at least 12px apart, including the bottom endpoint.
+        let lastTick = -Infinity;
+        for (const db of [0, -6, -12, -24, -36, -48, -60]) {
+          const y = top + -db / 60 * height;
+          if (y - lastTick < 12 || (db !== -60 && bottom - y < 12)) continue;
+          text(String(db), 5, y + 3, 9); lastTick = y;
+        }
       } else if (kind === "loudness") {
-        text(format(f.momentary), 22, 53, Math.min(43, w / 8), palette.secondary); text("LUFS · M", 24, 72, 11, pink);
+        // Reserve chart space before laying out the summary, even in a short widget.
+        const compact = h < 200, hy = compact ? 76 : 112;
+        const summarySize = Math.min(compact ? 27 : 43, w * .075);
+        text(format(f.momentary), 22, compact ? 36 : 53, summarySize, palette.secondary);
+        text("LUFS · M", 22, compact ? 53 : 72, Math.min(11, w * .025), pink);
         const metrics = [["S", f.shortTerm], ["I", f.integrated], ["LRA · LU", f.lra], ["Max M", f.maxMomentary], ["Max S", f.maxShortTerm], ["Max TP", f.maxTruePeak]] as const;
-        metrics.forEach(([label, value], i) => { const x = w * .43 + (i % 3) * w * .18, y = 28 + Math.floor(i / 3) * 40; text(label, x, y, 9); text(format(value), x, y + 18, 16, palette.secondary); });
+        metrics.forEach(([label, value], i) => {
+          const x = w * .43 + (i % 3) * w * .18, y = (compact ? 14 : 28) + Math.floor(i / 3) * (compact ? 29 : 40);
+          text(label, x, y, Math.min(9, w * .022));
+          text(format(value), x, y + (compact ? 15 : 18), Math.min(compact ? 14 : 16, w * .032), palette.secondary);
+        });
         if (newFrame) { history.push({ m: f.momentary, s: f.shortTerm, i: f.integrated }); if (history.length > 900) history.shift(); }
-        const hy = 112, hh = Math.max(20, h - hy - 24); for (const level of [-12, -24, -36]) { const y = hy + -level / 60 * hh; line(22, y, w - 18, y); text(String(level), 2, y + 3, 8); }
+        const hh = Math.max(1, h - hy - 22);
+        let lastLevelY = -Infinity;
+        for (const level of [-12, -24, -36]) {
+          const y = hy + -level / 60 * hh;
+          if (y - lastLevelY < 11) continue;
+          line(22, y, w - 18, y); text(String(level), 2, y + 3, 8); lastLevelY = y;
+        }
         for (const [key, color] of [["m", pink], ["s", palette.secondary], ["i", palette.muted]] as const) { ctx.strokeStyle = color; ctx.lineWidth = 1.3; ctx.beginPath(); history.forEach((v, i) => { const x = 22 + i / 899 * (w - 40), y = hy + Math.max(0, Math.min(1, -v[key] / 60)) * hh; if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); }); ctx.stroke(); } text("M / S / I · 30 s", 22, h - 8, 9);
       } else if (kind === "dynamics") {
         text("L", w * .55, 24, 11, pink); text("R", w * .8, 24, 11, palette.secondary);
