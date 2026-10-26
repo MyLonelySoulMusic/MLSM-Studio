@@ -149,6 +149,14 @@ async function setup(realProcesses = false) {
 }
 
 describe("AI Quantizer modules API", () => {
+  it('marks JSON responses as handled so the HTTP dispatcher does not send a second response', async () => {
+    const { api, project } = await setup();
+    const response = responseCapture();
+    const handled = await api({ method: 'GET' }, response, new URL('http://localhost/api/projects'));
+    expect(handled).toBe(true);
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body!.toString())).toEqual([project]);
+  });
   it.each([
     { targetBpm: 118.81, tempoInterpretation: 'normal', expected: 119 },
     { targetBpm: 59.405, tempoInterpretation: 'half', expected: 59 }

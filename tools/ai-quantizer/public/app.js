@@ -1037,7 +1037,12 @@ window.onresize = () => {
   if (active) refreshVisibleModule(active);
 };
 
-Promise.all([loadProjects(), request('/music/ai-quantizer/api/health')]).then(([, health]) => {
+loadProjects().catch(e => toast(e.message, true));
+request('/music/ai-quantizer/api/health').then(health => {
   $('#engineDot').classList.toggle('ok', health.ok);
   $('#engineText').textContent = health.ok ? 'Pronto · R3 quality' : 'Tool mancanti';
-}).catch(e => toast(e.message, true));
+}).catch(e => {
+  $('#engineDot').classList.remove('ok');
+  $('#engineText').textContent = 'Errore';
+  toast(e.message, true);
+});

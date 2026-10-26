@@ -54,6 +54,7 @@ function json(res, status, value) {
   const body = Buffer.from(JSON.stringify(value));
   res.writeHead(status, { 'Content-Type': MIME['.json'], 'Content-Length': body.length });
   res.end(body);
+  return true;
 }
 
 function safeId(value) {

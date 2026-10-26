@@ -7,10 +7,13 @@ const script = readFileSync(resolve('tools/ai-quantizer/public/app.js'), 'utf8')
 const rhythmScript = readFileSync(resolve('tools/ai-quantizer/public/rhythm.cjs'), 'utf8');
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
-function boot() {
+function boot(failProjects = false) {
   document.body.innerHTML = new DOMParser().parseFromString(html, 'text/html').body.innerHTML;
   new Function(rhythmScript)();
-  const fetcher = vi.fn(async (url: string) => new Response(JSON.stringify(url.endsWith('/health') ? { ok: true } : []), { headers: { 'content-type': 'application/json' } }));
+  const fetcher = vi.fn(async (url: string) => {
+    if (failProjects && url.endsWith('/projects')) throw new Error('Incomplete project response');
+    return new Response(JSON.stringify(url.endsWith('/health') ? { ok: true } : []), { headers: { 'content-type': 'application/json' } });
+  });
   const app = new Function('fetch', 'requestAnimationFrame', `${script}\nreturn { state, rebuildMap, interpretedBpm, showModule, updateWorkflow, downloadArchive, setVariant, setRestoreVariant, draw, sourceToTarget, saveAndProcess, applyAlignment, openProject, persistModuleChoice, createProject, openProjectDialog };`)(fetcher, (callback: () => void) => callback());
   const master = { id: 'track1', name: 'Song.wav', role: 'master', source: 'input.wav', duration: 3, output: 'output.wav', outputDuration: 3, processedAt: '2026-09-20T10:00:00Z' };
   app.state.project = { id: 'project1', name: 'Song', tracks: [master], settings: { targetBpm: 120 }, modules: { quantize: true, align: true, restoration: true, mastering: true, ai: false }, warpMap: { points: [{ source: 0, target: 0 }, { source: 1.1, target: 1 }, { source: 2.1, target: 2 }, { source: 3, target: 3 }] } };
@@ -32,6 +35,12 @@ beforeEach(() => {
 afterEach(async () => { await tick(); vi.restoreAllMocks(); document.body.innerHTML = ''; });
 
 describe('Music guided workflow', () => {
+  it('updates engine readiness even when loading projects fails', async () => {
+    boot(true);
+    await tick();
+    expect(document.querySelector('#engineText')?.textContent).toBe('Pronto · R3 quality');
+    expect(document.querySelector('#toast')?.textContent).toBe('Incomplete project response');
+  });
   it('uses beat spacing instead of an inconsistent bar-derived BPM and preserves duration in half-time', () => {
     const { app } = boot();
     app.state.beats = Array.from({ length: 24 }, (_, i) => i * .5);
