@@ -499,7 +499,7 @@ Per dettagli sui tool di piattaforma consulta [Script di installazione e build](
 
 ## My Lonely Soul Music
 
-- [Sito ufficiale](https://mylonelysoulmusic.altervista.org/) · [Lonely’s Journal](https://mylonelysoulmusic.altervista.org/journal/)
+- [Sito ufficiale](https://www.mylonelysoulmusic.com/) · [Lonely’s Journal](https://www.mylonelysoulmusic.com/journal/)
 - [YouTube](https://www.youtube.com/@MyLonelySoulMusic) · [Spotify](https://open.spotify.com/intl-it/artist/46IsvOJtw1vXE6nFqHxz3R) · [Apple Music](https://music.apple.com/it/artist/my-lonely-soul-music/6792151463)
 - [TikTok](https://www.tiktok.com/@mylonelysoulmusic) · [Instagram](https://www.instagram.com/mylonelysoulmusic/) · [Email](mailto:mylonelysoulmusic@gmail.com)
 

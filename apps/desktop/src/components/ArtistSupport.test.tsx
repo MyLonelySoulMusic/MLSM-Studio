@@ -85,9 +85,9 @@ describe("ArtistSupport", () => {
 
     const iframe = screen.getByTitle("My Lonely Soul Music · Official website");
     const link = screen.getByRole("link", { name: "Apri in una nuova scheda" });
-    expect(iframe).toHaveAttribute("src", "https://mylonelysoulmusic.altervista.org/");
+    expect(iframe).toHaveAttribute("src", "https://www.mylonelysoulmusic.com/");
     expect(iframe).toHaveAttribute("loading", "lazy");
-    expect(link).toHaveAttribute("href", "https://mylonelysoulmusic.altervista.org/");
+    expect(link).toHaveAttribute("href", "https://www.mylonelysoulmusic.com/");
     expect(link).toHaveAttribute("target", "_blank");
     expect(link).toHaveAttribute("rel", "noopener noreferrer");
     expect(link.compareDocumentPosition(iframe)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
@@ -99,9 +99,9 @@ describe("ArtistSupport", () => {
     fireEvent.click(screen.getByRole("button", { name: "Mostra Lonely's Journal" }));
     const journalIframe = screen.getByTitle("My Lonely Soul Music · Lonely's Journal");
     const journalLink = screen.getByRole("link", { name: "Apri il Journal in una nuova scheda" });
-    expect(journalIframe).toHaveAttribute("src", "https://mylonelysoulmusic.altervista.org/journal/");
+    expect(journalIframe).toHaveAttribute("src", "https://www.mylonelysoulmusic.com/journal/");
     expect(journalIframe).toHaveAttribute("loading", "lazy");
-    expect(journalLink).toHaveAttribute("href", "https://mylonelysoulmusic.altervista.org/journal/");
+    expect(journalLink).toHaveAttribute("href", "https://www.mylonelysoulmusic.com/journal/");
     expect(journalLink).toHaveAttribute("target", "_blank");
     expect(container.querySelector(".artist-support-sheet--journal")).toHaveClass("is-active");
     expect(container.querySelector(".artist-support-sheet--website")).toHaveClass("is-above");

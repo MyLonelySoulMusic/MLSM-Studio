@@ -330,7 +330,7 @@ Regenerate screenshots with `node tools/capture_documentation_screenshots.mjs` a
 
 ## My Lonely Soul Music
 
-- [Official website](https://mylonelysoulmusic.altervista.org/) · [Lonely’s Journal](https://mylonelysoulmusic.altervista.org/journal/)
+- [Official website](https://www.mylonelysoulmusic.com/) · [Lonely’s Journal](https://www.mylonelysoulmusic.com/journal/)
 - [YouTube](https://www.youtube.com/@MyLonelySoulMusic) · [Spotify](https://open.spotify.com/intl-it/artist/46IsvOJtw1vXE6nFqHxz3R) · [Apple Music](https://music.apple.com/it/artist/my-lonely-soul-music/6792151463)
 - [TikTok](https://www.tiktok.com/@mylonelysoulmusic) · [Instagram](https://www.instagram.com/mylonelysoulmusic/) · [Email](mailto:mylonelysoulmusic@gmail.com)
 
