@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { centerEmbeddedImages, parseArticleDocument, parseLibraryDocument, recognizeMedia, renderEmbedSection, selectLibraryMedia, weightedSample } from "./media.mjs";
+import { wordpressSchedule, centerEmbeddedImages, parseArticleDocument, parseLibraryDocument, recognizeMedia, renderEmbedSection, selectLibraryMedia, weightedSample } from "./media.mjs";
 
 describe("media recognition", () => {
   it("recognizes YouTube videos and playlists", () => {
@@ -73,5 +73,32 @@ describe("media recognition", () => {
     expect(parsed.duplicateCount).toBe(1);
     expect(parsed.items[0]?.priority).toBe(80);
     expect(parsed.settings).toEqual({ tracksPerPost: 3, playlistEveryTracks: 12 });
+  });
+});
+
+describe("WordPress scheduling", () => {
+  const article = { title: "Scheduled", content: "Body", status: "future", date_gmt: "2099-01-10T14:30:00" };
+  it("preserves scheduling through repeated normalization used by category mapping", () => {
+    const parsed = parseArticleDocument([article]);
+    expect(parseArticleDocument(parsed).articles[0]).toMatchObject(article);
+    expect(parseArticleDocument([{ ...article, date_gmt: article.date_gmt + "Z" }]).articles[0]?.date_gmt).toBe(article.date_gmt);
+  });
+  it("accepts date_gmt alone and leaves ordinary posts unchanged", () => {
+    expect(wordpressSchedule({ date_gmt: article.date_gmt })).toEqual({ status: "future", date_gmt: article.date_gmt });
+    expect(wordpressSchedule({})).toEqual({});
+  });
+  it.each([
+    { status: "future" },
+    { date_gmt: "2099-02-30T12:00:00" },
+    { date_gmt: "2099-01-01T25:00:00" },
+    { date_gmt: "2099-01-01T12:00:00+01:00" },
+    { date_gmt: "2020-01-01T12:00:00" },
+    { status: "draft", date_gmt: article.date_gmt },
+    { date: "2099-01-01T12:00:00" },
+  ])("rejects unsafe or ambiguous schedules: %j", (input) => {
+    expect(() => wordpressSchedule(input)).toThrow();
+  });
+  it("rejects an expired schedule again at dispatch", () => {
+    expect(() => wordpressSchedule(article, Date.parse(article.date_gmt + "Z"))).toThrow(/futuro/);
   });
 });

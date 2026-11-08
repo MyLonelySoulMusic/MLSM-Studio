@@ -1,14 +1,28 @@
 {
   "intervalMinutes": 15,
-  "postsPerRun": 3,
+  "postsPerRun": 2,
   "articles": [
     {
-      "title": "Titolo dell’articolo",
-      "content": "<p>Testo dell’articolo in HTML.</p>",
-      "excerpt": "Riassunto opzionale",
-      "slug": "titolo-articolo",
-      "categories": [1],
-      "tags": [2]
+      "title": "Primo articolo programmato",
+      "content": "<h2>Introduzione</h2><p>Testo completo del primo articolo in HTML.</p>",
+      "excerpt": "Breve riassunto del primo articolo.",
+      "slug": "primo-articolo-programmato",
+      "categories": [],
+      "tags": [],
+      "embeds": [],
+      "status": "future",
+      "date_gmt": "2027-01-10T14:30:00"
+    },
+    {
+      "title": "Secondo articolo programmato",
+      "content": "<p>Testo completo del secondo articolo in HTML.</p>",
+      "excerpt": "Breve riassunto del secondo articolo.",
+      "slug": "secondo-articolo-programmato",
+      "categories": [],
+      "tags": [],
+      "embeds": [],
+      "status": "future",
+      "date_gmt": "2027-01-10T16:30:00"
     }
   ]
 }

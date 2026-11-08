@@ -43,6 +43,22 @@ describe("AutoPost integrato", () => {
   });
   afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
+  it("distingue gli articoli programmati da quelli pubblicati", async () => {
+    apiMock.state.mockResolvedValue({
+      ...state,
+      summary: { scheduled: 1 },
+      queue: [{ ...state.queue[0], status: "scheduled", scheduledAt: "2099-01-10T14:30:00Z",
+        article: { ...state.queue[0].article, status: "future", date_gmt: "2099-01-10T14:30:00" },
+        blogResults: { "blog-1": { status: "scheduled", wordpressId: 8 } } }],
+    });
+    render(<AutoPostApp onHome={vi.fn()} />);
+    await screen.findByText("Blog principale");
+    fireEvent.click(screen.getByRole("button", { name: "Coda" }));
+    expect(screen.getByText("Programmato su WordPress")).toBeInTheDocument();
+    expect(screen.getByText(/Pubblicazione \(ora locale\):/)).toHaveTextContent("2099");
+    expect(screen.queryByRole("button", { name: "Riprova" })).not.toBeInTheDocument();
+  });
+
   it("mostra i dati persistiti, tutte le schede e torna alle aree", async () => {
     const onHome = vi.fn();
     render(<AutoPostApp onHome={onHome} />);

@@ -380,3 +380,5 @@
     grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 }
+
+.autopost-shell .autopost-is-scheduled{color:var(--accent-deep);background:var(--accent-soft)}

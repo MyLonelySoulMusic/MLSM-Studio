@@ -27,6 +27,22 @@ export function recognizeMedia(input) {
   throw new Error(`Provider non supportato: ${hostname}`);
 }
 
+// date_gmt without an offset is UTC, matching the WordPress REST API.
+export function wordpressSchedule(raw, now = Date.now()) {
+  if (raw.date !== undefined) throw new Error("Usa date_gmt in UTC per programmare la pubblicazione");
+  if (raw.date_gmt === undefined && raw.status !== "future") return {};
+  if (raw.status !== undefined && raw.status !== "future") throw new Error("date_gmt richiede status future");
+  const value = raw.date_gmt;
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z)?$/.test(value)) {
+    throw new Error("date_gmt deve avere formato YYYY-MM-DDTHH:mm:ss in UTC");
+  }
+  const canonical = value.replace(/Z$/, "");
+  const timestamp = Date.parse(canonical + "Z");
+  if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString().slice(0, 19) !== canonical) throw new Error("date_gmt non valida");
+  if (timestamp <= now + 60_000) throw new Error("La pubblicazione deve essere programmata almeno un minuto nel futuro");
+  return { status: "future", date_gmt: canonical };
+}
+
 export function normalizeArticle(raw, index = 0) {
   if (!raw || typeof raw !== "object") throw new Error(`Articolo ${index + 1}: formato non valido`);
   const title = String(raw.title ?? "").trim();
@@ -40,6 +56,7 @@ export function normalizeArticle(raw, index = 0) {
   return {
     title,
     content,
+    ...wordpressSchedule(raw),
     excerpt: String(raw.excerpt ?? "").trim(),
     slug: String(raw.slug ?? "").trim(),
     categories: Array.isArray(raw.categories) ? raw.categories.map(Number).filter(Number.isInteger) : [],

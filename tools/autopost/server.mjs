@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "./http.mjs";
 import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
@@ -5,7 +6,7 @@ import { existsSync } from "node:fs";
 import { dirname, extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
-import { centerEmbeddedImages, libraryMediaKey, parseArticleDocument, parseLibraryDocument, recognizeMedia, renderEmbedSection, selectLibraryMedia } from "./media.mjs";
+import { wordpressSchedule, centerEmbeddedImages, libraryMediaKey, parseArticleDocument, parseLibraryDocument, recognizeMedia, renderEmbedSection, selectLibraryMedia } from "./media.mjs";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const development = process.argv.includes("--dev");
@@ -114,13 +115,6 @@ function normalizeSiteUrl(value) {
   return url.href.replace(/\/$/, "");
 }
 
-async function fetchWithTimeout(url, options = {}, milliseconds = 20_000) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), milliseconds);
-  try { return await fetch(url, { ...options, signal: controller.signal, redirect: "error" }); }
-  finally { clearTimeout(timeout); }
-}
-
 async function wpRequest(path, body, blog = {}, override = {}) {
   const siteUrl = normalizeSiteUrl(override.siteUrl || blog.siteUrl);
   const username = String(override.username || blog.username).trim();
@@ -206,7 +200,7 @@ async function publishOne() {
     }
     const targetBlogs = item.blogIds.map((id) => state.blogs.find((blog) => blog.id === id));
     if (!targetBlogs.length || targetBlogs.some((blog) => !blog)) throw new Error("Uno o più blog selezionati non sono più disponibili.");
-    const pendingBlogs = targetBlogs.filter((blog) => item.blogResults?.[blog.id]?.status !== "published");
+    const pendingBlogs = targetBlogs.filter((blog) => !["published", "scheduled"].includes(item.blogResults?.[blog.id]?.status));
     const outcomes = await Promise.all(pendingBlogs.map(async (blog) => {
       try {
         const content = `${centerEmbeddedImages(item.article.content)}${renderEmbedSection(publishedMedia, blog.name)}`;
@@ -214,44 +208,47 @@ async function publishOne() {
           title: item.article.title,
           content,
           status: blog.defaultStatus || "publish",
+          ...wordpressSchedule(item.article),
           ...(item.article.excerpt ? { excerpt: item.article.excerpt } : {}),
           ...(item.article.slug ? { slug: item.article.slug } : {}),
           ...((item.categoriesByBlog?.[blog.id] || item.article.categories).length ? { categories: item.categoriesByBlog?.[blog.id] || item.article.categories } : {}),
           ...(item.article.tags.length ? { tags: item.article.tags } : {}),
         }, blog);
-        return { blog, status: "published", wordpressId: payload.id, wordpressUrl: payload.link || "", publishedAt: new Date().toISOString() };
+        return { blog, status: payload.status === "future" ? "scheduled" : "published", scheduledAt: payload.status === "future" ? item.article.date_gmt + "Z" : undefined, wordpressId: payload.id, wordpressUrl: payload.link || "", publishedAt: payload.status === "future" ? undefined : new Date().toISOString() };
       } catch (error) {
         return { blog, status: "failed", error: error instanceof Error ? error.message : String(error) };
       }
     }));
     item.blogResults ||= {};
     for (const outcome of outcomes) {
-      item.blogResults[outcome.blog.id] = outcome.status === "published"
-        ? { status: "published", wordpressId: outcome.wordpressId, wordpressUrl: outcome.wordpressUrl, publishedAt: outcome.publishedAt }
+      item.blogResults[outcome.blog.id] = ["published", "scheduled"].includes(outcome.status)
+        ? { status: outcome.status, scheduledAt: outcome.scheduledAt, wordpressId: outcome.wordpressId, wordpressUrl: outcome.wordpressUrl, publishedAt: outcome.publishedAt }
         : { status: "failed", error: outcome.error };
     }
-    const successes = outcomes.filter((outcome) => outcome.status === "published");
+    const successes = outcomes.filter((outcome) => ["published", "scheduled"].includes(outcome.status));
     if (successes.length && item.mediaSelectedFromLibrary && !item.selectionCounted) {
       state.library.tracksSincePlaylist = item.selectionNextTracksSincePlaylist;
       item.selectionCounted = true;
     }
     if (successes.length) {
-      const publishedAt = successes[successes.length - 1].publishedAt;
-      for (const media of publishedMedia) {
+      const published = successes.filter((outcome) => outcome.status === "published");
+      const publishedAt = published.at(-1)?.publishedAt;
+      for (const media of published.length ? publishedMedia : []) {
         const key = `${media.provider}:${media.kind}:${media.id}`;
         const previous = state.stats[key];
-        state.stats[key] = { ...media, publishCount: (previous?.publishCount || 0) + successes.length, firstPublishedAt: previous?.firstPublishedAt || publishedAt, lastPublishedAt: publishedAt };
+        state.stats[key] = { ...media, publishCount: (previous?.publishCount || 0) + published.length, firstPublishedAt: previous?.firstPublishedAt || publishedAt, lastPublishedAt: publishedAt };
       }
       const first = successes[0];
       item.wordpressId ||= first.wordpressId;
       item.wordpressUrl ||= first.wordpressUrl;
     }
-    const allPublished = item.blogIds.every((id) => item.blogResults[id]?.status === "published");
+    const allPublished = item.blogIds.every((id) => ["published", "scheduled"].includes(item.blogResults[id]?.status));
     if (allPublished) {
-      item.status = "published";
-      item.publishedAt = new Date().toISOString();
+      item.status = item.blogIds.some((id) => item.blogResults[id]?.status === "scheduled") ? "scheduled" : "published";
+      if (item.status === "scheduled") item.scheduledAt = item.article.date_gmt + "Z";
+      else item.publishedAt = new Date().toISOString();
       item.lastError = "";
-      addHistory("published", `Pubblicato “${item.article.title}” su ${item.blogIds.length} blog`, item.id);
+      addHistory(item.status, `${item.status === "scheduled" ? "Programmato su WordPress" : "Pubblicato"} “${item.article.title}” su ${item.blogIds.length} blog`, item.id);
     } else {
       item.status = "failed";
       item.lastError = targetBlogs.filter((blog) => item.blogResults[blog.id]?.status === "failed").map((blog) => `${blog.name}: ${item.blogResults[blog.id].error}`).join(" · ");
@@ -519,7 +516,7 @@ async function api(request, response, url) {
     const item = state.queue.find((entry) => entry.id === itemMatch[1]);
     if (!item) return sendJson(response, 404, { error: "Elemento non trovato" });
     if (itemMatch[2] === "retry" && item.status === "failed") { item.status = "queued"; item.lastError = ""; }
-    if (itemMatch[2] === "remove" && !["published", "publishing"].includes(item.status)) state.queue = state.queue.filter((entry) => entry.id !== item.id);
+    if (itemMatch[2] === "remove" && !["published", "scheduled", "publishing"].includes(item.status)) state.queue = state.queue.filter((entry) => entry.id !== item.id);
     await saveState();
     armScheduler();
     return sendJson(response, 200, publicState());
@@ -570,5 +567,5 @@ const server = createServer(async (request, response) => {
     return await serveProduction(request, response, url);
   } catch (error) { return sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
 });
-server.listen(port, "127.0.0.1", () => console.log(`MLSM AutoPost: http://127.0.0.1:${port}${development ? " (development)" : ""}`));
+server.listen(port, "127.0.0.1", () => console.log(`MLSM AutoPost: http://127.0.0.1:${server.address().port}${development ? " (development)" : ""}`));
 for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => { if (timer) clearTimeout(timer); server.close(() => process.exit(0)); });

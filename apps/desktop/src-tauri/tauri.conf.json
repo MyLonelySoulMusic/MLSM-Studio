@@ -29,6 +29,7 @@
       ,"../../../tools/settings/worker.py": "settings/worker.py"
       ,"../../../tools/autopost/server.mjs": "autopost/server.mjs"
       ,"../../../tools/autopost/media.mjs": "autopost/media.mjs"
+      ,"../../../tools/autopost/http.mjs": "autopost/http.mjs"
     }
   }
 }
