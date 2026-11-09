@@ -2224,6 +2224,7 @@ def process_video_upscale_job(job_id: str) -> None:
                                 "segmentTotalFrames": segment_frame_counts.get(segment.name, 0),
                                 "segmentProgress": 0.0,
                                 "segmentPhase": "awaiting_progress",
+                                "remoteEventId": None,
                                 "segmentElapsedSeconds": 0.0,
                                 "segmentEstimatedRemainingSeconds": None,
                                 "secondsPerFrame": None,
@@ -2250,6 +2251,14 @@ def process_video_upscale_job(job_id: str) -> None:
                         job_id, endpointActivity=snapshot, activeEndpoints=busy,
                         phaseLabel=f"Segmenti remoti · {len(busy)}/{len(remote_endpoints)} endpoint al lavoro",
                     )
+
+                def remote_endpoint_error(endpoint: str, segment: Path, error: str, attempt: int, will_retry: bool) -> None:
+                    log_upscaler_event("backend", "remote-segment-error", jobId=job_id, endpoint=endpoint, segment=segment.name, error=error, attempt=attempt, willRetry=will_retry)
+                    with endpoint_activity_lock:
+                        item = endpoint_activity[endpoint]
+                        item.update({"lastError": error, "failedSegment": segment.name, "attempt": attempt, "willRetry": will_retry})
+                        snapshot = [dict(endpoint_activity[url]) for url in remote_endpoints]
+                    update_video_job(job_id, endpointActivity=snapshot)
 
                 def remote_endpoint_progress(
                     endpoint: str, segment: Path, progress_item: dict[str, object],
@@ -2278,6 +2287,8 @@ def process_video_upscale_job(job_id: str) -> None:
                         # overwrite the endpoint's newly assigned segment.
                         if item is None or item.get("activeSegment") != segment.name or item.get("state") != "busy":
                             return
+                        if isinstance(progress_item.get("event_id"), str):
+                            item["remoteEventId"] = progress_item["event_id"]
                         item.update({
                             "segmentFrame": completed_in_segment,
                             "segmentTotalFrames": total_in_segment,
@@ -2327,6 +2338,7 @@ def process_video_upscale_job(job_id: str) -> None:
                     validate_checkpoint=valid_remote_video_segment,
                     on_progress=remote_progress, on_endpoint=remote_endpoint_state,
                     on_endpoint_progress=remote_endpoint_progress,
+                    on_endpoint_error=remote_endpoint_error,
                 )
                 update_video_job(
                     job_id, phaseLabel="Ricostruzione locale dei segmenti ricevuti", progress=.91,

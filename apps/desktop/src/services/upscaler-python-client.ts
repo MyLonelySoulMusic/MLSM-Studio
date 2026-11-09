@@ -59,6 +59,11 @@ export interface RemoteUpscalerEndpointActivity {
   segmentTotalFrames?: number;
   segmentProgress?: number;
   segmentPhase?: string;
+  lastError?: string;
+  failedSegment?: string;
+  attempt?: number;
+  willRetry?: boolean;
+  remoteEventId?: string;
   segmentElapsedSeconds?: number;
   segmentEstimatedRemainingSeconds?: number | null;
   secondsPerFrame?: number | null;

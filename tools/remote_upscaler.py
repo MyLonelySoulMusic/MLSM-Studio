@@ -28,10 +28,16 @@ MAX_REMOTE_VIDEO_INPUT_BYTES = 512 * 1024 * 1024
 MAX_REMOTE_VIDEO_OUTPUT_BYTES = 2 * 1024 * 1024 * 1024
 DEFAULT_TIMEOUT_SECONDS = 180
 VIDEO_CHUNK_TIMEOUT_SECONDS = 3600
+VIDEO_UPLOAD_TIMEOUT_SECONDS = 300
 MAX_VIDEO_CHUNK_FRAMES = 5000
 
 
 class RemoteUpscalerError(RuntimeError):
+    pass
+
+
+class RemoteSubmissionUncertain(RemoteUpscalerError):
+    """A POST may have reached Gradio: do not enqueue a duplicate automatically."""
     pass
 
 
@@ -88,7 +94,9 @@ def _request_json(url: str, payload: dict[str, object], timeout: int) -> dict[st
         detail = error.read().decode("utf-8", "replace")
         if "No interface is running" in detail:
             raise RemoteUpscalerError("L'interfaccia Gradio non è in esecuzione: riavvia il Colab e aggiorna il link pubblico") from error
-        raise RemoteUpscalerError(f"Endpoint remoto non raggiungibile: HTTP {error.code}") from error
+        failure = RemoteUpscalerError(f"Endpoint remoto non raggiungibile: HTTP {error.code}")
+        failure.http_status = error.code
+        raise failure from error
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
         raise RemoteUpscalerError(f"Endpoint remoto non raggiungibile: {error}") from error
     if not isinstance(value, dict):
@@ -257,7 +265,9 @@ def _read_sse_result(
                     data_lines.append(line[5:].strip())
                 elif not line:
                     if event == "error":
-                        raise RemoteUpscalerError("Il job Gradio ha restituito un errore")
+                        detail = "\n".join(data_lines).strip()
+                        suffix = f": {detail[:2000]}" if detail and detail != "null" else " (nessun dettaglio fornito dal server)"
+                        raise RemoteUpscalerError(f"Il job Gradio ha restituito un errore{suffix}")
                     if event == "generating" and data_lines:
                         value = json.loads("\n".join(data_lines))
                         item = value[0] if isinstance(value, list) and value else None
@@ -362,11 +372,23 @@ def upscale_video_chunk(
             # array before Python defaults are applied. Older v2 endpoints
             # ignore the extra value, so always sending 0 is backward-safe.
             inputs: list[object] = [encoded, model, expected_frames, float(output_fps or 0)]
-            queued = _request_json(endpoint_url, {"data": inputs}, min(timeout, 60))
+            if on_progress:
+                on_progress({"event": "progress", "state": "uploading", "total_frames": expected_frames})
+            try:
+                queued = _request_json(endpoint_url, {"data": inputs}, min(timeout, VIDEO_UPLOAD_TIMEOUT_SECONDS))
+            except Exception as error:
+                if getattr(error, "http_status", None) is not None:
+                    raise
+                raise RemoteSubmissionUncertain(
+                    f"Invio del segmento senza conferma Gradio: {error}. "
+                    "Il server potrebbe averlo ricevuto; nessun reinvio automatico per evitare duplicati."
+                ) from error
             event_id = queued.get("event_id")
             if not isinstance(event_id, str) or not event_id:
-                raise RemoteUpscalerError("Gradio non ha restituito event_id per il segmento")
+                raise RemoteSubmissionUncertain("Gradio non ha restituito event_id per il segmento: ricezione incerta, nessun reinvio automatico")
             accepted = True
+            if on_progress:
+                on_progress({"event": "progress", "state": "queued", "total_frames": expected_frames, "event_id": event_id})
             result = _read_sse_result(
                 f"{endpoint_url}/{urllib.parse.quote(event_id, safe='')}",
                 timeout,
@@ -389,9 +411,13 @@ def upscale_video_chunk(
                 raise RemoteUpscalerError("Output video remoto vuoto, non valido o troppo grande")
             return output, item
         except Exception as error:
+            if isinstance(error, RemoteSubmissionUncertain):
+                raise
             if accepted:
                 # An accepted job must never be submitted again through the
                 # legacy alias. Preserve its actual error for the scheduler.
+                raise RemoteUpscalerError(f"{endpoint}: {error}") from error
+            if getattr(error, "http_status", None) not in (404, 405):
                 raise RemoteUpscalerError(f"{endpoint}: {error}") from error
             last_error = error
     raise RemoteUpscalerError(str(last_error or "Upscaling del segmento remoto fallito"))
@@ -440,6 +466,7 @@ def distribute_video_chunks(
     on_progress: Callable[[int, int, int, int, str, Path], None] = lambda *_: None,
     on_endpoint: Callable[[str, str, Path], None] = lambda *_: None,
     on_endpoint_progress: Callable[[str, Path, dict[str, object]], None] | None = None,
+    on_endpoint_error: Callable[[str, Path, str, int, bool], None] = lambda *_: None,
 ) -> tuple[int, int, list[dict[str, str]]]:
     """Run one serial chunk stream per endpoint, with atomic local checkpoints."""
     destination.mkdir(parents=True, exist_ok=True)
@@ -535,7 +562,9 @@ def distribute_video_chunks(
                     on_endpoint(endpoint, "error", chunk)
                     with lock:
                         failures.append({"endpoint": endpoint, "segment": chunk.name, "error": str(error)})
-                    if not cancelled() and attempt < retries * max(1, len(normalized)):
+                    will_retry = not cancelled() and attempt < max(0, retries) and not isinstance(error, RemoteSubmissionUncertain)
+                    on_endpoint_error(endpoint, chunk, str(error), attempt + 1, will_retry)
+                    if will_retry:
                         work.put((chunk, frame_count, attempt + 1, endpoint))
                     else:
                         with lock:

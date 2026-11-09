@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import io
 import tempfile
 import threading
 import time
@@ -39,6 +40,50 @@ class RemoteUpscalerTests(unittest.TestCase):
             self.assertEqual((segments, frames), (6, 60))
             self.assertTrue(errors)
             self.assertEqual(len(list((root / "output").glob("*.mp4"))), 6)
+
+    def test_upload_timeout_does_not_duplicate_submission_on_legacy_route(self):
+        updates = []
+        with patch.object(remote_upscaler, "normalize_endpoint", side_effect=lambda value: value), patch.object(remote_upscaler, "_request_json", side_effect=TimeoutError("write timed out")) as submit:
+            with self.assertRaisesRegex(remote_upscaler.RemoteSubmissionUncertain, "nessun reinvio"):
+                remote_upscaler.upscale_video_chunk("https://one", b"\x00\x00\x00\x18ftypisomsegment", "x4", 100, on_progress=updates.append)
+            self.assertEqual(submit.call_count, 1)
+            self.assertEqual(submit.call_args.args[2], 300)
+            self.assertEqual(updates[0]["state"], "uploading")
+
+    def test_missing_event_id_does_not_resubmit_video(self):
+        with patch.object(remote_upscaler, "normalize_endpoint", side_effect=lambda value: value), patch.object(remote_upscaler, "_request_json", return_value={}) as submit:
+            with self.assertRaises(remote_upscaler.RemoteSubmissionUncertain):
+                remote_upscaler.upscale_video_chunk("https://one", b"\x00\x00\x00\x18ftypisomsegment", "x4", 100)
+            self.assertEqual(submit.call_count, 1)
+
+    def test_sse_preserves_remote_error_detail(self):
+        response = io.BytesIO(b'event: error\ndata: "CUDA out of memory"\n\n')
+        with patch.object(remote_upscaler._safe_opener, "open", return_value=response):
+            with self.assertRaisesRegex(remote_upscaler.RemoteUpscalerError, "CUDA out of memory"):
+                remote_upscaler._read_sse_result("https://one/event", 30)
+
+    def test_video_retries_are_not_multiplied_by_number_of_endpoints(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            chunk = root / "segment.mp4"
+            chunk.write_bytes(b"\x00\x00\x00\x18ftypisomsegment")
+            errors = []
+            with patch.object(remote_upscaler, "normalize_endpoint", side_effect=lambda value: value), patch.object(remote_upscaler, "upscale_video_chunk", side_effect=RuntimeError("GPU unavailable")) as request:
+                with self.assertRaises(remote_upscaler.RemoteUpscalerError):
+                    remote_upscaler.distribute_video_chunks([(chunk, 100)], ["https://one", "https://two", "https://three"], "x4", root / "out", retries=2, on_endpoint_error=lambda *args: errors.append(args))
+                self.assertEqual(request.call_count, 3)
+                self.assertEqual([row[3] for row in errors], [1, 2, 3])
+                self.assertFalse(errors[-1][4])
+
+    def test_uncertain_upload_is_not_retried_by_scheduler(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            chunk = root / "segment.mp4"
+            chunk.write_bytes(b"\x00\x00\x00\x18ftypisomsegment")
+            with patch.object(remote_upscaler, "normalize_endpoint", side_effect=lambda value: value), patch.object(remote_upscaler, "upscale_video_chunk", side_effect=remote_upscaler.RemoteSubmissionUncertain("upload uncertain")) as request:
+                with self.assertRaises(remote_upscaler.RemoteUpscalerError):
+                    remote_upscaler.distribute_video_chunks([(chunk, 100)], ["https://one", "https://two"], "x4", root / "out", retries=2)
+                self.assertEqual(request.call_count, 1)
 
     def test_normalizes_gradio_route_and_rejects_private_hosts(self):
         with patch("tools.remote_upscaler.socket.getaddrinfo", return_value=[(2, 1, 6, "", ("34.1.2.3", 443))]):
@@ -140,7 +185,8 @@ class RemoteUpscalerTests(unittest.TestCase):
 
         self.assertEqual(output, mp4)
         self.assertEqual(metadata["frame_count"], 100)
-        self.assertEqual(received, [progress])
+        self.assertEqual([item["state"] for item in received], ["uploading", "queued", "upscaling"])
+        self.assertEqual(received[-1], progress)
 
     def test_distributor_keeps_checkpoints_and_retries_on_another_worker(self):
         png = b"\x89PNG\r\n\x1a\ncontent"

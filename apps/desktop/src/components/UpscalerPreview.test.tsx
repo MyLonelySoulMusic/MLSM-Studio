@@ -209,7 +209,7 @@ describe("UpscalerPreview video export", () => {
         activeEndpoints: ["https://first.gradio.live", "https://second.gradio.live"],
         endpointActivity: [
           { url: "https://first.gradio.live", state: "busy", activeFrame: null, activeSegment: "segment-000003.mp4", completed: 1, completedSegments: 1, completedFrames: 100, failures: 0, segmentFrame: 42, segmentTotalFrames: 100, segmentProgress: .42, segmentPhase: "upscaling", secondsPerFrame: 1.75, segmentEstimatedRemainingSeconds: 101.5 },
-          { url: "https://second.gradio.live", state: "busy", activeFrame: null, activeSegment: "segment-000004.mp4", completed: 1, completedSegments: 1, completedFrames: 100, failures: 1, segmentFrame: 0, segmentTotalFrames: 100, segmentProgress: 0, segmentPhase: "awaiting_progress" }
+          { url: "https://second.gradio.live", state: "busy", activeFrame: null, activeSegment: "segment-000004.mp4", completed: 1, completedSegments: 1, completedFrames: 100, failures: 1, segmentFrame: 0, segmentTotalFrames: 100, segmentProgress: 0, segmentPhase: "uploading", lastError: "HTTP 503", failedSegment: "segment-000004.mp4", attempt: 1, willRetry: true }
         ]
       });
       return new Promise<void>((resolve) => { finish = resolve; });
@@ -227,13 +227,15 @@ describe("UpscalerPreview video export", () => {
     expect(screen.getByText("first.gradio.live")).toBeInTheDocument();
     expect(screen.getByText("second.gradio.live")).toBeInTheDocument();
     expect(screen.getByText("2", { selector: "b" })).toBeInTheDocument();
-    expect(screen.getByText("1 segmenti · 100 frame · 1 retry")).toBeInTheDocument();
+    expect(screen.getByText("1 segmenti · 100 frame · 1 errore")).toBeInTheDocument();
     expect(screen.getByText("Upscaling frame · segment-000003.mp4")).toBeInTheDocument();
     const firstProgress = screen.getByRole("progressbar", { name: "Progresso first.gradio.live" });
     expect(firstProgress).toHaveValue(.42);
     expect(firstProgress.closest(".upscaler-remote-worker")).toHaveTextContent("42% · frame 42/100 · 1.75 s/frame · ETA 2 min");
     expect(screen.getByRole("progressbar", { name: "Progresso second.gradio.live" })).not.toHaveAttribute("value");
-    expect(screen.getByText(/Riavvia un endpoint aggiornato/)).toBeInTheDocument();
+    expect(screen.getByText(/La lavorazione GPU non è ancora confermata/)).toBeInTheDocument();
+    expect(screen.getByText("Invio segmento a Gradio · segment-000004.mp4")).toBeInTheDocument();
+    expect(screen.getByText(/Ultimo errore .*HTTP 503/)).toBeInTheDocument();
     expect(screen.getByText(/I video vengono inviati come segmenti da 100 frame/i)).toBeInTheDocument();
     act(() => finish());
   });
