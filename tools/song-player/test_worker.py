@@ -185,6 +185,7 @@ class YoutubeValidationTests(unittest.TestCase):
         self.assertFalse(options["vad_filter"])
         self.assertEqual(options["no_speech_threshold"], 1.0)
         self.assertTrue(options["word_timestamps"])
+        self.assertEqual(options["temperature"], 0.0)
         self.assertFalse(options["condition_on_previous_text"])
 
     def test_whisper_precision_falls_back_when_cuda_cannot_use_float16(self):

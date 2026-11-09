@@ -1,5 +1,6 @@
 import { alignCanonicalWordSequence, buildWordAnchors, lipsyncTimedWords } from "./mlsm-post-lipsync-alignment";
-import { normalizeLipsyncWord, parseCanonicalLipsyncSubtitles } from "./mlsm-post-lipsync-lyrics";
+import type { ProSubtitleCue } from "./pro-subtitles";
+import { canonicalLyricsFromCues, normalizeLipsyncWord, parseCanonicalLipsyncSubtitles } from "./mlsm-post-lipsync-lyrics";
 import { buildLipsyncTimeMap, lipsyncMapIsMonotonic } from "./mlsm-post-lipsync-time-map";
 import { unmeasuredMlsmWaveformAlignment } from "./mlsm-post-lipsync-waveform";
 import {
@@ -198,6 +199,7 @@ export function resolveMlsmPostLipsyncWhisperAlignment(input: {
 }
 
 export function createMlsmPostLipsyncAnalysis(input: {
+  authoritativeTargetCues?: ProSubtitleCue[];
   subtitles?: string;
   sourceTranscript: WhisperTranscriptDocument;
   targetTranscript: WhisperTranscriptDocument;
@@ -216,7 +218,10 @@ export function createMlsmPostLipsyncAnalysis(input: {
   const targetAnalysisStartSeconds = input.targetAnalysisStartSeconds ?? 0;
   const targetMasterDurationSeconds = input.targetMasterDurationSeconds ?? input.targetDurationSeconds;
   if (!Number.isFinite(targetAnalysisStartSeconds) || targetAnalysisStartSeconds < 0 || targetAnalysisStartSeconds + input.targetDurationSeconds > targetMasterDurationSeconds + .05) throw new Error("L’intervallo analizzato non rientra nel master audio.");
-  const resolved = subtitleText
+  const resolved = input.authoritativeTargetCues
+    ? { alignmentSource: "subtitles" as const, canonicalLyrics: canonicalLyricsFromCues(input.authoritativeTargetCues),
+      targetWindow: { startSeconds: 0, endSeconds: input.targetDurationSeconds, durationSeconds: input.targetDurationSeconds } }
+    : subtitleText
     ? (() => {
       const parsed = parseCanonicalLipsyncSubtitles(subtitleText, input.targetDurationSeconds);
       return {

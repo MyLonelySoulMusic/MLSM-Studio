@@ -1,3 +1,4 @@
+import { parseProSubtitleFile } from "./pro-subtitles";
 import { createMlsmPostLipsyncAnalysis, replaceMlsmPostLipsyncAnchors } from "./mlsm-post-lipsync-analysis";
 import type { MlsmPostLipsyncAnalysis, WordAnchor } from "./mlsm-post-lipsync-types";
 import type { TimestampedWord, WhisperTranscriptDocument } from "./subtitle-generation";
@@ -98,6 +99,7 @@ export function applyMlsmWhisperWordCorrection(input: {
   const targetTranscript = rebuildWhisperTranscript(input.analysis.whisperTranscripts.target, input.targetWords, "target");
   const rebuilt = createMlsmPostLipsyncAnalysis({
     subtitles: targetWordsAsSrt(targetTranscript.words),
+    ...(input.analysis.timingMode === "srt-direct" ? { authoritativeTargetCues: parseProSubtitleFile(targetWordsAsSrt(targetTranscript.words)) } : {}),
     sourceTranscript,
     targetTranscript,
     sourceDurationSeconds: input.analysis.sourceDurationSeconds,
@@ -123,5 +125,5 @@ export function applyMlsmWhisperWordCorrection(input: {
     whisperTranscripts: { source: sourceTranscript, target: targetTranscript }
   });
   const corrected = replaceMlsmPostLipsyncAnchors(rebuilt, rebuilt.anchors.map(manualAnchor));
-  return { ...corrected, alignmentSource: "whisper" };
+  return { ...corrected, ...(input.analysis.timingMode ? { timingMode: input.analysis.timingMode } : {}), alignmentSource: input.analysis.timingMode === "srt-direct" ? "subtitles" : "whisper" };
 }

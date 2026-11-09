@@ -28,8 +28,8 @@ describe("MlsmPostLipsyncWorkspace", () => {
     expect(llmCorrection).toBeChecked();
     expect(visualSpeech).not.toBeChecked();
     expect(vocalSeparation).not.toBeChecked();
-    expect(whisper.value).toBe("whisper-medium_timestamped");
-    expect(screen.getByText(/Whisper Medium analizza direttamente l’audio originale/u)).toBeInTheDocument();
+    expect(whisper.value).toBe("whisper-large-v3_timestamped");
+    expect(screen.getByText(/Il modello Whisper selezionato analizza direttamente l’audio originale/u)).toBeInTheDocument();
     expect(screen.getByText(/Disattivata di default/u)).toBeInTheDocument();
     fireEvent.change(exactLyrics, { target: { value: "The Fallen, still loves me" } });
     expect(exactLyrics.value).toBe("The Fallen, still loves me");
@@ -49,6 +49,19 @@ describe("MlsmPostLipsyncWorkspace", () => {
     expect(screen.getByText(/Video cantato e master sono obbligatori/u)).toBeInTheDocument();
     expect(screen.getByText(/usa esclusivamente le parole e i tempi misurati da Whisper/u)).toBeInTheDocument();
     expect(screen.queryByText(/Carica i tre file/u)).not.toBeInTheDocument();
+  });
+
+  it("offre SRT diretto senza Whisper e distingue i due riferimenti temporali", () => {
+    render(<MlsmPostLipsyncWorkspace />);
+    expect(screen.getByLabelText("Lingua cantata")).toHaveValue("auto");
+    fireEvent.click(screen.getByRole("checkbox", { name: "Usa SRT direttamente · senza Whisper" }));
+    expect(screen.getByRole("button", { name: /Apri timeline da SRT/ })).toBeDisabled();
+    expect(screen.getByLabelText("Riferimento dei tempi SRT")).toHaveValue("master");
+    expect(screen.getByLabelText("Precisione Whisper")).toBeDisabled();
+    const source = screen.getByLabelText("SRT del video originale (opzionale)");
+    fireEvent.change(source, { target: { value: "1\n00:00:01,000 --> 00:00:03,000\nHello" } });
+    expect(source).toHaveValue("1\n00:00:01,000 --> 00:00:03,000\nHello");
+    expect(screen.getByText(/Senza SRT del video, i tempi sorgente sono una stima/)).toBeInTheDocument();
   });
 
   it("mostra e aggiorna il taglio non distruttivo del master", async () => {

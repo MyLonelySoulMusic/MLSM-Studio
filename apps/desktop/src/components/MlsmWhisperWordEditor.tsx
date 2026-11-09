@@ -260,7 +260,7 @@ export function MlsmWhisperWordEditor({
   };
 
   return <div className="lipsync-whisper-editor" role="tabpanel">
-    <header className="lipsync-whisper-editor__intro"><span><strong>{t.title}</strong><small>{t.hint}</small></span><button type="button" className="lipsync-whisper-fix" disabled={applying} onClick={() => void apply()}>{applying ? t.fixing : t.fix}</button></header>
+    <header className="lipsync-whisper-editor__intro"><span><strong>{analysis.timingMode === "srt-direct" ? (language === "it" ? "Tempi SRT e video modificabili" : "Editable SRT and video timings") : t.title}</strong><small>{analysis.timingMode === "srt-direct" ? (language === "it" ? "Le righe SRT definiscono i tempi; le parole interne sono stimate. Senza SRT sorgente anche i tempi del video sono stimati: correggili in anteprima e applica per aggiornare la sincronizzazione e l’export." : "SRT cues define timing; word timings inside cues are estimated. Without source SRT, video timings are estimated too: review them in preview and apply to update synchronization and export.") : t.hint}</small></span><button type="button" className="lipsync-whisper-fix" disabled={applying} onClick={() => void apply()}>{applying ? t.fixing : t.fix}</button></header>
     <div className="lipsync-whisper-tracks">{renderTrack("source")}{renderTrack("target")}</div>
     {message ? <div className="lipsync-whisper-message" role="status">✓ {message}</div> : null}
     {error ? <div className="lipsync-error" role="alert"><strong>{error}</strong></div> : null}

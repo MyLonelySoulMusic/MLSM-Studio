@@ -461,6 +461,7 @@ fn validate_start_request(
                     "whisper-tiny_timestamped"
                         | "whisper-base_timestamped"
                         | "whisper-medium_timestamped"
+                        | "whisper-large-v3_timestamped"
                 )
                 || start_seconds.is_some() != end_seconds.is_some()
                 || start_seconds.is_some_and(|value| !value.is_finite() || value < 0.0)

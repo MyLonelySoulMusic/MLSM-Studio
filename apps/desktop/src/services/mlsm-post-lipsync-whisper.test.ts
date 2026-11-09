@@ -44,6 +44,12 @@ describe("Whisper Medium nativo per MLSM Post Lipsync", () => {
     expect(() => decodeNativeWhisperTranscript({ transcript: "recognized only" }, "whisper-medium_timestamped", 2)).toThrow(/timeline/);
   });
 
+  it("segnala la frase sospetta isolata senza trattarla come sincronizzazione riuscita", () => {
+    expect(() => decodeNativeWhisperTranscript({ words: [
+      { text: "Thanks", start: 0, end: .3 }, { text: "for", start: .3, end: .5 }, { text: "watching", start: .5, end: 1 }
+    ] }, "whisper-medium_timestamped", 14)).toThrow(/possibile allucinazione/);
+  });
+
   it("continua a trascrivere quando fallisce solo la verifica globale di moduli estranei", async () => {
     nativeMocks.capabilities.mockResolvedValueOnce({ wordTranscription: false }).mockResolvedValueOnce({ wordTranscription: true });
     nativeMocks.ensureRuntime.mockResolvedValue({ status: "failed", progress: 0, message: "Demucs non pronto", error: "pYIN non pronto" });
@@ -56,10 +62,10 @@ describe("Whisper Medium nativo per MLSM Post Lipsync", () => {
 
     const result = await transcribeMlsmWhisperWords({
       media: { path: "/tmp/voice.wav", url: "blob:voice", fileName: "voice.wav", durationSeconds: 2 },
-      range: { startSeconds: 0, endSeconds: 2 }, language: "it", model: "whisper-base_timestamped", role: "source", onProgress: vi.fn(),
+      range: { startSeconds: 0, endSeconds: 2 }, language: "it", model: "whisper-large-v3_timestamped", role: "source", onProgress: vi.fn(),
     });
 
     expect(result.transcript).toBe("ciao mondo");
-    expect(nativeMocks.startJob).toHaveBeenCalledWith(expect.objectContaining({ kind: "transcribeWords", model: "whisper-base_timestamped" }));
+    expect(nativeMocks.startJob).toHaveBeenCalledWith(expect.objectContaining({ kind: "transcribeWords", model: "whisper-large-v3_timestamped" }));
   });
 });

@@ -7,8 +7,8 @@ interface WhisperChunk { text?: string; timestamp?: [number | null, number | nul
 interface WhisperResult { text?: string; chunks?: WhisperChunk[]; }
 export interface WhisperTranscriptDocument {
   schemaVersion: 1;
-  engine: "Whisper";
-  model: WhisperModelId;
+  engine: "Whisper" | "Subtitles" | "Manual";
+  model: NativeWhisperModelId;
   durationSeconds: number;
   transcript: string;
   words: TimestampedWord[];
@@ -43,6 +43,8 @@ const defaultSegmentation: SubtitleSegmentationOptions = {
 
 export type WhisperModelId = RhythmBallProject["subtitles"]["whisperModel"];
 export type LlmModelId = RhythmBallProject["subtitles"]["llmModel"];
+export type NativeWhisperModelId = WhisperModelId | "whisper-large-v3_timestamped";
+
 export const whisperModelOptions: readonly { id: WhisperModelId; label: string; detail: string; localSize: string }[] = [
   { id: "whisper-tiny_timestamped", label: "Whisper Tiny", detail: "Più rapido · adatto a preview e macchine meno potenti", localSize: "96 MB" },
   { id: "whisper-base_timestamped", label: "Whisper Base", detail: "Buon equilibrio tra precisione, memoria e velocità", localSize: "151 MB" },

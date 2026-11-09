@@ -170,6 +170,7 @@ export interface LipsyncTimeMap {
 }
 
 export interface MlsmPostLipsyncAnalysis {
+  timingMode?: "srt-direct";
   analysisVersion: typeof MLSM_POST_LIPSYNC_ANALYSIS_VERSION;
   detailMode: LipsyncAnalysisDetail;
   alignmentSource: LipsyncAlignmentSource;

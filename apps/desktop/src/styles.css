@@ -3409,3 +3409,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .video-editor-audio-keyframes>div{min-width:155px;align-content:start}
 .video-editor-audio-keyframes>div>label{grid-column:1/-1;display:grid;grid-template-columns:56px minmax(0,1fr);align-items:center;gap:4px;padding:4px 7px;color:var(--muted);font-size:8px}
 .video-editor-audio-keyframes input,.video-editor-audio-keyframes select{min-width:0;width:100%;padding:3px 4px;border:1px solid var(--line);border-radius:5px;background:var(--panel);color:var(--ink);font-size:9px}
+
+
+.lipsync-srt-direct{display:grid;gap:10px}
+.lipsync-srt-direct>label{display:grid;gap:6px;min-width:0}
+.lipsync-srt-direct select,.lipsync-srt-direct textarea{box-sizing:border-box;width:100%;min-width:0;padding:9px;color:var(--ink);border:1px solid var(--line);border-radius:8px;background:var(--panel-raised);font:inherit}
+.lipsync-srt-direct textarea{min-height:104px;resize:vertical;font-family:monospace}
+.lipsync-srt-direct small{line-height:1.6;overflow-wrap:anywhere}

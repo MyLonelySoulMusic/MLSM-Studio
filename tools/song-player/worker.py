@@ -532,6 +532,7 @@ def transcribe_words(request: dict[str, Any]) -> dict[str, Any]:
         "whisper-tiny_timestamped": "tiny",
         "whisper-base_timestamped": "base",
         "whisper-medium_timestamped": "medium",
+        "whisper-large-v3_timestamped": "large-v3",
     }
     if model_id not in model_names:
         raise WorkerError("invalid_input", "Modello Whisper non supportato")
@@ -570,7 +571,13 @@ def transcribe_words(request: dict[str, Any]) -> dict[str, Any]:
     device, compute_type = whisper_device_and_compute_type(ctranslate2)
     def run_whisper(selected_device: str, selected_compute_type: str) -> tuple[Any, list[dict[str, Any]], list[dict[str, Any]], list[str]]:
         progress(.08, f"Caricamento/download automatico Whisper {model_names[model_id].capitalize()} · {selected_device.upper()} · {selected_compute_type}")
-        model = WhisperModel(model_names[model_id], device=selected_device, compute_type=selected_compute_type, download_root=str(cache_root))
+        model_source = model_names[model_id]
+        try:
+            from huggingface_hub import snapshot_download
+            model_source = snapshot_download(f"Systran/faster-whisper-{model_source}", local_files_only=True)
+        except (ImportError, OSError, ValueError):
+            pass
+        model = WhisperModel(model_source, device=selected_device, compute_type=selected_compute_type, download_root=str(cache_root))
         words_result: list[dict[str, Any]] = []
         phrases: list[dict[str, Any]] = []
         texts: list[str] = []
@@ -648,8 +655,8 @@ def transcribe_words(request: dict[str, Any]) -> dict[str, Any]:
     except Exception as error:
         raise WorkerError("whisper_transcription_failed", str(error)[:1_000] or "Trascrizione Whisper fallita") from error
     if not words_result:
-        raise WorkerError("whisper_missing_word_timestamps", "Whisper Medium non ha restituito timestamp parola per parola")
-    progress(.98, "Timestamp Whisper Medium verificati")
+        raise WorkerError("whisper_missing_word_timestamps", f"Whisper {model_names[model_id]} non ha riconosciuto parole con tempi validi ({duration_seconds:.1f}s, lingua {language or 'auto'}). Prova la separazione vocale oppure usa SRT diretto senza Whisper.")
+    progress(.98, f"Timestamp Whisper {model_names[model_id]} verificati")
     return {
         "kind": "transcribeWords",
         "engine": "Faster-Whisper",
@@ -674,6 +681,7 @@ def whisper_singing_transcription_options() -> dict[str, Any]:
     """
     return {
         "beam_size": 5,
+        "temperature": 0.0,
         "word_timestamps": True,
         "condition_on_previous_text": False,
         "vad_filter": False,

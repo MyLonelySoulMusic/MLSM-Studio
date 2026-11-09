@@ -31,7 +31,7 @@ function validViseme(value: unknown): boolean {
 function validWhisperDocument(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
   const document = value as Record<string, unknown>;
-  if (document.schemaVersion !== 1 || document.engine !== "Whisper" || typeof document.model !== "string"
+  if (document.schemaVersion !== 1 || !["Whisper", "Subtitles", "Manual"].includes(String(document.engine)) || typeof document.model !== "string"
     || !finite(document.durationSeconds) || document.durationSeconds <= 0 || typeof document.transcript !== "string"
     || !Array.isArray(document.words) || !Array.isArray(document.phrases)) return false;
   let previousCenter = -Infinity;

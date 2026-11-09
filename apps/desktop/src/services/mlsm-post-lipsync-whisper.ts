@@ -1,7 +1,7 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { fetchBrowserVocalService } from "./cassette-desk-vocals-browser";
 import { ensureSongPlayerRuntime, getSongPlayerCapabilities, getSongPlayerRuntimeSetup, isSongPlayerJobTerminal, startSongPlayerJob, waitForSongPlayerJob } from "./song-player-native";
-import type { WhisperModelId, WhisperTranscriptDocument } from "./subtitle-generation";
+import type { NativeWhisperModelId, WhisperTranscriptDocument } from "./subtitle-generation";
 
 export interface MlsmWhisperMedia {
   path: string;
@@ -20,11 +20,11 @@ const wait = (milliseconds: number, signal?: AbortSignal) => new Promise<void>((
 
 async function json(response: Response): Promise<Record<string, unknown>> {
   const value = await response.json().catch(() => ({})) as Record<string, unknown>;
-  if (!response.ok && response.status !== 202) throw new Error(typeof value.error === "string" ? value.error : typeof value.message === "string" ? value.message : "Whisper Medium locale non raggiungibile.");
+  if (!response.ok && response.status !== 202) throw new Error(typeof value.error === "string" ? value.error : typeof value.message === "string" ? value.message : "Whisper locale non raggiungibile.");
   return value;
 }
 
-export function decodeNativeWhisperTranscript(value: unknown, model: WhisperModelId, durationSeconds: number): WhisperTranscriptDocument {
+export function decodeNativeWhisperTranscript(value: unknown, model: NativeWhisperModelId, durationSeconds: number): WhisperTranscriptDocument {
   const source = value && typeof value === "object" ? value as Record<string, unknown> : null;
   const rawWords = source && Array.isArray(source.words) ? source.words as NativeWord[] : [];
   const words = rawWords.flatMap((item) => {
@@ -36,7 +36,11 @@ export function decodeNativeWhisperTranscript(value: unknown, model: WhisperMode
       : [];
   });
   if (!words.length || words.some((word, index) => index > 0 && word.start < words[index - 1]!.end - .001)) {
-    throw new Error("Whisper Medium nativo non ha restituito una timeline parola per parola valida.");
+    throw new Error(`Whisper non ha restituito una timeline valida: ${rawWords.length} parole ricevute, ${words.length} con tempi utilizzabili. Controlla lingua e audio, oppure usa SRT diretto senza Whisper.`);
+  }
+  const normalizedText = words.map((word) => word.text).join(" ").toLowerCase().replace(/[^a-z ]/g, "").replace(/\s+/g, " ").trim();
+  if (durationSeconds >= 8 && ["thanks for watching", "thank you for watching", "thanks for watching the video"].includes(normalizedText)) {
+    throw new Error("Whisper ha restituito soltanto “Thanks for watching”: possibile allucinazione sul cantato o sul silenzio. Non è un allineamento affidabile: verifica l’audio, prova Separa la voce oppure usa SRT diretto senza Whisper.");
   }
   const rawPhrases = source && Array.isArray(source.phrases) ? source.phrases as Record<string, unknown>[] : [];
   const phrases = rawPhrases.flatMap((item) => typeof item.text === "string" && typeof item.start === "number" && typeof item.end === "number" && item.end > item.start
@@ -54,12 +58,12 @@ export function decodeNativeWhisperTranscript(value: unknown, model: WhisperMode
 }
 
 async function ensureBrowserRuntime(signal: AbortSignal | undefined, onProgress: (progress: number | null, message: string) => void): Promise<void> {
-  let status = await json(await fetchBrowserVocalService("/ensure?feature=transcribeWords", { method: "POST", ...(signal ? { signal } : {}) }, "runtime Whisper Medium")) as unknown as RuntimeStatus;
+  let status = await json(await fetchBrowserVocalService("/ensure?feature=transcribeWords", { method: "POST", ...(signal ? { signal } : {}) }, "runtime Whisper")) as unknown as RuntimeStatus;
   while (!status.ready) {
     if (status.status === "failed") throw new Error(status.error ?? status.message ?? "Installazione automatica di Whisper non riuscita.");
-    onProgress(status.progress / 100 * .2, status.message || "Installazione automatica di Whisper Medium");
+    onProgress(status.progress / 100 * .2, status.message || "Installazione automatica di Whisper");
     await wait(600, signal);
-    status = await json(await fetchBrowserVocalService("/status", signal ? { signal } : {}, "runtime Whisper Medium")) as unknown as RuntimeStatus;
+    status = await json(await fetchBrowserVocalService("/status", signal ? { signal } : {}, "runtime Whisper")) as unknown as RuntimeStatus;
   }
 }
 
@@ -68,7 +72,7 @@ async function ensureNativeRuntime(signal: AbortSignal | undefined, onProgress: 
   if (capabilities.wordTranscription) return;
   let status = await ensureSongPlayerRuntime();
   while (status.status === "installing" || status.status === "idle") {
-    onProgress(status.progress / 100 * .2, status.message || "Installazione automatica di Whisper Medium");
+    onProgress(status.progress / 100 * .2, status.message || "Installazione automatica di Whisper");
     await wait(600, signal);
     status = await getSongPlayerRuntimeSetup();
   }
@@ -78,7 +82,7 @@ async function ensureNativeRuntime(signal: AbortSignal | undefined, onProgress: 
     // la trascrizione deve dipendere dalla propria capability, non dalle altre.
     const partialCapabilities = await getSongPlayerCapabilities();
     if (partialCapabilities.wordTranscription) return;
-    throw new Error(status.error ?? "Installazione automatica di Whisper Medium non riuscita.");
+    throw new Error(status.error ?? "Installazione automatica di Whisper non riuscita.");
   }
   capabilities = await getSongPlayerCapabilities();
   if (!capabilities.wordTranscription) throw new Error("Il runtime MLSM non espone Whisper parola per parola dopo l’installazione.");
@@ -88,35 +92,37 @@ export async function transcribeMlsmWhisperWords(input: {
   media: MlsmWhisperMedia;
   range: { startSeconds: number; endSeconds: number };
   language: string;
-  model: WhisperModelId;
+  model: NativeWhisperModelId;
   role: "source" | "target";
   signal?: AbortSignal;
   onProgress: (progress: number | null, message: string) => void;
 }): Promise<WhisperTranscriptDocument> {
   const durationSeconds = input.range.endSeconds - input.range.startSeconds;
   if (!(durationSeconds > .05)) throw new Error("Intervallo Whisper non valido.");
-  input.onProgress(0, `Whisper Medium nativo · preparazione audio ${input.role === "source" ? "del video" : "del brano master"}`);
+  input.onProgress(0, `${input.model.replace("whisper-", "Whisper ").replace("_timestamped", "")} nativo · preparazione audio ${input.role === "source" ? "del video" : "del brano master"}`);
   let result: unknown;
   if (isTauri()) {
     await ensureNativeRuntime(input.signal, input.onProgress);
     const fullRange = input.range.startSeconds <= .001 && input.range.endSeconds >= input.media.durationSeconds - .05;
     const started = await startSongPlayerJob({ kind: "transcribeWords", inputPath: input.media.path, language: input.language, model: input.model, ...(fullRange ? {} : { startSeconds: input.range.startSeconds, endSeconds: input.range.endSeconds }) });
-    const terminal = isSongPlayerJobTerminal(started.status) ? started : await waitForSongPlayerJob(started.jobId, { ...(input.signal ? { signal: input.signal } : {}), onSnapshot: (snapshot) => input.onProgress(snapshot.progress ?? null, snapshot.message ?? "Whisper Medium · timestamp parola per parola") });
-    if (terminal.status === "failed" || !terminal.result) throw new Error(typeof terminal.error === "string" ? terminal.error : terminal.error?.message ?? "Trascrizione Whisper Medium fallita.");
+    const terminal = isSongPlayerJobTerminal(started.status) ? started : await waitForSongPlayerJob(started.jobId, { ...(input.signal ? { signal: input.signal } : {}), onSnapshot: (snapshot) => input.onProgress(snapshot.progress ?? null, snapshot.message ?? "Whisper · timestamp parola per parola") });
     if (terminal.status === "cancelled") throw new DOMException("Trascrizione annullata", "AbortError");
+    if (terminal.status === "failed" || !terminal.result) throw new Error(typeof terminal.error === "string" ? terminal.error : terminal.error?.message ?? "Trascrizione Whisper fallita.");
     result = terminal.result;
   } else {
     await ensureBrowserRuntime(input.signal, input.onProgress);
     const response = await fetch(input.media.url, input.signal ? { signal: input.signal } : undefined);
-    if (!response.ok) throw new Error("Il file audio non è leggibile per Whisper Medium.");
+    if (!response.ok) throw new Error("Il file audio non è leggibile per Whisper.");
     const blob = await response.blob();
     const query = new URLSearchParams({ filename: input.media.fileName, language: input.language, model: input.model });
     const fullRange = input.range.startSeconds <= .001 && input.range.endSeconds >= input.media.durationSeconds - .05;
     if (!fullRange) { query.set("startSeconds", input.range.startSeconds.toFixed(6)); query.set("endSeconds", input.range.endSeconds.toFixed(6)); }
-    input.onProgress(.22, "Whisper Medium nativo · download automatico o caricamento dalla cache");
-    result = await json(await fetchBrowserVocalService(`/transcribe?${query.toString()}`, { method: "POST", body: blob, ...(input.signal ? { signal: input.signal } : {}), headers: { "Content-Type": blob.type || "application/octet-stream" } }, "Whisper Medium nativo"));
+    input.onProgress(.22, "Whisper nativo · download automatico o caricamento dalla cache");
+    result = await json(await fetchBrowserVocalService(`/transcribe?${query.toString()}`, { method: "POST", body: blob, ...(input.signal ? { signal: input.signal } : {}), headers: { "Content-Type": blob.type || "application/octet-stream" } }, "Whisper nativo"));
   }
-  const document = decodeNativeWhisperTranscript(result, input.model, durationSeconds);
-  input.onProgress(1, `Whisper Medium · ${document.words.length} timestamp reali verificati`);
+  let document: WhisperTranscriptDocument;
+  try { document = decodeNativeWhisperTranscript(result, input.model, durationSeconds); }
+  catch (reason) { throw new Error(`${input.role === "source" ? "Audio del video" : "Audio master"}: ${reason instanceof Error ? reason.message : String(reason)}`); }
+  input.onProgress(1, `${input.model.replace("whisper-", "Whisper ").replace("_timestamped", "")} · ${document.words.length} timestamp reali verificati`);
   return document;
 }
