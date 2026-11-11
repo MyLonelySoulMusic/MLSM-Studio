@@ -189,6 +189,11 @@ mlx_dlss = MlxDlssAdapter()
 
 LOCAL_APP_ORIGIN_REGEX = r"^(https?://(localhost|127\.0\.0\.1)(:\d+)?|tauri://localhost|https?://tauri\.localhost)$"
 app = FastAPI(title="MLSM Studio Upscaler", docs_url=None, redoc_url=None)
+try:
+    from face_restoration.api import router as face_restoration_router, shutdown as shutdown_face_restoration
+except ModuleNotFoundError:
+    from tools.face_restoration.api import router as face_restoration_router, shutdown as shutdown_face_restoration
+app.include_router(face_restoration_router)
 # Tauri uses ``http://tauri.localhost`` on Windows and a custom/HTTPS origin on
 # the other desktop targets. Missing the HTTP variant makes health appear
 # reachable in some contexts while browser-owned POSTs fail as "Failed to fetch".
@@ -483,6 +488,7 @@ def terminate_service_processes() -> None:
 
 @app.on_event("shutdown")
 def shutdown_upscaler_children() -> None:
+    shutdown_face_restoration()
     terminate_service_processes()
 
 

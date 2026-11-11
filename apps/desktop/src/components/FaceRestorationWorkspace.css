@@ -1,0 +1,28 @@
+.face-controls { display: grid; gap: 12px; }
+.face-controls form, .face-controls fieldset { display: grid; gap: 12px; min-width: 0; }
+.face-controls fieldset { border: 0; padding: 0; margin: 0; }
+.face-controls legend { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); padding: 12px 0; }
+.face-controls label { display: grid; gap: 6px; font-size: 12px; color: var(--muted); }
+.face-controls input:not([type=checkbox]), .face-controls select { width: 100%; min-width: 0; }
+.face-controls .face-toggle { display: flex; align-items: center; gap: 8px; }
+.face-controls .face-toggle input { flex-shrink: 0; }
+.face-controls small, .face-controls p { font-size: 11px; line-height: 1.5; color: var(--muted); margin: 0; }
+.face-controls details { border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+.face-controls details label { margin-top: 12px; }
+.face-runtime-status { font-size: 11px; padding: 10px; color: var(--accent-strong); background: var(--accent-soft); border: 1px solid var(--line); border-radius: 8px; }
+.face-controls button[type=submit], .face-download { background: var(--accent); color: var(--button-ink, #211b1f); font-weight: 700; }
+.face-preview { min-height: 0; }
+.face-preview-stage { display: grid; place-items: center; min-height: 0; padding: 20px; overflow: auto; }
+.face-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; width: 100%; align-items: center; }
+.face-comparison figure { min-width: 0; margin: 0; }
+.face-comparison figcaption { color: var(--muted); font-size: 12px; padding: 10px 0; }
+.face-comparison img, .face-comparison video { display: block; width: 100%; max-height: 70vh; object-fit: contain; border: 1px solid var(--line); border-radius: 8px; }
+.face-empty { text-align: center; color: var(--muted); padding: 28px; border: 1px dashed var(--line); border-radius: 12px; }
+.face-empty strong { color: var(--ink); font-size: 18px; }
+.face-empty p { font-size: 12px; line-height: 1.6; }
+.face-inspector p { font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.face-inspector [role=alert] { color: var(--danger, #e47686); white-space: pre-wrap; }
+.face-inspector progress { width: 100%; }
+.face-download { display: block; text-align: center; text-decoration: none; padding: 12px; border-radius: 8px; }
+@media(max-width: 1100px) { .face-comparison { grid-template-columns: minmax(0, 1fr); } }
+.face-error { color: var(--danger, #e47686) !important; border: 1px solid currentColor; border-radius: 8px; padding: 10px; overflow-wrap: anywhere; white-space: pre-wrap; }

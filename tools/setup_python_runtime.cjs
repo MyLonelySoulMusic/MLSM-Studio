@@ -6,6 +6,7 @@ const { resolve } = require("node:path");
 
 const root = resolve(__dirname, "..");
 const runtimes = {
+  "face-restoration": { directory: ".venv-face-restoration", requirements: "tools/face_restoration/requirements.txt" },
   upscaler: { directory: ".venv", requirements: "tools/upscaler/requirements.txt" },
   "ai-quantizer": { directory: ".venv-ai-quantizer", requirements: "tools/ai-quantizer/requirements.txt" },
   "song-player": { directory: ".venv-song-player", requirements: "tools/song-player/requirements.txt" },

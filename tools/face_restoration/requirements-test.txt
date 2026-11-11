@@ -1,0 +1,4 @@
+-r requirements.txt
+fastapi==0.116.1
+python-multipart==0.0.20
+httpx==0.28.1

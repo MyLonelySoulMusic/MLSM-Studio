@@ -226,3 +226,75 @@ RIFE del Video Editor non possono bloccarne l'avvio. In sviluppo, se il servizio
 locale termina inaspettatamente, viene riavviato automaticamente. La coda di
 look-ahead di `minterpolate` viene completata prima dell'elaborazione, così
 preview e file salvato mantengono l'intera durata del video e dell'audio.
+
+## Face restoration
+
+In **Photo & Video → Face restoration**, importa una fotografia o un video,
+scegli il modello e premi **Ripristina volti**. Il primo modello disponibile è
+[CodeFormer](https://github.com/sczhou/CodeFormer); il catalogo separa i modelli
+con i rispettivi valori predefiniti. La preview mostra originale e risultato;
+**Scarica** esporta PNG oppure MP4 H.264 con audio AAC.
+
+| Parametro CodeFormer | Default | Significato |
+| --- | --- | --- |
+| Fedeltà | 0,5 | 0 privilegia ricostruzione, 1 fedeltà al volto sorgente. |
+| Ingrandimento | 2× | Da 1× a 4×. |
+| Rilevamento | RetinaFace ResNet50 | Disponibili anche Mobile, YOLOv5 large/nano. |
+| Dispositivo | Automatico | CUDA, poi Apple MPS, infine CPU; selezionabile manualmente. |
+| Solo volto centrale | No | Limita il restauro al volto centrale. |
+| Sfondo Real-ESRGAN | No | Migliora anche lo sfondo; aumenta il costo di elaborazione. |
+| Volto Real-ESRGAN | No | Ulteriore ingrandimento dei volti restaurati. |
+| Tile Real-ESRGAN | 400 px | Riducilo per contenere la memoria. |
+| Volto già allineato | No | Per un singolo volto ritagliato: output 512×512, ignora scala e sfondo. |
+| Disegna contorni | No | Evidenzia le regioni dei volti. |
+| FPS output | 0 (sorgente) | Cambia cadenza duplicando/scartando frame, conservando la durata e l’audio. |
+| CRF video | 18 | Più basso significa maggiore qualità e file più grande. |
+
+I video sono decodificati una sola volta e inoltrati a FFmpeg tramite pipe:
+nessuna sequenza PNG temporanea, memoria indipendente dalla durata, modello
+caricato una sola volta per job. L'encoder H.264 usa `veryfast` e quattro thread;
+l'audio viene prelevato direttamente dalla sorgente. L'output usa la cadenza
+nominale del sorgente (CFR); video VFR non mantengono i timestamp variabili.
+I tempi di decodifica, inferenza, invio all'encoder e finalizzazione sono
+esposti nello stato del job per diagnosticare i colli di bottiglia.
+Il conteggio dei volti nei video è cumulativo per fotogramma. Nessun volto
+rilevato viene segnalato esplicitamente. Gli errori di inferenza interrompono
+il job, senza sostituire silenziosamente il volto con l'originale.
+
+Il runtime è isolato in `.venv-face-restoration`:
+
+```sh
+npm run face-restoration:setup
+```
+
+Questo comando non aggiorna gli altri venv. Il servizio API resta quello locale
+Upscaler; l'inferenza viene eseguita da un processo del nuovo venv. Il codice
+upstream è fissato al commit `b33cc7d639d6545bfcccc7e0bc6ae51f24e79c2b`,
+scaricato insieme ai pesi solo nella cache esclusa da Git `.upscaler-cache/CodeFormer`.
+Si applica la licenza upstream **NTU S-Lab 1.0**, consultabile dal modulo.
+Il pulsante **Annulla** termina anche l'encoder e rimuove i file temporanei.
+Uscendo dal modulo vengono rimossi i risultati temporanei: scaricarli prima.
+
+Test API (dipendenze di test esclusivamente nel venv dedicato):
+
+```sh
+.venv-face-restoration/bin/python -m pip install -r tools/face_restoration/requirements-test.txt
+.venv-face-restoration/bin/python -m unittest tools.test_face_restoration
+npx vitest run apps/desktop/src/components/FaceRestorationWorkspace.test.tsx
+```
+
+Verifica end-to-end con pesi reali e fixture pubblica upstream:
+
+```sh
+.venv-face-restoration/bin/python -m tools.face_restoration.smoke_test
+```
+
+Il test verifica volti effettivamente elaborati, pixel modificati, dimensioni,
+numero di fotogrammi, FPS, durata e presenza/durata dell’audio. I risultati e le
+misure restano in `temp/face-restoration-smoke/`, esclusa da Git. Sulla macchina
+Apple MPS di sviluppo, la clip di prova (4 frame, 320 px, scala 1×) ha richiesto
+0,004 s di decodifica, 5,677 s di inferenza e 0,211 s complessivi di invio
+all’encoder e finalizzazione. Il tempo totale, incluso caricamento dei modelli,
+era 10,842 s. È una misura su una fixture breve, non una stima per video lunghi.
+
+Face restoration usa la stessa toolbar, navigazione e colonne ridimensionabili degli altri strumenti: controlli a sinistra, confronto centrale e stato/download a destra. L’avvio attende il servizio HTTP e viene ricontrollato prima di ogni job. I parametri non validi vengono segnalati nel pannello dei controlli, anche se appartengono a una sezione avanzata chiusa.

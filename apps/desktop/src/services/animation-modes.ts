@@ -5,8 +5,8 @@ export interface AnimationModeDefinition {
   id: string;
   label: string;
   description: string;
-  generator: "instrumentalFalling" | "newYorkStreets" | "coverSphere" | "stereoUnfold" | "walkingCube" | "portraitLandscape" | "commentsInvasion" | "teddyWalk" | "teddySing" | "proSubtitles" | "pixelsSub" | "backgroundAuto" | "staticWatermark" | "upscaler" | "frameBooster" | "videoEditor" | "songPlayer" | "cassetteDesk" | "overlaySpectral" | "aiQuantizer" | "mlsmPostLipsync" | "audioWorkspace";
-  panel: "instrumentalObjects" | "newYorkStreets" | "coverSphere" | "stereoUnfold" | "walkingCube" | "portraitLandscape" | "commentsInvasion" | "teddyWalk" | "teddySing" | "proSubtitles" | "pixelsSub" | "backgroundAuto" | "staticWatermark" | "upscaler" | "frameBooster" | "videoEditor" | "songPlayer" | "cassetteDesk" | "overlaySpectral" | "aiQuantizer" | "mlsmPostLipsync" | "audioWorkspace";
+  generator: "instrumentalFalling" | "newYorkStreets" | "coverSphere" | "stereoUnfold" | "walkingCube" | "portraitLandscape" | "commentsInvasion" | "teddyWalk" | "teddySing" | "proSubtitles" | "pixelsSub" | "backgroundAuto" | "staticWatermark" | "upscaler" | "frameBooster" | "videoEditor" | "songPlayer" | "cassetteDesk" | "overlaySpectral" | "aiQuantizer" | "mlsmPostLipsync" | "audioWorkspace" | "faceRestoration";
+  panel: "instrumentalObjects" | "newYorkStreets" | "coverSphere" | "stereoUnfold" | "walkingCube" | "portraitLandscape" | "commentsInvasion" | "teddyWalk" | "teddySing" | "proSubtitles" | "pixelsSub" | "backgroundAuto" | "staticWatermark" | "upscaler" | "frameBooster" | "videoEditor" | "songPlayer" | "cassetteDesk" | "overlaySpectral" | "aiQuantizer" | "mlsmPostLipsync" | "audioWorkspace" | "faceRestoration";
   objectTypes: readonly AnimationModeObjectType[];
   defaultBaseObjectTypes: readonly SceneObjectType[];
 }
@@ -132,6 +132,14 @@ export const animationModes: readonly AnimationModeDefinition[] = [{
   objectTypes: [],
   defaultBaseObjectTypes: ["platform"]
 }, {
+  id: "faceRestoration",
+  label: "Face restoration",
+  description: "Ripristina i volti in foto e video con CodeFormer e parametri regolabili.",
+  generator: "faceRestoration",
+  panel: "faceRestoration",
+  objectTypes: [],
+  defaultBaseObjectTypes: ["platform"]
+}, {
   id: "frameBooster",
   label: "Frame Booster",
   description: "Aumenta i fotogrammi con metodi FFmpeg selezionabili senza alterare rapporto, risoluzione o audio.",
@@ -215,7 +223,7 @@ export const animationCategories: readonly AnimationCategory[] = [{
   ]
 }, {
   id: "photoVideoStudio",
-  groups: [{ id: "restoration", modeIds: ["staticWatermark", "upscaler", "frameBooster"] }]
+  groups: [{ id: "restoration", modeIds: ["staticWatermark", "upscaler", "faceRestoration", "frameBooster"] }]
 }, {
   id: "videoEditor",
   groups: [{ id: "editing", modeIds: ["videoEditor"] }]

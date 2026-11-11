@@ -33,6 +33,7 @@ describe("installer multipiattaforma", () => {
     expect(python311Probe).toContain("(3, 11)");
     expect(Object.fromEntries(Object.entries(runtimes).map(([name, value]) => [name, value.directory]))).toEqual({
       upscaler: ".venv",
+      "face-restoration": ".venv-face-restoration",
       "ai-quantizer": ".venv-ai-quantizer",
       "song-player": ".venv-song-player",
       "audio-tts": ".venv-audio-tts",

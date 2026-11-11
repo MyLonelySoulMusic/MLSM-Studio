@@ -73,3 +73,6 @@ temp/
 /img/avatar-*
 /apps/desktop/public/.avatar3d-private/
 /apps/desktop/public/avatar3d-models/
+
+# Isolated CodeFormer dependencies
+.venv-face-restoration/
